@@ -251,6 +251,9 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   }
 
   void _clearForm() {
+    // Reset first so onUserInteraction fields drop their "touched" flag —
+    // otherwise autovalidation re-flags the now-empty fields as "Required".
+    _formKey.currentState?.reset();
     _nameController.clear();
     _emailController.clear();
     _phoneController.clear();
@@ -329,7 +332,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             Row(
               children: [
                 AppIcon('user-add',
-                    size: 18, color: AppColors.textSecondary),
+                    size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Create New User',
                     style:
@@ -641,7 +644,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 8.h),
             child: Row(
               children: [
-                AppIcon('people', size: 18, color: AppColors.textSecondary),
+                AppIcon('people', size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Existing Users', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
                 const Spacer(),

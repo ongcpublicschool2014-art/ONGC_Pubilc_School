@@ -504,14 +504,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // Logo area
           Container(
             padding: EdgeInsets.symmetric(
-              horizontal: collapsed ? 16.w : (MediaQuery.of(context).size.width < 1100 ? 14.w : 24.w),
+              // Collapsed sidebar is a fixed 78px, so use fixed (non-.w) sizes
+              // here — scaled units overflow the fixed width on some screens.
+              horizontal: collapsed ? 12 : (MediaQuery.of(context).size.width < 1100 ? 14.w : 24.w),
               vertical: 20.h,
             ),
             child: Row(
               children: [
                 SizedBox(
-                  width: 56.w,
-                  height: 56.h,
+                  width: collapsed ? 46 : 56.w,
+                  height: collapsed ? 46 : 56.h,
                   child: Image.asset(
                     'assets/images/educore360_logo.png',
                     fit: BoxFit.contain,
@@ -598,7 +600,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final iconSize =
         MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp;
 
-    return Padding(
+    final tile = Padding(
       padding: EdgeInsets.only(bottom: 4.h),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -705,6 +707,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+    // Collapsed sidebar hides labels, so surface each item's name on hover.
+    return collapsed
+        ? Tooltip(
+            message: item.label,
+            waitDuration: const Duration(milliseconds: 300),
+            // Push clear of the fixed 78px sidebar so the pill sits to the
+            // right of the icon rather than overlapping the rail.
+            margin: const EdgeInsets.only(left: 84),
+            verticalOffset: 14,
+            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(8.r),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            textStyle: TextStyle(
+              color: AppColors.textOnPrimary,
+              fontSize: 13.sp,
+              fontWeight: FontWeight.w600,
+            ),
+            child: tile,
+          )
+        : tile;
   }
 
   Widget _buildSubMenu(BuildContext context, int parentIndex, _NavItem item) {

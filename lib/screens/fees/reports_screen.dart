@@ -142,7 +142,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   String _dailyDateMethodLabel() {
     final hasDate = _dailyFrom != null || _dailyTo != null;
     final hasMode = _selectedMode != null;
-    if (!hasDate && !hasMode) return 'Date';
+    if (!hasDate && !hasMode) return 'Date & Mode';
     String datePart;
     if (!hasDate) {
       datePart = 'All Dates';
@@ -3771,7 +3771,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 onPressed: (_pcRows.isEmpty || _pcExporting) ? () {} : _exportPowerCollege,
                 icon: Icons.download_rounded,
                 label: _pcExporting ? 'Exporting…' : 'Excel',
-                color: const Color(0xFF6366F1),
+                color: const Color(0xFF10B981),
               ),
             ],
           ),

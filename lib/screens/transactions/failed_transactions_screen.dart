@@ -748,6 +748,9 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
     try {
       final pdf = await _buildReceiptPdf(t);
       await Printing.layoutPdf(
+        // Match the A5 page so the printer doesn't fall back to A4 and clip
+        // the right edge.
+        format: a5PageFormat,
         onLayout: (PdfPageFormat format) async => pdf.save(),
         name: 'Receipt_${(t.paynumber ?? '${t.payId}').replaceAll('/', '_')}',
       );
@@ -953,7 +956,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   String _dateRangeLabel() {
     final hasDate = _filterFromDate != null || _filterToDate != null;
     final hasMethod = _filterMethods.isNotEmpty;
-    if (!hasDate && !hasMethod) return 'Date';
+    if (!hasDate && !hasMethod) return 'Date & Mode';
 
     String datePart;
     if (!hasDate) {

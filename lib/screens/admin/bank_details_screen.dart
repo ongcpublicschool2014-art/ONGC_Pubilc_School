@@ -280,7 +280,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             Row(
               children: [
                 AppIcon(_editingBanId != null ? 'edit-2' : 'add-circle',
-                    size: 18, color: AppColors.textSecondary),
+                    size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text(_editingBanId != null ? 'Edit Bank Account' : 'Add Bank Account',
                     style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
@@ -490,7 +490,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 8.h),
             child: Row(
               children: [
-                const AppIcon('category-2', size: 18, color: AppColors.textSecondary),
+                const AppIcon('category-2', size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Fee Group Assignments',
                     style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
@@ -622,7 +622,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 8.h),
             child: Row(
               children: [
-                AppIcon('bank', size: 18, color: AppColors.textSecondary),
+                AppIcon('bank', size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Bank Accounts',
                     style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),

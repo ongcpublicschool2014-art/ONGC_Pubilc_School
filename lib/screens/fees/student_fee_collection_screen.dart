@@ -2206,6 +2206,9 @@ class _StudentFeeCollectionScreenState
                         try {
                           final pdf = await buildReceiptPdf(receiptData);
                           await Printing.layoutPdf(
+                            // Match the A5 page so the printer doesn't fall
+                            // back to A4 and clip the right edge.
+                            format: a5PageFormat,
                             onLayout: (PdfPageFormat format) async => pdf.save(),
                             name: 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}',
                           );
