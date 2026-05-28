@@ -2808,7 +2808,7 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                             flex: 3,
                             child: Padding(
                                 padding: EdgeInsets.fromLTRB(16.w, 0, 24.w, 0),
-                                child: Text('Course - Class',
+                                child: Text('Standard - Class',
                                     style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w700)))),
@@ -3057,7 +3057,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
     final students = await SupabaseService.client
         .schema(schema)
         .from('students')
-        .select('stu_id, stuclass, courname')
+        .select('stu_id, stuclass, clagrpname')
         .inFilter('stu_id', stuIds);
     final stuMap = <int, Map<String, dynamic>>{};
     for (final s in (students as List)) {
@@ -3069,7 +3069,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
     for (final p in paymentList) {
       final stuId = p['stu_id'];
       final s = stuMap[stuId is int ? stuId : int.tryParse('$stuId')];
-      final course = (s?['courname'] ?? 'Other').toString();
+      final course = (s?['clagrpname'] ?? 'Other').toString();
       final cls = (s?['stuclass'] ?? '').toString();
       final key = '$course|$cls';
       final amt = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
@@ -3164,7 +3164,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
     final students = await SupabaseService.client
         .schema(schema)
         .from('students')
-        .select('stu_id, stuclass, courname')
+        .select('stu_id, stuclass, clagrpname')
         .inFilter('stu_id', stuIds);
     final stuMap = <int, Map<String, dynamic>>{};
     for (final s in (students as List)) {
@@ -3176,7 +3176,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
     for (final p in paymentList) {
       final stuId = p['stu_id'];
       final s = stuMap[stuId is int ? stuId : int.tryParse('$stuId')];
-      final course = (s?['courname'] ?? 'Other').toString();
+      final course = (s?['clagrpname'] ?? 'Other').toString();
       final cls = (s?['stuclass'] ?? '').toString();
       final key = '$course|$cls';
       final amt = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
@@ -3286,10 +3286,10 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
         final students = await SupabaseService.client
             .schema(schema)
             .from('students')
-            .select('stu_id, stuclass, courname')
+            .select('stu_id, stuclass, clagrpname')
             .inFilter('stu_id', chunk);
         for (final s in (students as List)) {
-          final key = '${s['courname'] ?? 'Other'}|${s['stuclass'] ?? ''}';
+          final key = '${s['clagrpname'] ?? 'Other'}|${s['stuclass'] ?? ''}';
           counts[key] = (counts[key] ?? 0) + 1;
         }
       }
@@ -3506,7 +3506,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
 
     final rows = <Widget>[];
     grouped.forEach((course, classRows) {
-      // Per-class rows. Course name shows in the COURSE column on the first
+      // Per-class rows. Course name shows in the STANDARD column on the first
       // row of each group (grouped-table style); blank on subsequent rows so
       // the eye groups them visually without a separate banner.
       for (var i = 0; i < classRows.length; i++) {
@@ -3713,7 +3713,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                         const SizedBox(width: 6),
                         AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                         const SizedBox(width: 6),
-                        Text('Course-wise $valueLabel',
+                        Text('Standard-wise $valueLabel',
                             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                       ],
                     );
@@ -3741,7 +3741,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                     AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                                     const SizedBox(width: 6),
                                     Flexible(
-                                      child: Text('Course-wise $valueLabel',
+                                      child: Text('Standard-wise $valueLabel',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
@@ -3800,13 +3800,13 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                 AppIcon(titleIcon,
                                     size: 18, color: AppColors.accent),
                                 const SizedBox(width: 8),
-                                const Text('Course-wise Breakdown',
+                                const Text('Standard-wise Breakdown',
                                     style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,
                                         color: AppColors.textPrimary)),
                                 const Spacer(),
-                                Text('${_rows.length} ${_rows.length == 1 ? "course" : "courses"}',
+                                Text('${_rows.length} ${_rows.length == 1 ? "standard" : "standards"}',
                                     style: const TextStyle(
                                         fontSize: 12,
                                         color: AppColors.textSecondary,
@@ -3834,7 +3834,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                         children: [
                                           Expanded(
                                               flex: 3,
-                                              child: Text('COURSE',
+                                              child: Text('STANDARD',
                                                   style: TextStyle(
                                                       fontSize: 12,
                                                       fontWeight: FontWeight.w700,

@@ -300,7 +300,7 @@ class _StudentFeeCollectionScreenState
       final courseSet = <String>{};
       final mapping = <String, Set<String>>{};
       for (final d in demands) {
-        final course = d['courname']?.toString() ?? '';
+        final course = d['clagrpname']?.toString() ?? '';
         final cls = d['stuclass']?.toString() ?? '';
         if (course.isNotEmpty) courseSet.add(course);
         if (course.isNotEmpty && cls.isNotEmpty) {
@@ -335,7 +335,7 @@ class _StudentFeeCollectionScreenState
           .eq('stuclass', className)
           .gt('balancedue', 0);
       if (_selectedCourse != null) {
-        demQuery = demQuery.eq('courname', _selectedCourse!);
+        demQuery = demQuery.eq('clagrpname', _selectedCourse!);
       }
       final demRows = await demQuery;
       final pendingStuIds = <int>{};
@@ -350,13 +350,13 @@ class _StudentFeeCollectionScreenState
 
       // Step 2: fetch only those students.
       var query = SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
+          .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .eq('stuclass', className)
           .inFilter('stu_id', pendingStuIds.toList());
       if (_selectedCourse != null) {
-        query = query.eq('courname', _selectedCourse!);
+        query = query.eq('clagrpname', _selectedCourse!);
       }
       final rows = await query.order('stuname', ascending: true);
       setState(() => _classSuggestions = List<Map<String, dynamic>>.from(rows));
@@ -449,7 +449,7 @@ class _StudentFeeCollectionScreenState
     if (insId == null) return;
     try {
       final rows = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
+          .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .ilike('stuadmno', '${admno.trim()}%')
@@ -490,7 +490,7 @@ class _StudentFeeCollectionScreenState
     if (insId == null) return;
     try {
       final rows = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
+          .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .or('stuadmno.ilike.$term%,stuname.ilike.%$term%')
@@ -544,7 +544,7 @@ class _StudentFeeCollectionScreenState
       // and use the first match (e.g. user typed a full name and hit Enter
       // without clicking a suggestion).
       var studentRows = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, stugender, stumobile, stuphoto, courname')
+          .select('stu_id, stuname, stuadmno, stuclass, stugender, stumobile, stuphoto, clagrpname')
           .eq('ins_id', insId)
           .eq('stuadmno', admNo)
           .eq('activestatus', 1)
@@ -552,7 +552,7 @@ class _StudentFeeCollectionScreenState
 
       if ((studentRows as List).isEmpty) {
         studentRows = await SupabaseService.fromSchema('students')
-            .select('stu_id, stuname, stuadmno, stuclass, stugender, stumobile, stuphoto, courname')
+            .select('stu_id, stuname, stuadmno, stuclass, stugender, stumobile, stuphoto, clagrpname')
             .eq('ins_id', insId)
             .eq('activestatus', 1)
             .ilike('stuname', '%$admNo%')
@@ -579,7 +579,7 @@ class _StudentFeeCollectionScreenState
       // resolved — easier to read than the raw roll no.
       _admNoController.text = student['stuname']?.toString() ?? '';
       final stuClass = student['stuclass']?.toString();
-      final stuCourse = student['courname']?.toString();
+      final stuCourse = student['clagrpname']?.toString();
 
       setState(() {
         _student = student;
@@ -780,7 +780,7 @@ class _StudentFeeCollectionScreenState
                     return ListTile(
                       dense: true,
                       title: Text(s['stuname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                      subtitle: Text('Roll: ${s['stuadmno']} • ${s['courname'] ?? ''} ${s['stuclass']}', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+                      subtitle: Text('Roll: ${s['stuadmno']} • ${s['clagrpname'] ?? ''} ${s['stuclass']}', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
                       onTap: () => _selectSuggestion(s),
                     );
                   },
@@ -837,7 +837,7 @@ class _StudentFeeCollectionScreenState
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
-                    decoration: _inputDec('Course'),
+                    decoration: _inputDec('Standard'),
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                     items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)))).toList(),
                     onChanged: (val) {
@@ -938,7 +938,7 @@ class _StudentFeeCollectionScreenState
     final admNo = _student!['stuadmno']?.toString() ?? '-';
     final className = _student!['stuclass']?.toString() ?? '-';
     final fatherName = _parent?['fathername']?.toString() ?? '-';
-    final courseName = _student!['courname']?.toString() ?? '-';
+    final courseName = _student!['clagrpname']?.toString() ?? '-';
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -989,7 +989,7 @@ class _StudentFeeCollectionScreenState
         SizedBox(width: 16.w),
         Container(width: 1, height: 36.h, color: AppColors.border),
         SizedBox(width: 16.w),
-        Expanded(child: _detailRow('book-1', 'Course', courseName)),
+        Expanded(child: _detailRow('book-1', 'Standard', courseName)),
         SizedBox(width: 16.w),
         Container(width: 1, height: 36.h, color: AppColors.border),
         SizedBox(width: 16.w),
@@ -2278,7 +2278,7 @@ class _StudentFeeCollectionScreenState
     String? payInchargeMob;
     if (stuId != null) {
       student = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname, stuaddress, stumobile')
+          .select('stu_id, stuname, stuadmno, stuclass, clagrpname, stuaddress, stumobile')
           .eq('stu_id', stuId)
           .maybeSingle();
       try {
@@ -2360,7 +2360,7 @@ class _StudentFeeCollectionScreenState
       address: student?['stuaddress']?.toString() ?? '-',
       admissionNo: student?['stuadmno']?.toString() ?? '-',
       className: student?['stuclass']?.toString() ?? '-',
-      courseName: student?['courname']?.toString().isNotEmpty == true ? student!['courname'].toString() : '-',
+      courseName: student?['clagrpname']?.toString().isNotEmpty == true ? student!['clagrpname'].toString() : '-',
       schoolName: (ins.name?.isNotEmpty == true) ? ins.name! : (auth.insName ?? 'Institution'),
       schoolAddress: (ins.address?.isNotEmpty == true) ? ins.address! : '-',
       schoolLogoUrl: ins.logo,

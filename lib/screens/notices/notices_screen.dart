@@ -623,14 +623,14 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
         child: DropdownButton<String?>(
           value: _selectedCourse,
           isExpanded: true,
-          hint: Text('All Courses', style: TextStyle(fontSize: 13.sp)),
+          hint: Text('All Standards', style: TextStyle(fontSize: 13.sp)),
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           elevation: 6,
           style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
           icon: const AppIcon.linear('Chevron Down', size: 18),
           items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('All Courses')),
+            const DropdownMenuItem<String?>(value: null, child: Text('All Standards')),
             ...courses.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
           ],
           onChanged: (v) => setState(() {
@@ -886,7 +886,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
           final allStudents = await SupabaseService.getStudents(insId);
           targetStudents = allStudents
               .where((s) => pendingStuIds.contains(s.stuId))
-              .where((s) => _selectedCourse == null || s.courname == _selectedCourse)
+              .where((s) => _selectedCourse == null || s.clagrpname == _selectedCourse)
               .where((s) => _selectedClasses.isEmpty || _selectedClasses.contains(s.stuclass))
               .map((s) => {'stu_id': s.stuId, 'stuname': s.stuname})
               .toList();
@@ -901,7 +901,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
         final allStudents = await SupabaseService.getStudents(insId);
         targetStudents = allStudents
             .where((s) => _selectedClasses.contains(s.stuclass))
-            .where((s) => _selectedCourse == null || s.courname == _selectedCourse)
+            .where((s) => _selectedCourse == null || s.clagrpname == _selectedCourse)
             .map((s) => {'stu_id': s.stuId, 'stuname': s.stuname})
             .toList();
       }
@@ -1097,7 +1097,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                           if (_selectedCourse == null) ...[
                             SizedBox(height: 12.h),
                             Text(
-                              'Select a course above to choose classes.',
+                              'Select a standard above to choose classes.',
                               style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontStyle: FontStyle.italic),
                             ),
                           ] else ...[
@@ -1186,7 +1186,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                         children: [
                           // Course narrows the class chips below; class chips
                           // narrow which pending-fee students get the notice.
-                          Text('Filter by Course', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+                          Text('Filter by Standard', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
                           SizedBox(height: 8.h),
                           _buildCourseFilterDropdown(),
                           if (_selectedCourse != null) ...[

@@ -45,11 +45,38 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   // assignments + list.
   Map<String, dynamic>? _selectedBank;
 
+  // Defaults derived from the institution (account holder = short name,
+  // branch = city) used to prefill the Add Bank form.
+  String? _defaultAccHolder;
+  String? _defaultBranch;
+
   @override
   void initState() {
     super.initState();
     _fetchBanks();
     _fetchFeeGroups();
+    _loadFormDefaults();
+  }
+
+  Future<void> _loadFormDefaults() async {
+    final auth = context.read<AuthProvider>();
+    final insId = auth.insId;
+    if (insId == null) return;
+    final info = await SupabaseService.getInstitutionShortCity(insId);
+    if (!mounted) return;
+    setState(() {
+      _defaultAccHolder = info.shortName;
+      _defaultBranch = info.city;
+    });
+    // Prefill only if the user hasn't started entering a new bank yet.
+    if (_editingBanId == null) {
+      if (_accHolderController.text.trim().isEmpty && (info.shortName ?? '').isNotEmpty) {
+        _accHolderController.text = info.shortName!;
+      }
+      if (_branchController.text.trim().isEmpty && (info.city ?? '').isNotEmpty) {
+        _branchController.text = info.city!;
+      }
+    }
   }
 
   Future<void> _fetchFeeGroups() async {
@@ -109,7 +136,6 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   void _resetForm() {
     _formKey.currentState?.reset();
     _nameController.clear();
-    _branchController.clear();
     _ifscController.clear();
     _addr1Controller.clear();
     _addr2Controller.clear();
@@ -117,7 +143,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _mobileController.clear();
     _emailController.clear();
     _accNoController.clear();
-    _accHolderController.clear();
+    // Re-apply institution defaults for branch & account holder.
+    _branchController.text = _defaultBranch ?? '';
+    _accHolderController.text = _defaultAccHolder ?? '';
     setState(() => _editingBanId = null);
   }
 
