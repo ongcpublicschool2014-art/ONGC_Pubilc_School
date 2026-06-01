@@ -41,7 +41,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   List<String> _concessionList = [];
 
   // Students master cached at file-pick time so _validateRow can flag rows
-  // whose Roll No doesn't exist, or whose Class/Course disagrees with the
+  // whose Admission No doesn't exist, or whose Class/Course disagrees with the
   // student's stored class/course (so a demand can't be filed against the
   // wrong roll number by mistake).
   Map<String, Map<String, String>> _importStudentByAdmno = {};
@@ -95,12 +95,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   static const Map<String, String> _importFieldLabels = {
     'demno': 'Demand No',
-    'stuadmno': 'Roll No',
+    'stuadmno': 'Admission No',
     'stuclass': 'Class',
     'clagrpname': 'Standard',
     'demfeetype': 'Fee Type',
     'yr_id': 'Fee Year',
-    'demfeeterm': 'Semester',
+    'demfeeterm': 'Term',
     'con_id': 'Concession',
     'feeamount': 'Fee Amount',
     'conamount': 'Concession Amount',
@@ -453,7 +453,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   }
 
   /// Load the students master keyed by roll number so _validateRow can flag
-  /// imported rows whose Roll No doesn't exist, or whose Class/Course
+  /// imported rows whose Admission No doesn't exist, or whose Class/Course
   /// disagrees with what the student is registered under.
   Future<void> _loadStudentMaster() async {
     final auth = context.read<AuthProvider>();
@@ -503,7 +503,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (admRaw != null && _importStudentByAdmno.isNotEmpty) {
       final student = _importStudentByAdmno[norm(admRaw)];
       if (student == null) {
-        errors['stuadmno'] = 'Roll No "$admRaw" not found in students master';
+        errors['stuadmno'] = 'Admission No "$admRaw" not found in students master';
       } else {
         final clsRaw = _cellByKey(row, 'stuclass');
         if (clsRaw != null && (student['stuclass'] ?? '').isNotEmpty
@@ -679,7 +679,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         }
         if (stuId == null) {
           _skipped++;
-          _importErrors.add('Row ${i + 2}: Roll No "$admNoRaw" not found in active students');
+          _importErrors.add('Row ${i + 2}: Admission No "$admNoRaw" not found in active students');
           continue;
         }
 
@@ -1001,7 +1001,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     SizedBox(height: 20.h),
 
                     // Admission No
-                    _buildLabel('Roll No *'),
+                    _buildLabel('Admission No *'),
                     TextFormField(
                       controller: _admNoController,
                       decoration: _inputDecoration('Enter admission number'),
@@ -1094,7 +1094,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildLabel('Semester'),
+                              _buildLabel('Term'),
                               TextFormField(
                                 controller: _feeTermController,
                                 decoration: _inputDecoration('Enter term'),
@@ -1537,7 +1537,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text('ROLL NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 1, child: Text('ADMISSION NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('STANDARD', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
@@ -1700,7 +1700,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         child: Builder(builder: (context) {
           const flexes = <int>[1, 2, 3, 2, 2, 2, 2, 2, 2];
           const headers = <String>[
-            'S No.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'PAID',
+            'S No.', 'TERM', 'FEE TYPE', 'AMOUNT', 'PAID',
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
           ];
           final hStyle = TextStyle(
@@ -1987,7 +1987,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _gridHeaderDivider(),
                         _gridHeaderCell('Demand No', flex: 2),
                         _gridHeaderDivider(),
-                        _gridHeaderCell('Roll No *', flex: 3),
+                        _gridHeaderCell('Admission No *', flex: 3),
                         _gridHeaderDivider(),
                         _gridHeaderCell('Standard', flex: 2),
                         _gridHeaderDivider(),
@@ -1997,7 +1997,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _gridHeaderDivider(),
                         _gridHeaderCell('Year *', flex: 2),
                         _gridHeaderDivider(),
-                        _gridHeaderCell('Semester *', flex: 2),
+                        _gridHeaderCell('Term *', flex: 2),
                         _gridHeaderDivider(),
                         _gridHeaderCell('Concession', flex: 2),
                         _gridHeaderDivider(),
@@ -2254,12 +2254,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     // stuadmno, stuclass, demfeetype, yr_id, demfeeterm, feeamount, duedate).
     final headers = [
       'Demand No',
-      'Roll No *',
+      'Admission No *',
       'Standard',
       'Class *',
       'Fee Type *',
       'Fee Year *',
-      'Semester *',
+      'Term *',
       'Concession',
       'Fee Amount *',
       'Concession Amount',
@@ -2314,7 +2314,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final sheet = excel['Fee Demands'];
     excel.delete('Sheet1');
 
-    final headers = ['Demand No', 'Roll No *', 'Standard', 'Class *', 'Fee Type *', 'Fee Year *', 'Semester *', 'Concession', 'Fee Amount *', 'Concession Amount', 'Due Date *'];
+    final headers = ['Demand No', 'Admission No *', 'Standard', 'Class *', 'Fee Type *', 'Fee Year *', 'Term *', 'Concession', 'Fee Amount *', 'Concession Amount', 'Due Date *'];
     final sampleRows = [
       ['', 'CS001', 'BSC-CS', 'I Year', 'SCHOOL FEES', '2026-2027', 'I TERM', 'GENERAL', '10080', '0', '2026-05-31'],
       ['', 'CS001', 'BSC-CS', 'I Year', 'TUITION FEES', '2026-2027', 'JUNE', 'GENERAL', '700', '0', '2026-06-30'],

@@ -21,6 +21,8 @@ class StudentModel {
   final int? cgrpId;
   final String? clagrpname;
   final int? conId;
+  final String? emisno;
+  final String? aadharno;
   final String stuserId;
   final int activestatus;
   final DateTime createdon;
@@ -47,6 +49,8 @@ class StudentModel {
     this.cgrpId,
     this.clagrpname,
     this.conId,
+    this.emisno,
+    this.aadharno,
     required this.stuserId,
     this.activestatus = 1,
     required this.createdon,
@@ -83,6 +87,8 @@ class StudentModel {
       cgrpId: json['cgrp_id'] as int?,
       clagrpname: json['clagrpname']?.toString(),
       conId: json['con_id'] as int?,
+      emisno: json['emisno']?.toString(),
+      aadharno: json['aadharno']?.toString(),
       stuserId: json['stuser_id'] ?? '',
       activestatus: json['activestatus'] ?? 1,
       createdon: json['createdon'] != null

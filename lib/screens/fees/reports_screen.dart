@@ -18,8 +18,8 @@ import '../../widgets/pill_tab.dart';
 import '../../utils/friendly_error.dart';
 
 const _termOrder = [
-  'I SEMESTER', 'I TERM', 'II SEMESTER', 'II TERM', 'III SEMESTER', 'III TERM',
-  'IV SEMESTER', 'V SEMESTER', 'VI SEMESTER',
+  'I TERM', 'I TERM', 'II TERM', 'II TERM', 'III TERM', 'III TERM',
+  'IV TERM', 'V TERM', 'VI TERM',
   'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER',
   'NOVEMBER', 'DECEMBER', 'JANUARY', 'FEBRUARY',
   'MARCH', 'APRIL', 'MAY',
@@ -1330,7 +1330,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Expanded(
               child: _stickyTable(
             columnWidths: const [90, 110, 90, 110, 200, 100, 90, 110, 100, 120, 100, 110],
-            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
               for (final r in rows.skip(_consolidatedPage * _tablePageSize).take(_tablePageSize))
                 [
@@ -1395,7 +1395,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Standard', 'Class', 'Strength', 'Semester', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
+      const headers = ['Standard', 'Class', 'Strength', 'Term', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1510,7 +1510,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -1663,7 +1663,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Expanded(
               child: _stickyTable(
                 columnWidths: const [90, 90, 100, 90, 170, 110, 100, 110],
-                headers: const ['STANDARD', 'CLASS', 'SEMESTER', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
+                headers: const ['STANDARD', 'CLASS', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
                 rows: [
                   for (final r in rows.skip(_pendingPage * _tablePageSize).take(_tablePageSize))
                     [
@@ -1761,7 +1761,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Standard', 'Class', 'Semester', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Mobile No'];
+      const headers = ['Standard', 'Class', 'Term', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Mobile No'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1847,7 +1847,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['STANDARD', 'CLASS', 'SEMESTER', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE'],
+            headers: const ['STANDARD', 'CLASS', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -2148,7 +2148,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     child: Row(
                       children: [
-                        Expanded(child: Text('ROLL NO', style: headerStyle)),
+                        Expanded(child: Text('ADMISSION NO', style: headerStyle)),
                         Expanded(child: Text('STUDENT NAME', style: headerStyle)),
                         Expanded(child: Text('STANDARD', style: headerStyle)),
                         Expanded(child: Text('CLASS', style: headerStyle)),
@@ -3627,7 +3627,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final numStyle = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
 
       const headers = [
-        'Roll No', 'Name', 'Standard', 'Class',
+        'Admission No', 'Name', 'Standard', 'Class',
         'Transaction Date', 'Payment Mode', 'Doc No', 'Term', 'Fee Type',
         'Amount', 'Fine', 'Bank Name', 'Settlement Date',
       ];
@@ -4207,7 +4207,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
     120, 220, 110, 130, 170, 140, 130, 90, 200, 100, 90, 240, 180, 170,
   ];
   static const _headers = <String>[
-    'ROLL NO', 'NAME', 'STANDARD', 'CLASS',
+    'ADMISSION NO', 'NAME', 'STANDARD', 'CLASS',
     'TRANSACTION DATE', 'PAYMENT MODE', 'DOC NO', 'TERM', 'FEE TYPE',
     'AMOUNT', 'FINE', 'BANK NAME', 'SETTLEMENT ID', 'SETTLEMENT DATE',
   ];
