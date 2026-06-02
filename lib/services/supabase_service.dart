@@ -227,8 +227,8 @@ class SupabaseService {
   static Future<({bool hasFeeGroups, bool hasFeeTypes, bool hasConcessions, bool hasClassFeeDemand})> checkMasterData(int insId) async {
     try {
       final results = await Future.wait([
-        fromSchema('feegroup').select('fg_id').eq('ins_id', insId).eq('activestatus', 1).limit(1),
-        fromSchema('feetype').select('fee_id').eq('ins_id', insId).eq('activestatus', 1).limit(1),
+        client.from('feegroup').select('fg_id').eq('ins_id', insId).eq('activestatus', 1).limit(1),
+        client.from('feetype').select('fee_id').eq('ins_id', insId).eq('activestatus', 1).limit(1),
         fromSchema('concessioncategory').select('con_id').eq('ins_id', insId).eq('activestatus', 1).limit(1),
         fromSchema('classfeedemand').select('cf_id').limit(1),
       ]);
@@ -560,7 +560,7 @@ class SupabaseService {
   /// Get fee types (feedesc) from fee table
   static Future<List<String>> getFeeTypes(int insId) async {
     try {
-      final response = await fromSchema('feetype')
+      final response = await client.from('feetype')
           .select('feedesc')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
@@ -889,7 +889,7 @@ class SupabaseService {
   /// tenant only sees its own list.
   static Future<List<Map<String, dynamic>>> getBanks() async {
     try {
-      final response = await fromSchema('bank')
+      final response = await client.from('bank')
           .select('*')
           .eq('activestatus', 1)
           .order('ban_id', ascending: true);
@@ -902,7 +902,7 @@ class SupabaseService {
 
   static Future<int?> addBank(Map<String, dynamic> data) async {
     try {
-      final response = await fromSchema('bank')
+      final response = await client.from('bank')
           .insert(data)
           .select('ban_id')
           .maybeSingle();
@@ -915,7 +915,7 @@ class SupabaseService {
 
   static Future<bool> updateBank(int banId, Map<String, dynamic> data) async {
     try {
-      await fromSchema('bank').update(data).eq('ban_id', banId);
+      await client.from('bank').update(data).eq('ban_id', banId);
       return true;
     } catch (e) {
       debugPrint('Error updating bank: $e');
@@ -928,7 +928,7 @@ class SupabaseService {
   /// orphan the FK references.
   static Future<bool> deleteBank(int banId) async {
     try {
-      await fromSchema('bank').update({'activestatus': 0}).eq('ban_id', banId);
+      await client.from('bank').update({'activestatus': 0}).eq('ban_id', banId);
       return true;
     } catch (e) {
       debugPrint('Error deleting bank: $e');
@@ -941,7 +941,7 @@ class SupabaseService {
   /// Get all active fee groups for an institution
   static Future<List<Map<String, dynamic>>> getFeeGroups(int insId) async {
     try {
-      final response = await fromSchema('feegroup')
+      final response = await client.from('feegroup')
           .select('*')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
@@ -958,7 +958,7 @@ class SupabaseService {
   /// payments to a specific bank without re-importing fee groups.
   static Future<bool> setFeeGroupBank(int fgId, int? banId) async {
     try {
-      await fromSchema('feegroup').update({'ban_id': banId}).eq('fg_id', fgId);
+      await client.from('feegroup').update({'ban_id': banId}).eq('fg_id', fgId);
       return true;
     } catch (e) {
       debugPrint('Error updating feegroup ban_id: $e');
@@ -968,7 +968,7 @@ class SupabaseService {
 
   /// Insert a fee group — returns the new fg_id
   static Future<int> addFeeGroup(Map<String, dynamic> data) async {
-    final response = await fromSchema('feegroup')
+    final response = await client.from('feegroup')
         .insert(data)
         .select('fg_id')
         .maybeSingle();
@@ -985,7 +985,7 @@ class SupabaseService {
       final feeGroups = await getFeeGroups(insId);
       if (feeGroups.isEmpty) return [];
       final fgIds = feeGroups.map((fg) => fg['fg_id'] as int).toList();
-      final response = await fromSchema('feetype')
+      final response = await client.from('feetype')
           .select('*')
           .inFilter('fg_id', fgIds)
           .eq('activestatus', 1)
@@ -999,7 +999,7 @@ class SupabaseService {
 
   /// Insert a fee master record — returns the new fee_id
   static Future<int> addFeeMaster(Map<String, dynamic> data) async {
-    final response = await fromSchema('feetype')
+    final response = await client.from('feetype')
         .insert(data)
         .select('fee_id')
         .maybeSingle();
@@ -1307,8 +1307,8 @@ class SupabaseService {
       getCourseClassOrdering(int insId) async {
     try {
       final results = await Future.wait<dynamic>([
-        fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-        fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       ]);
       final courseOrd = <String, int>{};
       for (final r in (results[0] as List)) {
@@ -1529,7 +1529,7 @@ class SupabaseService {
               .toSet()
               .toList();
           if (feeIds.isNotEmpty) {
-            final feeTypes = await fromSchema('feetype')
+            final feeTypes = await client.from('feetype')
                 .select('fee_id, feedesc, fg_id')
                 .inFilter('fee_id', feeIds)
                 .eq('activestatus', 1);
@@ -1539,7 +1539,7 @@ class SupabaseService {
               feeIdToFgId[ft['fee_id'] as int] = ft['fg_id'] as int;
               fgIds.add(ft['fg_id'] as int);
             }
-            final feeGroups = await fromSchema('feegroup')
+            final feeGroups = await client.from('feegroup')
                 .select('fg_id, fgdesc')
                 .inFilter('fg_id', fgIds.toList());
             final fgMap = <int, String>{};
@@ -1571,7 +1571,7 @@ class SupabaseService {
   /// - 'byName': fee type name (feedesc) -> fee group name
   static Future<Map<String, Map>> getFeeGroupMaps(int insId) async {
     try {
-      final feeTypes = await fromSchema('feetype')
+      final feeTypes = await client.from('feetype')
           .select('fee_id, feedesc, fg_id')
           .eq('ins_id', insId)
           .eq('activestatus', 1);
@@ -1593,7 +1593,7 @@ class SupabaseService {
         }
       }
       if (fgIds.isEmpty) return {'byId': {}, 'byName': {}};
-      final feeGroups = await fromSchema('feegroup')
+      final feeGroups = await client.from('feegroup')
           .select('fg_id, fgdesc')
           .eq('ins_id', insId)
           .eq('activestatus', 1)

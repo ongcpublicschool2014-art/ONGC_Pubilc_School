@@ -40,7 +40,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
 
   // Pagination
   int _currentPage = 1;
-  static const int _pageSize = 10;
+  static const int _pageSize = 25;
 
   // Predefined class order
   static const _classOrder = [
@@ -558,17 +558,17 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                         // Header
                         Container(
                           padding: EdgeInsets.symmetric(
-                              horizontal: 16.w, vertical: 12.h),
+                              horizontal: 16.w, vertical: 8.h),
                           color: AppColors.tableHeadBg,
                           child: Row(
                             children: [
                               SizedBox(width: 40.w),
-                              _headerCell('Roll No', 3),
+                              _headerCell('Admission No', 3),
                               _headerCell('Student Name', 5),
                               _headerCell('Class', 3),
-                              _headerCell('Standard', 2, center: true),
+                              _headerCell('Standard', 3, center: true),
                               _headerCell('Year', 3, center: true),
-                              _headerCell('Semester', 3, center: true),
+                              _headerCell('Term', 3, center: true),
                               _headerCell('Fee Type', 3),
                               _headerCell('Fee Amount', 3, right: true),
                               SizedBox(width: 16.w),
@@ -773,6 +773,9 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
       flex: flex,
       child: Text(
         label.toUpperCase(),
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
             fontSize: 12.sp,
             fontWeight: FontWeight.w700,
@@ -838,7 +841,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                   activeColor: AppColors.accent,
                 ),
               ),
-              // Roll No
+              // Admission No
               Expanded(
                 flex: 3,
                 child: Text(admNo,
@@ -863,9 +866,9 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                     textAlign: TextAlign.left,
                     overflow: TextOverflow.ellipsis),
               ),
-              // Course
+              // Standard
               Expanded(
-                flex: 2,
+                flex: 3,
                 child: Text(d['clagrpname']?.toString() ?? '-',
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center),

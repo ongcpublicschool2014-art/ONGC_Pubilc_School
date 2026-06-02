@@ -134,7 +134,6 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   }
 
   void _resetForm() {
-    _formKey.currentState?.reset();
     _nameController.clear();
     _ifscController.clear();
     _addr1Controller.clear();
@@ -146,6 +145,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     // Re-apply institution defaults for branch & account holder.
     _branchController.text = _defaultBranch ?? '';
     _accHolderController.text = _defaultAccHolder ?? '';
+    // Clear validation/interaction state LAST so the now-empty required
+    // fields don't immediately flash "Required" after a successful save.
+    _formKey.currentState?.reset();
     setState(() => _editingBanId = null);
   }
 

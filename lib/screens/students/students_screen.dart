@@ -45,6 +45,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   final _stateController = TextEditingController();
   final _countryController = TextEditingController();
   final _pinController = TextEditingController();
+  final _emisController = TextEditingController();
+  final _aadharController = TextEditingController();
   String? _selectedBloodGroup;
   String? _selectedClass;
   List<String> _classes = [];
@@ -126,11 +128,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'mothername', 'mothermobile', 'motheroccupation',
     'guardianname', 'guardianmobile', 'guardianoccupation',
     'payincharge', 'payinchargemob',
-    'admittyear',
+    'admittyear', 'emisno', 'aadharno',
   ];
 
   static const Map<String, String> _importGridLabels = {
-    'stuadmno': 'Roll No *',
+    'stuadmno': 'Admission No *',
     'stuname': 'Name *',
     'stugender': 'Gender *',
     'studob': 'DOB *',
@@ -141,6 +143,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'stuemail': 'Email',
     'concession': 'Concession *',
     'admittyear': 'Admitted Year',
+    'emisno': 'EMIS No',
+    'aadharno': 'Aadhar No',
     'stuaddress': 'Address',
     'stucity': 'City',
     'stustate': 'State',
@@ -214,6 +218,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _stateController.dispose();
     _countryController.dispose();
     _pinController.dispose();
+    _emisController.dispose();
+    _aadharController.dispose();
     _fatherNameController.dispose();
     _fatherMobileController.dispose();
     _fatherOccController.dispose();
@@ -273,8 +279,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       SupabaseService.getInstitutionInfo(insId),
       SupabaseService.getStudentCountsByClass(insId),
       // class + course masters with ordid for the sidebar ordering.
-      SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-      SupabaseService.fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+      SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+      SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
     ]);
 
     if (!mounted) return;
@@ -367,6 +373,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _stateController.clear();
     _countryController.clear();
     _pinController.clear();
+    _emisController.clear();
+    _aadharController.clear();
     _fatherNameController.clear();
     _fatherMobileController.clear();
     _fatherOccController.clear();
@@ -403,6 +411,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _stateController.text = clean(s.stustate);
     _countryController.text = clean(s.stucountry);
     _pinController.text = clean(s.stupin);
+    _emisController.text = clean(s.emisno);
+    _aadharController.text = clean(s.aadharno);
 
     // Fetch parent data
     final parent = await SupabaseService.getStudentParent(s.stuId);
@@ -443,6 +453,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _stateController.clear();
     _countryController.clear();
     _pinController.clear();
+    _emisController.clear();
+    _aadharController.clear();
     _fatherNameController.clear();
     _fatherMobileController.clear();
     _fatherOccController.clear();
@@ -479,7 +491,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _selectedClass == null ||
         _mobileController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields (Roll No, Name, Class, Mobile)'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Please fill all required fields (Admission No, Name, Class, Mobile)'), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -511,6 +523,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stustate': _stateController.text.trim().isNotEmpty ? _stateController.text.trim() : null,
         'stucountry': _countryController.text.trim().isNotEmpty ? _countryController.text.trim() : null,
         'stupin': _pinController.text.trim().isNotEmpty ? _pinController.text.trim() : null,
+        'emisno': _emisController.text.trim().isNotEmpty ? _emisController.text.trim() : null,
+        'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
         'stubloodgrp': _selectedBloodGroup,
         'stuclass': _selectedClass,
         'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
@@ -642,7 +656,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   }
 
   /// Bulk-upload student photos by filename convention:
-  /// the file's stem (e.g. "6522" in "6522.jpg") is treated as the Roll No
+  /// the file's stem (e.g. "6522" in "6522.jpg") is treated as the Admission No
   /// (stuadmno) and matched against the already-loaded students list for
   /// this institution. Each matched student's stuphoto URL is updated.
   /// Unmatched filenames are reported to the admin so they can fix the
@@ -652,7 +666,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // file inside and uploads them — much faster than Ctrl+A in the file
     // picker when a school has hundreds of photos.
     final folderPath = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select folder of photos named by Roll No (e.g. 6522.jpg)',
+      dialogTitle: 'Select folder of photos named by Admission No (e.g. 6522.jpg)',
     );
     if (folderPath == null) return;
 
@@ -695,7 +709,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final inscode = auth.inscode ?? 'ins';
     if (insId == null) return;
 
-    // Build a Roll No → stu_id lookup from the already-loaded students list.
+    // Build a Admission No → stu_id lookup from the already-loaded students list.
     // Case-insensitive match so "6522.jpg" and "6522.JPG" both work.
     final rollToStuId = <String, int>{
       for (final s in _students) s.stuadmno.toLowerCase(): s.stuId,
@@ -739,7 +753,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         final bytes = await file.readAsBytes();
         final mimeType = mimeMap[ext] ?? 'image/jpeg';
         // Per-institution bucket (student-photos-<inscode>); upsert so
-        // re-uploading a photo for the same Roll No overwrites cleanly.
+        // re-uploading a photo for the same Admission No overwrites cleanly.
         final bucket = _photoBucket(inscode);
         final path = '$roll.$ext';
         await SupabaseService.client.storage.from(bucket).uploadBinary(
@@ -781,7 +795,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       style: TextStyle(color: AppColors.success, fontWeight: FontWeight.w700, fontSize: 14.sp)),
                   if (unmatched.isNotEmpty) ...[
                     SizedBox(height: 8.h),
-                    Text('Unmatched (${unmatched.length}) — no student with this Roll No:',
+                    Text('Unmatched (${unmatched.length}) — no student with this Admission No:',
                         style: TextStyle(color: AppColors.warning, fontWeight: FontWeight.w700, fontSize: 13.sp)),
                     for (final n in unmatched.take(20))
                       Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('• $n', style: TextStyle(fontSize: 12.sp))),
@@ -1781,7 +1795,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             }),
             validator: (v) => v == null ? 'Required' : null,
           )),
-          _fieldFull(label: 'Roll Number *', child: TextFormField(
+          _fieldFull(label: 'Admission Number *', child: TextFormField(
             controller: _admNoController,
             decoration: _dec('Enter roll no'),
             style: _inputStyle,
@@ -1970,6 +1984,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
             validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
           )),
         ),
+        SizedBox(height: 14.h),
+
+        _row2(
+          _fieldFull(label: 'EMIS No', child: TextFormField(
+            controller: _emisController,
+            decoration: _dec('Enter EMIS number'),
+            style: _inputStyle,
+          )),
+          _fieldFull(label: 'Aadhar No', child: TextFormField(
+            controller: _aadharController,
+            decoration: _dec('Enter Aadhar number'),
+            style: _inputStyle,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          )),
+        ),
       ],
     );
   }
@@ -2058,7 +2088,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   /// Known student fields for column mapping
   static const _importFields = <String, String>{
     '': '-- Skip --',
-    'stuadmno': 'Roll No',
+    'stuadmno': 'Admission No',
     'stuname': 'Name',
     'stugender': 'Gender',
     'studob': 'DOB',
@@ -2074,6 +2104,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'stubloodgrp': 'Blood Group',
     'stuadmdate': 'Admission Date',
     'admittyear': 'Admitted Year',
+    'emisno': 'EMIS No',
+    'aadharno': 'Aadhar No',
     'fathername': 'Father Name',
     'fathermobile': 'Father Mobile',
     'fatheroccupation': 'Father Occupation',
@@ -2090,7 +2122,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   /// Auto-map header text to field key (case-insensitive)
   static String _autoMapHeader(String header) {
     // Strip the trailing "*" used to flag mandatory columns in our templates
-    // ("Roll No *" → "roll no") so re-uploaded templates still auto-map.
+    // ("Admission No *" → "roll no") so re-uploaded templates still auto-map.
     final h = header.replaceAll('*', '').trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
     const map = {
       'adm no': 'stuadmno', 'admission number': 'stuadmno', 'admno': 'stuadmno', 'admission no': 'stuadmno', 'roll no': 'stuadmno', 'rollno': 'stuadmno', 'roll number': 'stuadmno',
@@ -2110,6 +2142,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'blood group': 'stubloodgrp', 'bloodgroup': 'stubloodgrp',
       'admission date': 'stuadmdate', 'adm date': 'stuadmdate',
       'admitted year': 'admittyear', 'admittedyear': 'admittyear', 'admittyear': 'admittyear', 'adm year': 'admittyear', 'admndate': 'admittyear',
+      'emis no': 'emisno', 'emisno': 'emisno', 'emis': 'emisno', 'emis number': 'emisno',
+      'aadhar no': 'aadharno', 'aadharno': 'aadharno', 'aadhar': 'aadharno', 'aadhaar': 'aadharno', 'aadhaar no': 'aadharno', 'aadhar number': 'aadharno', 'aadhar card': 'aadharno',
       'father name': 'fathername', 'fathername': 'fathername',
       'father mobile': 'fathermobile', 'fathermobile': 'fathermobile', 'father phone': 'fathermobile',
       'father occupation': 'fatheroccupation', 'fatheroccupation': 'fatheroccupation',
@@ -2248,11 +2282,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
     try {
       final results = await Future.wait([
-        SupabaseService.fromSchema('class')
+        SupabaseService.client.from('class')
             .select('cla_id, claname, cgrp_id')
             .eq('ins_id', insId)
             .eq('activestatus', 1),
-        SupabaseService.fromSchema('clagrp')
+        SupabaseService.client.from('clagrp')
             .select('cgrp_id, clagrpname')
             .eq('ins_id', insId),
       ]);
@@ -2366,13 +2400,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // (_importRequiredFields = stuadmno, stuname, stugender, stuclass,
     // payincharge, payinchargemob).
     final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
+      'Admission No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
       'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
       'Father Name', 'Father Mobile', 'Father Occupation',
       'Mother Name', 'Mother Mobile', 'Mother Occupation',
       'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
       'Payment In Charge *', 'Payment Mobile *',
-      'Admitted Year',
+      'Admitted Year', 'EMIS No', 'Aadhar No',
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2422,19 +2456,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
     excel.delete('Sheet1');
 
     final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
+      'Admission No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
       'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
       'Father Name', 'Father Mobile', 'Father Occupation',
       'Mother Name', 'Mother Mobile', 'Mother Occupation',
       'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
       'Payment In Charge *', 'Payment Mobile *',
-      'Admitted Year',
+      'Admitted Year', 'EMIS No', 'Aadhar No',
     ];
     final sampleRows = [
-      ['CS001', 'RAHUL KUMAR', 'Male', '2004-06-15', '2025-06-01', 'BSC-CS', 'I Year', '9876543210', 'rahul@email.com', 'GENERAL', 'No.5 Main Street', 'Chennai', 'Tamil Nadu', 'India', '600001', 'B+', 'KUMAR S', '9876543210', 'Business', 'LAKSHMI K', '9876543211', 'Teacher', '', '', '', 'KUMAR S', '9876543210', '25-26'],
-      ['CS002', 'PRIYA S', 'Female', '2004-03-22', '2025-06-01', 'BSC-CS', 'I Year', '9876543220', '', 'GENERAL', 'No.10 Anna Nagar', 'Chennai', 'Tamil Nadu', 'India', '600040', 'O+', 'SENTHIL S', '9876543220', 'Engineer', 'MEENA S', '9876543221', 'Homemaker', '', '', '', 'SENTHIL S', '9876543220', '25-26'],
-      ['BBA001', 'ARUN M', 'Male', '2003-11-08', '2025-06-01', 'BBA', 'II Year', '9876543230', 'arun@email.com', 'GENERAL', 'No.15 Park Road', 'Madurai', 'Tamil Nadu', 'India', '625001', 'A+', 'MURUGAN A', '9876543230', 'Doctor', 'SELVI M', '9876543231', 'Nurse', '', '', '', 'MURUGAN A', '9876543230', '25-26'],
-      ['MCA001', 'DIVYA R', 'Female', '2002-08-30', '2025-06-01', 'MCA', 'I Year', '9876543240', '', 'GENERAL', 'No.20 Lake View', 'Coimbatore', 'Tamil Nadu', 'India', '641001', 'AB+', 'RAJAN D', '9876543240', 'Farmer', 'KALA R', '9876543241', 'Homemaker', '', '', '', 'RAJAN D', '9876543240', '25-26'],
+      ['CS001', 'RAHUL KUMAR', 'Male', '2004-06-15', '2025-06-01', 'BSC-CS', 'I Year', '9876543210', 'rahul@email.com', 'GENERAL', 'No.5 Main Street', 'Chennai', 'Tamil Nadu', 'India', '600001', 'B+', 'KUMAR S', '9876543210', 'Business', 'LAKSHMI K', '9876543211', 'Teacher', '', '', '', 'KUMAR S', '9876543210', '25-26', 'EMIS1001', '123412341234'],
+      ['CS002', 'PRIYA S', 'Female', '2004-03-22', '2025-06-01', 'BSC-CS', 'I Year', '9876543220', '', 'GENERAL', 'No.10 Anna Nagar', 'Chennai', 'Tamil Nadu', 'India', '600040', 'O+', 'SENTHIL S', '9876543220', 'Engineer', 'MEENA S', '9876543221', 'Homemaker', '', '', '', 'SENTHIL S', '9876543220', '25-26', '', ''],
+      ['BBA001', 'ARUN M', 'Male', '2003-11-08', '2025-06-01', 'BBA', 'II Year', '9876543230', 'arun@email.com', 'GENERAL', 'No.15 Park Road', 'Madurai', 'Tamil Nadu', 'India', '625001', 'A+', 'MURUGAN A', '9876543230', 'Doctor', 'SELVI M', '9876543231', 'Nurse', '', '', '', 'MURUGAN A', '9876543230', '25-26', '', ''],
+      ['MCA001', 'DIVYA R', 'Female', '2002-08-30', '2025-06-01', 'MCA', 'I Year', '9876543240', '', 'GENERAL', 'No.20 Lake View', 'Coimbatore', 'Tamil Nadu', 'India', '641001', 'AB+', 'RAJAN D', '9876543240', 'Farmer', 'KALA R', '9876543241', 'Homemaker', '', '', '', 'RAJAN D', '9876543240', '25-26', '', ''],
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2548,6 +2582,25 @@ class _StudentsScreenState extends State<StudentsScreen> {
         }
       }
     }
+    // Length limits — flag any value that exceeds its DB column width so the
+    // user fixes the source instead of hitting a "value too long" error at save.
+    const maxLen = {
+      'stuadmno': 25, 'stuname': 50, 'stumobile': 30, 'stuemail': 254,
+      'stuclass': 20, 'clagrpname': 20, 'stupin': 6, 'stubloodgrp': 20,
+      'stucity': 50, 'stustate': 50, 'stucountry': 50,
+      'fathername': 50, 'fathermobile': 30, 'fatheroccupation': 50,
+      'mothername': 50, 'mothermobile': 30, 'motheroccupation': 50,
+      'guardianname': 50, 'guardianmobile': 30, 'guardianoccupation': 50,
+      'payincharge': 50, 'payinchargemob': 30, 'admittyear': 9,
+      'emisno': 20, 'aadharno': 20,
+    };
+    maxLen.forEach((key, lim) {
+      if (errors.containsKey(key)) return;
+      final v = (_importCellByKey(row, key) ?? '').trim();
+      if (v.length > lim) {
+        errors[key] = '${_importGridLabels[key] ?? _importFields[key] ?? key} too long (max $lim)';
+      }
+    });
     return errors;
   }
 
@@ -2571,7 +2624,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   static String _friendlyError(String msg) {
     final m = msg.toLowerCase();
     if (m.contains('duplicate key') || m.contains('unique constraint')) {
-      if (m.contains('stuadmno') || m.contains('admission')) return 'Roll number already exists';
+      if (m.contains('stuadmno') || m.contains('admission')) return 'Admission number already exists';
       if (m.contains('stuemail') || m.contains('email')) return 'Email already exists';
       if (m.contains('payinchargemob')) return 'Payment mobile already exists';
       return 'Duplicate record found';
@@ -2579,7 +2632,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (m.contains('not-null') || m.contains('null value')) {
       final match = RegExp(r'column "(\w+)"').firstMatch(msg);
       final col = match?.group(1) ?? '';
-      final labels = {'stuadmno': 'Roll No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
+      final labels = {'stuadmno': 'Admission No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
       return '${labels[col] ?? col} is required';
     }
     if (m.contains('foreign key') || m.contains('fkey')) return 'Invalid reference - check class, year, or concession values';
@@ -2659,11 +2712,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     // Pre-fetch class + course masters so each staging row gets the matching
     // cla_id and cgrp_id resolved from the canonical master tables.
-    final classMasterRaw = await SupabaseService.fromSchema('class')
+    final classMasterRaw = await SupabaseService.client.from('class')
         .select('cla_id, claname')
         .eq('ins_id', insId)
         .eq('activestatus', 1);
-    final courseMasterRaw = await SupabaseService.fromSchema('clagrp')
+    final courseMasterRaw = await SupabaseService.client.from('clagrp')
         .select('cgrp_id, clagrpname')
         .eq('ins_id', insId);
     String _normKey(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
@@ -2768,6 +2821,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'payincharge': _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? '-',
         'payinchargemob': _nullIfEmpty(_importCellByKey(row, 'payinchargemob')),
         'admittyear': _truncate(_nullIfEmpty(_importCellByKey(row, 'admittyear')), 9),
+        'emisno': _truncate(_nullIfEmpty(_importCellByKey(row, 'emisno')), 20),
+        'aadharno': _truncate(_nullIfEmpty(_importCellByKey(row, 'aadharno')), 20),
         'status': 'PENDING',
       });
     }
@@ -2810,9 +2865,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
         final status = e['status'];
         final admNo = e['stuadmno'] ?? '';
         if (status == 'NO_PARENT') {
-          _importErrors.add('Roll $admNo: Payment In Charge or Mobile is missing - student not created');
+          _importErrors.add('Admission $admNo: Payment In Charge or Mobile is missing - student not created');
         } else {
-          _importErrors.add('Roll $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
+          _importErrors.add('Admission $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
         }
       }
 
@@ -3192,7 +3247,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // Widths sized to fit header text on a single line at 13.sp / w700
     // (e.g., "GUARDIAN MOBILE" needs ~150px; "CONCESSION *" needs ~140px).
     switch (key) {
-      case 'stuadmno': return 110;          // ROLL NO *
+      case 'stuadmno': return 110;          // ADMISSION NO *
       case 'stuname': return 170;           // NAME *
       case 'stugender': return 110;         // GENDER *
       case 'studob': return 100;            // DOB *
@@ -3216,6 +3271,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'payincharge': return 160;       // PAY IN CHARGE *
       case 'payinchargemob': return 140;    // PAY MOBILE *
       case 'admittyear': return 140;        // ADMITTED YEAR
+      case 'emisno': return 130;            // EMIS NO
+      case 'aadharno': return 150;          // AADHAR NO
       default: return 120;
     }
   }

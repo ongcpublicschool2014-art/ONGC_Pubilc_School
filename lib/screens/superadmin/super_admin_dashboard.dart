@@ -2518,8 +2518,9 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                                             fontSize: 18),
                                       );
                                       return Container(
-                                        width: 44,
-                                        height: 44,
+                                        width: 72,
+                                        height: 64,
+                                        padding: const EdgeInsets.all(4),
                                         decoration: BoxDecoration(
                                           color: AppColors.primary.withValues(alpha: 0.1),
                                           borderRadius: BorderRadius.circular(10),
@@ -2530,7 +2531,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                                             ? fallback
                                             : Image.network(
                                                 logo,
-                                                fit: BoxFit.cover,
+                                                fit: BoxFit.contain,
                                                 errorBuilder: (_, __, ___) => fallback,
                                               ),
                                       );

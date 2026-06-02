@@ -89,8 +89,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         SupabaseService.getStudents(insId),
         // class + course masters with ordid for sidebar ordering — same
         // source the Students screen sidebar uses.
-        SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       ]);
       final students = results[0] as List<StudentModel>;
       final classMaster = results[1] as List<dynamic>;
@@ -769,7 +769,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(s.stuname, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                    Text('Roll: ${s.stuadmno}  •  ${s.clagrpname ?? ''} ${s.stuclass}  •  Father: $fatherName',
+                    Text('Admission: ${s.stuadmno}  •  ${s.clagrpname ?? ''} ${s.stuclass}  •  Father: $fatherName',
                         style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
                   ],
                 ),
@@ -852,7 +852,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
             children: [
               SizedBox(width: 100.w, child: const _TH('DATE')),
               SizedBox(width: 110.w, child: const _TH('DOC.NO')),
-              SizedBox(width: 90.w,  child: const _TH('SEMESTER')),
+              SizedBox(width: 90.w,  child: const _TH('TERM')),
               const Expanded(            child: _TH('FEE TYPE')),
               SizedBox(width: 110.w, child: const _TH('REFERENCE')),
               SizedBox(width: 100.w, child: const _TH('DUE', align: TextAlign.right)),
@@ -1201,7 +1201,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     addInfo('Student Name', ':  ${s.stuname}');
     // Add roll no on same row as student name but further right
     final admCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row - 1));
-    admCell.value = xl.TextCellValue('Roll No : ${s.stuadmno}');
+    admCell.value = xl.TextCellValue('Admission No : ${s.stuadmno}');
     admCell.cellStyle = labelStyle;
     addInfo('Father Name', ':  $fatherName');
     row++;
@@ -1213,7 +1213,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     row++;
 
     // Column headers
-    final headers = ['Date', 'Doc No.', 'Semester', 'Fee Type', 'Reference', 'Debit (Rs.)', 'Credit (Rs.)'];
+    final headers = ['Date', 'Doc No.', 'Term', 'Fee Type', 'Reference', 'Debit (Rs.)', 'Credit (Rs.)'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);

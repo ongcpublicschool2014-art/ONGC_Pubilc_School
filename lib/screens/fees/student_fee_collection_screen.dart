@@ -478,7 +478,7 @@ class _StudentFeeCollectionScreenState
     } catch (_) {}
   }
 
-  /// Combined suggestion search — matches Roll No (prefix) OR Student Name
+  /// Combined suggestion search — matches Admission No (prefix) OR Student Name
   /// (substring) so the single search field works for both.
   Future<void> _searchByAdmNoOrName(String q) async {
     final term = q.trim();
@@ -540,7 +540,7 @@ class _StudentFeeCollectionScreenState
     });
 
     try {
-      // The combined search field accepts a Roll No OR a Student Name. Try
+      // The combined search field accepts a Admission No OR a Student Name. Try
       // exact roll-no match first; if nothing, fall back to a name search
       // and use the first match (e.g. user typed a full name and hit Enter
       // without clicking a suggestion).
@@ -781,7 +781,7 @@ class _StudentFeeCollectionScreenState
                     return ListTile(
                       dense: true,
                       title: Text(s['stuname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                      subtitle: Text('Roll: ${s['stuadmno']} • ${s['clagrpname'] ?? ''} ${s['stuclass']}', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+                      subtitle: Text('Admission: ${s['stuadmno']} • ${s['clagrpname'] ?? ''} ${s['stuclass']}', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
                       onTap: () => _selectSuggestion(s),
                     );
                   },
@@ -904,7 +904,7 @@ class _StudentFeeCollectionScreenState
                     controller: _admNoController,
                     onSubmitted: (_) => _search(),
                     onChanged: _searchByAdmNoOrName,
-                    decoration: _inputDec('Search by Roll No or Name'),
+                    decoration: _inputDec('Search by Admission No or Name'),
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                     expands: true,
                     maxLines: null,
@@ -977,7 +977,7 @@ class _StudentFeeCollectionScreenState
                       color: AppColors.textPrimary),
                   overflow: TextOverflow.ellipsis),
               SizedBox(height: 2.h),
-              Text('Roll No: $admNo',
+              Text('Admission No: $admNo',
                   style: TextStyle(
                       fontSize: 13.sp, color: AppColors.textSecondary)),
             ],
@@ -1205,7 +1205,7 @@ class _StudentFeeCollectionScreenState
                   visualDensity: VisualDensity.compact,
                 ),
               ),
-              const _THCell('Semester', flex: 2),
+              const _THCell('Term', flex: 2),
               const _THCell('Fee Type', flex: 3),
               const _THCell('Due Date', flex: 3),
               const _THCell('Fee Amt', flex: 2, textAlign: TextAlign.right),
@@ -1699,7 +1699,7 @@ class _StudentFeeCollectionScreenState
           .select('fg_id')
           .eq('ins_id', insId);
       final seqFgIds = (sequences as List).map((s) => s['fg_id']).toSet();
-      final feeGroups = await SupabaseService.fromSchema('feegroup')
+      final feeGroups = await SupabaseService.client.from('feegroup')
           .select('fg_id, fgdesc, ban_id')
           .eq('ins_id', insId);
       final fgInfo = <int, Map<String, dynamic>>{
@@ -1710,7 +1710,7 @@ class _StudentFeeCollectionScreenState
         final d = _allDemands.firstWhere((x) => _demKey(x) == key, orElse: () => {});
         if (d.isEmpty) continue;
         final demfeetype = d['demfeetype']?.toString() ?? '';
-        final ftResult = await SupabaseService.fromSchema('feetype')
+        final ftResult = await SupabaseService.client.from('feetype')
             .select('fg_id')
             .eq('feedesc', demfeetype)
             .eq('activestatus', 1)
@@ -2706,7 +2706,7 @@ class _StudentFeeCollectionScreenState
               .toSet()
               .toList();
           if (feeIds.isNotEmpty) {
-            final ftRows = await SupabaseService.fromSchema('feetype')
+            final ftRows = await SupabaseService.client.from('feetype')
                 .select('fg_id')
                 .inFilter('fee_id', feeIds);
             final fgIds = (ftRows as List)
@@ -2715,7 +2715,7 @@ class _StudentFeeCollectionScreenState
                 .toSet()
                 .toList();
             if (fgIds.isNotEmpty) {
-              final fgRows = await SupabaseService.fromSchema('feegroup')
+              final fgRows = await SupabaseService.client.from('feegroup')
                   .select('ban_id')
                   .inFilter('fg_id', fgIds);
               final banIds = (fgRows as List)
