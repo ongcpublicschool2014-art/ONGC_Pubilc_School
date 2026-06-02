@@ -123,7 +123,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Fee Demand',
           icon: 'wallet-1',
           tint: Color(0xFFE5A85C),
-          previewLabels: ['Course', 'Term', 'Due'],
+          previewLabels: ['Standard', 'Term', 'Due'],
         ),
         _ModuleCard(
           label: 'Counter',
@@ -147,7 +147,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Pending',
           icon: 'clock',
           tint: Color(0xFFEC7D8E),
-          previewLabels: ['Course', 'Class', 'Total'],
+          previewLabels: ['Standard', 'Class', 'Total'],
         ),
       ],
     ),
@@ -179,7 +179,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Consolidated',
           icon: 'chart-2',
           tint: Color(0xFFE5A85C),
-          previewLabels: ['Course', 'Net', 'Paid'],
+          previewLabels: ['Standard', 'Net', 'Paid'],
         ),
         _ModuleCard(
           label: 'Settings',

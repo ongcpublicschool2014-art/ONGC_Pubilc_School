@@ -296,7 +296,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       address: student?.stuaddress ?? '-',
       admissionNo: student?.stuadmno ?? '-',
       className: student?.stuclass ?? '-',
-      courseName: student?.courname ?? '-',
+      courseName: student?.clagrpname ?? '-',
       schoolName: _insName ?? auth.inscode ?? 'Institution',
       schoolAddress: _insAddress ?? '-',
       schoolLogoUrl: _insLogoUrl,

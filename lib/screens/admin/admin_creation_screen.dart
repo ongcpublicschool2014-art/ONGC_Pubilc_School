@@ -258,6 +258,9 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
     _emailController.clear();
     _phoneController.clear();
     _passwordController.clear();
+    // Clear the validation/interaction state so the now-empty required fields
+    // don't immediately flag "Required" (User Name auto-validates on interaction).
+    _formKey.currentState?.reset();
     setState(() {
       _selectedDesignation = null;
       _selectedDesId = null;

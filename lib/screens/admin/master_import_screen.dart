@@ -82,14 +82,14 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 8, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 7));
+    _tabCtrl = TabController(length: 6, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 5));
   }
 
   @override
   void didUpdateWidget(covariant MasterImportScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialTabIndex != oldWidget.initialTabIndex) {
-      final i = widget.initialTabIndex.clamp(0, 7);
+      final i = widget.initialTabIndex.clamp(0, 5);
       if (_tabCtrl.index != i) _tabCtrl.animateTo(i);
     }
   }
@@ -111,8 +111,8 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
             listenable: _tabCtrl,
             builder: (context, _) {
               final selected = _tabCtrl.index;
-              final tabLabels = ['Admission Type', 'Quota', 'Course', 'Class', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand'];
-              final tabIcons = ['teacher', 'book-1', 'category-2', 'receipt-1', 'receipt-discount', 'note-2', 'user-tick', 'ticket'];
+              final tabLabels = ['Standard', 'Class', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand'];
+              final tabIcons = ['teacher', 'book-1', 'category-2', 'receipt-1', 'receipt-discount', 'note-2'];
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: SingleChildScrollView(
@@ -144,8 +144,6 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
               controller: _tabCtrl,
               physics: const NeverScrollableScrollPhysics(),
               children: const [
-                _AdmissionTypeTab(),
-                _QuotaTab(),
                 _CourseTab(),
                 _ClassTab(),
                 _FeeGroupTab(),
@@ -725,7 +723,7 @@ Widget _buildImportCard({
 // ═══════════════════════════════════════════════
 // 1. FEE GROUP TAB
 // ═══════════════════════════════════════════════
-// COURSE TAB
+// STANDARD TAB
 // ═══════════════════════════════════════════════
 
 class _CourseTab extends StatefulWidget {
@@ -743,7 +741,7 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Course ID *', 'Course Name *', 'Order'];
+  static const _headers = ['Standard ID *', 'Standard Name *', 'Order'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
 
@@ -762,19 +760,19 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
     if (insId == null) return;
     setState(() => _isLoadingExisting = true);
     try {
-      final rows = await SupabaseService.fromSchema('course').select('*').eq('ins_id', insId);
-      // Sort client-side by ordid (NULLS last), then courname — mirrors the
+      final rows = await SupabaseService.fromSchema('clagrp').select('*').eq('ins_id', insId);
+      // Sort client-side by ordid (NULLS last), then clagrpname — mirrors the
       // master-defined order used by the Students sidebar and drilldowns.
       final sorted = List<Map<String, dynamic>>.from(rows.cast<Map<String, dynamic>>())
         ..sort((a, b) {
           final oa = (a['ordid'] is num) ? (a['ordid'] as num).toInt() : 1 << 30;
           final ob = (b['ordid'] is num) ? (b['ordid'] as num).toInt() : 1 << 30;
           if (oa != ob) return oa.compareTo(ob);
-          return (a['courname'] ?? '').toString().toLowerCase()
-              .compareTo((b['courname'] ?? '').toString().toLowerCase());
+          return (a['clagrpname'] ?? '').toString().toLowerCase()
+              .compareTo((b['clagrpname'] ?? '').toString().toLowerCase());
         });
       if (mounted) setState(() {
-        _existingRows = sorted.map((r) => [r['courname'] ?? '']).toList();
+        _existingRows = sorted.map((r) => [r['clagrpname'] ?? '']).toList();
         _isLoadingExisting = false;
       });
     } catch (e) {
@@ -812,8 +810,8 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
     for (int i = 0; i < _rows.length; i++) {
       final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
       final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
-      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Course ID'; continue; }
-      if (name.isEmpty) rowErrs[i] = 'Missing: Course Name';
+      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Standard ID'; continue; }
+      if (name.isEmpty) rowErrs[i] = 'Missing: Standard Name';
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
@@ -835,15 +833,15 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
     for (final row in _rows) {
       if (row.length < 2 || row[1].toString().trim().isEmpty) { _skipped++; continue; }
       try {
-        final courId = int.tryParse(row[0].toString().trim());
-        if (courId == null) { _skipped++; _errors.add('Row with name ${row[1]}: invalid Course ID'); continue; }
-        await SupabaseService.fromSchema('course').upsert({
-          'cour_id': courId,
-          'courname': row[1].toString().trim(),
+        final cgrpId = int.tryParse(row[0].toString().trim());
+        if (cgrpId == null) { _skipped++; _errors.add('Row with name ${row[1]}: invalid Standard ID'); continue; }
+        await SupabaseService.fromSchema('clagrp').upsert({
+          'cgrp_id': cgrpId,
+          'clagrpname': row[1].toString().trim(),
           'ordid': row.length > 2 ? int.tryParse(row[2].toString().trim()) : null,
           'ins_id': insId,
           'activestatus': 1,
-        }, onConflict: 'cour_id');
+        }, onConflict: 'cgrp_id');
         _imported++;
       } catch (e) {
         _skipped++;
@@ -858,13 +856,13 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
   Widget build(BuildContext context) {
     super.build(context);
     return _buildImportCard(
-      title: 'Import Courses',
+      title: 'Import Standards',
       headers: _headers,
       rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
       onBrowse: _browse,
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
-      onTemplate: () => _exportTemplate('Course', _headers),
-      onSampleDownload: () => _exportSampleData('Course', _headers, [
+      onTemplate: () => _exportTemplate('Standard', _headers),
+      onSampleDownload: () => _exportSampleData('Standard', _headers, [
         ['Pre-KG', '1'],
         ['LKG', '2'],
         ['UKG', '3'],
@@ -877,7 +875,7 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Course Name'],
+      existingHeaders: const ['Standard Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -904,13 +902,13 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Class ID *', 'Class Name *', 'Active Status', 'Course ID', 'Succeeding Class', 'Order'];
+  static const _headers = ['Class ID *', 'Class Name *', 'Active Status', 'Standard ID', 'Order'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
   // Existing course IDs for this institution — _validate uses these to flag
-  // rows whose Course ID isn't backed by a real course (otherwise the FK
+  // rows whose Standard ID isn't backed by a real course (otherwise the FK
   // insert fails silently and rows are skipped).
-  Set<int> _courIds = {};
+  Set<int> _cgrpIds = {};
 
   @override
   bool get wantKeepAlive => true;
@@ -929,33 +927,31 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
     try {
       final results = await Future.wait([
         SupabaseService.fromSchema('class').select('*').eq('ins_id', insId).order('cla_id', ascending: true),
-        SupabaseService.fromSchema('course').select('cour_id, courname, ordid').eq('ins_id', insId),
+        SupabaseService.fromSchema('clagrp').select('cgrp_id, clagrpname, ordid').eq('ins_id', insId),
       ]);
       final rows = results[0] as List;
       final courseRows = results[1] as List;
-      // Course name + ordid by cour_id; class name by cla_id (for succeeding class lookup).
-      final courseMap = { for (final c in courseRows) c['cour_id'].toString(): (c['courname'] ?? '').toString() };
+      // Standard name + ordid by cgrp_id.
+      final courseMap = { for (final c in courseRows) c['cgrp_id'].toString(): (c['clagrpname'] ?? '').toString() };
       final courseOrd = <String, int>{
         for (final c in courseRows)
           if (c['ordid'] != null)
-            c['cour_id'].toString(): (c['ordid'] as num).toInt(),
+            c['cgrp_id'].toString(): (c['ordid'] as num).toInt(),
       };
-      final classMap = { for (final r in rows) r['cla_id'].toString(): (r['claname'] ?? '').toString() };
-      final courIdSet = courseRows
-          .map((c) => c['cour_id'] is int ? c['cour_id'] as int : int.tryParse('${c['cour_id'] ?? ''}'))
+      final cgrpIdSet = courseRows
+          .map((c) => c['cgrp_id'] is int ? c['cgrp_id'] as int : int.tryParse('${c['cgrp_id'] ?? ''}'))
           .whereType<int>()
           .toSet();
       // Sort by course.ordid → class.ordid (NULLs to the end). Existing
       // rows read in master-defined order — same as the Students sidebar.
       final enriched = rows.map((r) {
-        final courIdKey = '${r['cour_id'] ?? ''}';
+        final cgrpIdKey = '${r['cgrp_id'] ?? ''}';
         return {
           'cells': [
-            courseMap[courIdKey] ?? '',
+            courseMap[cgrpIdKey] ?? '',
             r['claname']?.toString() ?? '',
-            classMap['${r['succeedingclass'] ?? ''}'] ?? '',
           ],
-          'courseOrd': courseOrd[courIdKey] ?? 1 << 30,
+          'courseOrd': courseOrd[cgrpIdKey] ?? 1 << 30,
           'classOrd': (r['ordid'] is num) ? (r['ordid'] as num).toInt() : 1 << 30,
         };
       }).toList()
@@ -964,8 +960,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
           if (co != 0) return co;
           final cl = (a['classOrd'] as int).compareTo(b['classOrd'] as int);
           if (cl != 0) return cl;
-          // cells now: [course, claname, succeeding]. Class name (idx 1) is
-          // the final tiebreaker.
+          // cells now: [standard, claname]. Class name (idx 1) is the tiebreaker.
           final acells = a['cells'] as List;
           final bcells = b['cells'] as List;
           return (acells[1] as String).toLowerCase().compareTo((bcells[1] as String).toLowerCase());
@@ -974,7 +969,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       if (mounted) {
         setState(() {
           _existingRows = sorted;
-          _courIds = courIdSet;
+          _cgrpIds = cgrpIdSet;
           _isLoadingExisting = false;
         });
       }
@@ -1016,19 +1011,17 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       final name    = _rows[i].length > 1   ? _rows[i][1]?.toString().trim() ?? '' : '';
       final actRaw  = _rows[i].length > 2   ? _rows[i][2]?.toString().trim() ?? '' : '';
       final courRaw = _rows[i].length > 3   ? _rows[i][3]?.toString().trim() ?? '' : '';
-      final succRaw = _rows[i].length > 4   ? _rows[i][4]?.toString().trim() ?? '' : '';
       if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Class ID'; continue; }
       if (name.isEmpty) missing.add('Class Name');
-      if (courRaw.isNotEmpty && int.tryParse(courRaw) == null) missing.add('Course ID must be integer');
-      if (succRaw.isNotEmpty && int.tryParse(succRaw) == null) missing.add('Succeeding Class must be integer');
+      if (courRaw.isNotEmpty && int.tryParse(courRaw) == null) missing.add('Standard ID must be integer');
       if (actRaw.isNotEmpty && int.tryParse(actRaw) == null) missing.add('Active Status must be 0 or 1');
       if (missing.isNotEmpty) { rowErrs[i] = 'Missing: ${missing.join(', ')}'; continue; }
-      // Course ID must match an existing course for this institution before
-      // a Class can be imported (FK on class.cour_id).
-      if (courRaw.isNotEmpty && _courIds.isNotEmpty) {
+      // Standard ID must match an existing course for this institution before
+      // a Class can be imported (FK on class.cgrp_id).
+      if (courRaw.isNotEmpty && _cgrpIds.isNotEmpty) {
         final cid = int.tryParse(courRaw);
-        if (cid != null && !_courIds.contains(cid)) {
-          rowErrs[i] = 'Course ID "$courRaw" not found — import the course first';
+        if (cid != null && !_cgrpIds.contains(cid)) {
+          rowErrs[i] = 'Standard ID "$courRaw" not found — import the standard first';
         }
       }
     }
@@ -1056,13 +1049,11 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
         if (claId == null) { _skipped++; _errors.add('Row: invalid Class ID'); continue; }
         final actRaw  = row.length > 2 ? row[2].toString().trim() : '';
         final courRaw = row.length > 3 ? row[3].toString().trim() : '';
-        final succRaw = row.length > 4 ? row[4].toString().trim() : '';
-        final ordRaw  = row.length > 5 ? row[5].toString().trim() : '';
+        final ordRaw  = row.length > 4 ? row[4].toString().trim() : '';
         await SupabaseService.fromSchema('class').upsert({
           'cla_id': claId,
           'claname': row[1].toString().trim(),
-          'cour_id': courRaw.isEmpty ? null : int.tryParse(courRaw),
-          'succeedingclass': succRaw.isEmpty ? null : int.tryParse(succRaw),
+          'cgrp_id': courRaw.isEmpty ? null : int.tryParse(courRaw),
           'ordid': ordRaw.isEmpty ? null : int.tryParse(ordRaw),
           'ins_id': insId,
           'activestatus': actRaw.isEmpty ? 1 : (int.tryParse(actRaw) ?? 1),
@@ -1088,9 +1079,9 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Class', _headers),
       onSampleDownload: () => _exportSampleData('Class', _headers, [
-        ['1', 'I Year',   '1', '1', '2', '1'],
-        ['2', 'II Year',  '1', '1', '3', '2'],
-        ['3', 'III Year', '1', '1', '',  '3'],
+        ['1', 'I Year',   '1', '1', '1'],
+        ['2', 'II Year',  '1', '1', '2'],
+        ['3', 'III Year', '1', '1', '3'],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1098,7 +1089,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Course', 'Class Name', 'Succeeding Class'],
+      existingHeaders: const ['Standard', 'Class Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1584,7 +1575,7 @@ class _ConcessionTabState extends State<_ConcessionTab> with AutomaticKeepAliveC
 
 // ═══════════════════════════════════════════════
 // 4. CLASS FEE DEMAND TAB
-// Columns: Class *, Term, Fee Type *, Amount, Due Date, Admission Type
+// Columns: Class *, Term, Fee Type *, Amount, Due Date
 // ═══════════════════════════════════════════════
 
 class _ClassFeeDemandTab extends StatefulWidget {
@@ -1602,7 +1593,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Class *', 'Semester *', 'Fee Type *', 'Amount *', 'Due Date *', 'Admission Type *'];
+  static const _headers = ['Class *', 'Semester *', 'Fee Type *', 'Amount *', 'Due Date *'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
 
@@ -1623,25 +1614,22 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     try {
       final results = await Future.wait([
         SupabaseService.fromSchema('classfeedemand').select('*'),
-        SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('class').select('claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('course').select('cour_id, courname').eq('ins_id', insId),
+        SupabaseService.fromSchema('class').select('claname, cgrp_id').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('clagrp').select('cgrp_id, clagrpname').eq('ins_id', insId),
       ]);
       final rows = results[0] as List;
-      final admRows = results[1] as List;
-      final classRows = results[2] as List;
-      final courseRows = results[3] as List;
-      final admMap = { for (final a in admRows) a['adm_id'].toString(): (a['admname'] ?? '').toString() };
+      final classRows = results[1] as List;
+      final courseRows = results[2] as List;
       final courseById = <String, String>{
-        for (final c in courseRows) c['cour_id'].toString(): (c['courname'] ?? '').toString(),
+        for (final c in courseRows) c['cgrp_id'].toString(): (c['clagrpname'] ?? '').toString(),
       };
       String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
-      // Class name → course name lookup, derived from class.cour_id.
+      // Class name → course name lookup, derived from class.cgrp_id.
       final classToCourse = <String, String>{};
       for (final cl in classRows) {
         final name = (cl['claname']?.toString() ?? '').trim();
         if (name.isEmpty) continue;
-        final cid = cl['cour_id']?.toString() ?? '';
+        final cid = cl['cgrp_id']?.toString() ?? '';
         classToCourse[norm(name)] = courseById[cid] ?? '';
       }
       if (mounted) setState(() {
@@ -1659,7 +1647,6 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
           r['cffeetype'] ?? '',
           r['cfamount'] ?? '',
           r['cfdduedate'] ?? '',
-          admMap['${r['admissiontype'] ?? ''}'] ?? '${r['admissiontype'] ?? ''}',
         ]).toList();
         _isLoadingExisting = false;
       });
@@ -1699,7 +1686,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
         headerCells.first.toString().trim().toLowerCase().contains('id');
     var dataRows = parsed.sublist(1);
     final firstRowLooksLegacy = dataRows.isNotEmpty &&
-        dataRows.first.length >= 7 &&
+        dataRows.first.length >= 6 &&
         int.tryParse(dataRows.first[0].toString().trim()) != null;
     if (headerHasCfId || firstRowLooksLegacy) {
       dataRows = dataRows.map((r) => r.length > 1 ? r.sublist(1) : r).toList();
@@ -1709,7 +1696,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
 
   void _validate() {
     final rowErrs = <int, String>{};
-    final labels = ['Class', 'Semester', 'Fee Type', 'Amount', 'Due Date', 'Admission Type'];
+    final labels = ['Class', 'Semester', 'Fee Type', 'Amount', 'Due Date'];
     for (int i = 0; i < _rows.length; i++) {
       final missing = <String>[];
       for (int j = 0; j < labels.length; j++) {
@@ -1738,19 +1725,17 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
         final i = entry.key;
         var row = entry.value;
         // Backwards-compat: legacy template included a leading CF ID. If the
-        // row has 7 cells and the first is numeric, drop it.
-        if (row.length >= 7 && int.tryParse(row[0].toString().trim()) != null) {
+        // row has 6 cells and the first is numeric, drop it.
+        if (row.length >= 6 && int.tryParse(row[0].toString().trim()) != null) {
           row = row.sublist(1);
         }
         final mapped = List<dynamic>.from(row);
-        while (mapped.length < 6) mapped.add('');
-        // Admission Type passes through as a name (e.g. "MANAGEMENT QUOTA");
-        // the SQL staging-promote looks up admissiontype.adm_id by admname.
+        while (mapped.length < 5) mapped.add('');
         // Prepend a placeholder col1 (row number) — real cf_id is assigned
         // server-side by the set_cf_id trigger.
         return [(i + 1).toString(), ...mapped];
       }).toList();
-      final result = await _stagingImport(insId: insId, impType: 'CLASSFEEDEMAND', rows: mappedRows, colCount: 7);
+      final result = await _stagingImport(insId: insId, impType: 'CLASSFEEDEMAND', rows: mappedRows, colCount: 6);
       _imported = result['imported'] ?? 0;
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'CLASSFEEDEMAND');
@@ -1774,10 +1759,10 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Class Fee Demand', _headers),
       onSampleDownload: () => _exportSampleData('Class Fee Demand', _headers, [
-        ['I',   'I TERM', 'SCHOOL FEES',  '10080', '2025-05-31', 'MANAGEMENT QUOTA'],
-        ['I',   'JUNE',   'TUITION FEES', '700',   '2025-06-30', 'MANAGEMENT QUOTA'],
-        ['XII', 'I TERM', 'SCHOOL FEES',  '15410', '2025-05-31', 'GOVERNMENT QUOTA'],
-        ['XII', 'JUNE',   'VAN FEES',     '810',   '2025-06-30', 'GOVERNMENT QUOTA'],
+        ['I',   'I TERM', 'SCHOOL FEES',  '10080', '2025-05-31'],
+        ['I',   'JUNE',   'TUITION FEES', '700',   '2025-06-30'],
+        ['XII', 'I TERM', 'SCHOOL FEES',  '15410', '2025-05-31'],
+        ['XII', 'JUNE',   'VAN FEES',     '810',   '2025-06-30'],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1785,7 +1770,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Course', 'Class', 'Semester', 'Fee Type', 'Amount', 'Due Date', 'Admission Type'],
+      existingHeaders: const ['Standard', 'Class', 'Semester', 'Fee Type', 'Amount', 'Due Date'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1793,309 +1778,3 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     );
   }
 }
-
-// ═══════════════════════════════════════════════
-// ADMISSION TYPE / QUOTA — simple lookup tables
-// (ids are user-supplied; no auto-trigger)
-// ═══════════════════════════════════════════════
-
-Future<Map<String, int>> _directLookupImport({
-  required int insId,
-  required String table,
-  required String idCol,
-  required String nameCol,
-  required List<List<dynamic>> rows,
-  required bool hasInsId,
-  required List<String> errorsOut,
-}) async {
-  int imported = 0;
-  int skipped = 0;
-  for (int i = 0; i < rows.length; i++) {
-    try {
-      final row = rows[i];
-      final idRaw = row.isNotEmpty ? row[0].toString().trim() : '';
-      final name = row.length > 1 ? row[1].toString().trim() : '';
-      final id = int.tryParse(idRaw);
-      if (id == null || name.isEmpty) {
-        skipped++;
-        errorsOut.add('Row ${i + 2}: invalid id or name');
-        continue;
-      }
-      final record = <String, dynamic>{
-        idCol: id,
-        nameCol: name,
-        'activestatus': 1,
-      };
-      if (hasInsId) record['ins_id'] = insId;
-      await SupabaseService.fromSchema(table).upsert(record, onConflict: idCol);
-      imported++;
-    } catch (e) {
-      skipped++;
-      errorsOut.add('Row ${i + 2}: ${_friendlyError(e.toString())}');
-    }
-  }
-  return {'imported': imported, 'skipped': skipped};
-}
-
-class _AdmissionTypeTab extends StatefulWidget {
-  const _AdmissionTypeTab();
-  @override
-  State<_AdmissionTypeTab> createState() => _AdmissionTypeTabState();
-}
-
-class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeepAliveClientMixin {
-  List<List<dynamic>> _rows = [];
-  String? _fileName;
-  bool _saving = false;
-  bool _isValidated = false;
-  int _imported = 0, _skipped = 0;
-  List<String> _errors = [];
-  Map<int, String> _rowErrors = {};
-  Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Adm ID *', 'Admission Name *'];
-  List<List<dynamic>> _existingRows = [];
-  bool _isLoadingExisting = false;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() { super.initState(); _loadExisting(); }
-
-  Future<void> _loadExisting() async {
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    if (auth.insId == null) return;
-    setState(() => _isLoadingExisting = true);
-    try {
-      final rows = await SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('activestatus', 1).order('adm_id', ascending: true);
-      if (mounted) setState(() {
-        _existingRows = (rows as List).map((r) => [r['admname']?.toString() ?? '']).toList();
-        _isLoadingExisting = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _isLoadingExisting = false);
-    }
-  }
-
-  Future<void> _browse() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls', 'csv']);
-    if (result == null) return;
-    List<List<dynamic>> parsed;
-    try {
-      parsed = _parseExcel(result.files.single.path!);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not read file. ${friendlyError(e)}'), backgroundColor: Colors.red),
-        );
-      }
-      return;
-    }
-    if (parsed.length < 2) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('File has no data rows. Add at least one row below the header.'), backgroundColor: Colors.orange),
-        );
-      }
-      return;
-    }
-    setState(() { _fileName = result.files.single.name; _rows = parsed.sublist(1); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-  }
-
-  void _validate() {
-    final errs = <int, String>{};
-    for (int i = 0; i < _rows.length; i++) {
-      final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
-      final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
-      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { errs[i] = 'Invalid Adm ID'; continue; }
-      if (name.isEmpty) { errs[i] = 'Missing Admission Name'; }
-    }
-    setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
-      backgroundColor: errs.isEmpty ? Colors.green : Colors.red,
-    ));
-  }
-
-  void _close() { setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; }); }
-
-  Future<void> _save() async {
-    if (_rows.isEmpty) return;
-    setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    final insId = auth.insId ?? 0;
-    final errs = <String>[];
-    final result = await _directLookupImport(
-      insId: insId, table: 'admissiontype', idCol: 'adm_id', nameCol: 'admname',
-      rows: _rows, hasInsId: true, errorsOut: errs,
-    );
-    _imported = result['imported'] ?? 0;
-    _skipped = result['skipped'] ?? 0;
-    _errors = errs;
-    setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    return _buildImportCard(
-      title: 'Import Admission Types',
-      headers: _headers,
-      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
-      onBrowse: _browse,
-      onSave: _rows.isNotEmpty && _isValidated ? _save : null,
-      onTemplate: () => _exportTemplate('Admission Type', _headers),
-      onSampleDownload: () => _exportSampleData('Admission Type', _headers, [
-        ['1', 'GOVERNMENT QUOTA'],
-        ['2', 'MANAGEMENT QUOTA'],
-        ['3', 'NRI QUOTA'],
-      ]),
-      saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
-      onDismissResult: () {},
-      onValidate: _rows.isNotEmpty ? _validate : null,
-      onClose: _close,
-      isValidated: _isValidated,
-      existingRows: _existingRows,
-      existingHeaders: const ['Admission Name'],
-      isLoadingExisting: _isLoadingExisting,
-      rowErrors: _rowErrors,
-      cellErrors: _cellErrors,
-    );
-  }
-}
-
-class _QuotaTab extends StatefulWidget {
-  const _QuotaTab();
-  @override
-  State<_QuotaTab> createState() => _QuotaTabState();
-}
-
-class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin {
-  List<List<dynamic>> _rows = [];
-  String? _fileName;
-  bool _saving = false;
-  bool _isValidated = false;
-  int _imported = 0, _skipped = 0;
-  List<String> _errors = [];
-  Map<int, String> _rowErrors = {};
-  Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Quo ID *', 'Quota Name *'];
-  List<List<dynamic>> _existingRows = [];
-  bool _isLoadingExisting = false;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() { super.initState(); _loadExisting(); }
-
-  Future<void> _loadExisting() async {
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    final insId = auth.insId;
-    if (insId == null) return;
-    setState(() => _isLoadingExisting = true);
-    try {
-      final rows = await SupabaseService.fromSchema('quota').select('quo_id, quoname').eq('ins_id', insId).eq('activestatus', 1).order('quo_id', ascending: true);
-      if (mounted) setState(() {
-        _existingRows = (rows as List).map((r) => [r['quoname']?.toString() ?? '']).toList();
-        _isLoadingExisting = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _isLoadingExisting = false);
-    }
-  }
-
-  Future<void> _browse() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls', 'csv']);
-    if (result == null) return;
-    List<List<dynamic>> parsed;
-    try {
-      parsed = _parseExcel(result.files.single.path!);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not read file. ${friendlyError(e)}'), backgroundColor: Colors.red),
-        );
-      }
-      return;
-    }
-    if (parsed.length < 2) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('File has no data rows. Add at least one row below the header.'), backgroundColor: Colors.orange),
-        );
-      }
-      return;
-    }
-    setState(() { _fileName = result.files.single.name; _rows = parsed.sublist(1); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-  }
-
-  void _validate() {
-    final errs = <int, String>{};
-    for (int i = 0; i < _rows.length; i++) {
-      final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
-      final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
-      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { errs[i] = 'Invalid Quo ID'; continue; }
-      if (name.isEmpty) { errs[i] = 'Missing Quota Name'; }
-    }
-    setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
-      backgroundColor: errs.isEmpty ? Colors.green : Colors.red,
-    ));
-  }
-
-  void _close() { setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; }); }
-
-  Future<void> _save() async {
-    if (_rows.isEmpty) return;
-    setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    final insId = auth.insId ?? 0;
-    final errs = <String>[];
-    final result = await _directLookupImport(
-      insId: insId, table: 'quota', idCol: 'quo_id', nameCol: 'quoname',
-      rows: _rows, hasInsId: true, errorsOut: errs,
-    );
-    _imported = result['imported'] ?? 0;
-    _skipped = result['skipped'] ?? 0;
-    _errors = errs;
-    setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    return _buildImportCard(
-      title: 'Import Quota',
-      headers: _headers,
-      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
-      onBrowse: _browse,
-      onSave: _rows.isNotEmpty && _isValidated ? _save : null,
-      onTemplate: () => _exportTemplate('Quota', _headers),
-      onSampleDownload: () => _exportSampleData('Quota', _headers, [
-        ['1', 'GENERAL'],
-        ['2', 'OBC'],
-        ['3', 'SC'],
-        ['4', 'ST'],
-      ]),
-      saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
-      onDismissResult: () {},
-      onValidate: _rows.isNotEmpty ? _validate : null,
-      onClose: _close,
-      isValidated: _isValidated,
-      existingRows: _existingRows,
-      existingHeaders: const ['Quota Name'],
-      isLoadingExisting: _isLoadingExisting,
-      rowErrors: _rowErrors,
-      cellErrors: _cellErrors,
-    );
-  }
-}
-

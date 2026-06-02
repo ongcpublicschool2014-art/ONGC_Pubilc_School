@@ -18,12 +18,9 @@ class StudentModel {
   final String? stubloodgrp;
   final String? stuphoto;
   final String stuclass;
-  final int? courId;
-  final String? courname;
+  final int? cgrpId;
+  final String? clagrpname;
   final int? conId;
-  final String? admname;
-  final String? quoname;
-  final String? batch;
   final String stuserId;
   final int activestatus;
   final DateTime createdon;
@@ -47,12 +44,9 @@ class StudentModel {
     this.stubloodgrp,
     this.stuphoto,
     required this.stuclass,
-    this.courId,
-    this.courname,
+    this.cgrpId,
+    this.clagrpname,
     this.conId,
-    this.admname,
-    this.quoname,
-    this.batch,
     required this.stuserId,
     this.activestatus = 1,
     required this.createdon,
@@ -86,12 +80,9 @@ class StudentModel {
       stubloodgrp: json['stubloodgrp'],
       stuphoto: json['stuphoto'],
       stuclass: json['stuclass'] ?? '',
-      courId: json['cour_id'] as int?,
-      courname: json['courname']?.toString(),
+      cgrpId: json['cgrp_id'] as int?,
+      clagrpname: json['clagrpname']?.toString(),
       conId: json['con_id'] as int?,
-      admname: json['admname']?.toString(),
-      quoname: json['quoname']?.toString(),
-      batch: json['batch']?.toString(),
       stuserId: json['stuser_id'] ?? '',
       activestatus: json['activestatus'] ?? 1,
       createdon: json['createdon'] != null

@@ -90,7 +90,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         // class + course masters with ordid for sidebar ordering — same
         // source the Students screen sidebar uses.
         SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('course').select('courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       ]);
       final students = results[0] as List<StudentModel>;
       final classMaster = results[1] as List<dynamic>;
@@ -102,15 +102,15 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       };
       final courseOrdMap = <String, int>{
         for (final r in courseMaster)
-          if (r['courname'] != null && r['ordid'] != null)
-            r['courname'].toString().trim(): (r['ordid'] as num).toInt(),
+          if (r['clagrpname'] != null && r['ordid'] != null)
+            r['clagrpname'].toString().trim(): (r['ordid'] as num).toInt(),
       };
 
       final counts = <String, int>{};
       final courseCounts = <String, Map<String, int>>{};
       for (final s in students) {
         counts[s.stuclass] = (counts[s.stuclass] ?? 0) + 1;
-        final course = s.courname ?? 'Other';
+        final course = s.clagrpname ?? 'Other';
         courseCounts.putIfAbsent(course, () => {});
         courseCounts[course]![s.stuclass] = (courseCounts[course]![s.stuclass] ?? 0) + 1;
       }
@@ -508,7 +508,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         : _allStudents.where((s) =>
             s.stuname.toLowerCase().contains(q) ||
             s.stuadmno.toLowerCase().contains(q) ||
-            (s.courname ?? '').toLowerCase().contains(q)).toList();
+            (s.clagrpname ?? '').toLowerCase().contains(q)).toList();
 
     return Column(
       children: [
@@ -555,9 +555,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                         Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
@@ -585,9 +584,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                                   Expanded(flex: 1, child: Text('${i + 1}', style: cellStyle)),
                                   Expanded(flex: 2, child: Text(s.stuadmno, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
                                   Expanded(flex: 3, child: Text(s.stuname, style: cellStyle, overflow: TextOverflow.ellipsis)),
-                                  Expanded(flex: 2, child: Text(s.courname ?? '-', style: cellStyle)),
+                                  Expanded(flex: 2, child: Text(s.clagrpname ?? '-', style: cellStyle)),
                                   Expanded(flex: 2, child: Text(s.stuclass, style: cellStyle)),
-                                  Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
                                   Expanded(flex: 1, child: Text(s.stugender, style: cellStyle)),
                                   Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
                                 ],
@@ -668,8 +666,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
               Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
               Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
               Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+              Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
               Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
               Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
             ],
@@ -697,8 +694,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                                   Expanded(flex: 1, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                   Expanded(flex: 2, child: Text(s.stuadmno, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
                                   Expanded(flex: 3, child: Text(s.stuname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis)),
-                                  Expanded(flex: 2, child: Text(s.courname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                  Expanded(flex: 2, child: Text(s.batch ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                  Expanded(flex: 2, child: Text(s.clagrpname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                   Expanded(flex: 1, child: Text(s.stugender, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                   Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
                                 ],
@@ -773,7 +769,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(s.stuname, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                    Text('Roll: ${s.stuadmno}  •  ${s.courname ?? ''} ${s.stuclass}  •  Father: $fatherName',
+                    Text('Roll: ${s.stuadmno}  •  ${s.clagrpname ?? ''} ${s.stuclass}  •  Father: $fatherName',
                         style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
                   ],
                 ),

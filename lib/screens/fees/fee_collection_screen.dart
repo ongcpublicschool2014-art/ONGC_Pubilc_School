@@ -142,7 +142,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
   bool _showTodayCollection = false;
   bool _showPendingApproval = false;
   String? _selectedPendingFeeGroup; // null = group list, non-null = course+class list
-  String? _selectedPendingCourseClass; // "COURSE|CLASS"; null = course+class list, non-null = student drilldown
+  String? _selectedPendingCourseClass; // "STANDARD|CLASS"; null = course+class list, non-null = student drilldown
   List<Map<String, dynamic>> _demands = [];
   bool _isLoadingDemands = false;
   Map<int, String> _feeGroupById = {};
@@ -543,7 +543,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     for (final entry in studentNameMap.entries) {
       stuIdToName[entry.key] = entry.value['stuname'] ?? '';
       stuIdToClass[entry.key] = entry.value['stuclass'] ?? '';
-      stuIdToCourse[entry.key] = entry.value['courname'] ?? '';
+      stuIdToCourse[entry.key] = entry.value['clagrpname'] ?? '';
       admNoToName[entry.value['stuadmno'] ?? ''] = entry.value['stuname'] ?? '';
     }
 
@@ -1274,7 +1274,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       child: Builder(builder: (context) {
                         const flexes = <int>[1, 2, 3, 2, 2, 2, 2, 2];
                         const headers = <String>[
-                          'S No.', 'PAY NO', 'STUDENT', 'COURSE',
+                          'S No.', 'PAY NO', 'STUDENT', 'STANDARD',
                           'CLASS', 'DATE', 'MODE', 'AMOUNT',
                         ];
                         final hStyle = TextStyle(
@@ -1334,11 +1334,11 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                           ? _stuIdToName[stuId]!
                                           : (p['stuadmno']?.toString() ??
                                               '-');
-                                  final stuCourse = p['courname']
+                                  final stuCourse = p['clagrpname']
                                               ?.toString()
                                               .isNotEmpty ==
                                           true
-                                      ? p['courname'].toString()
+                                      ? p['clagrpname'].toString()
                                       : (stuId != null &&
                                               _stuIdToCourse
                                                   .containsKey(stuId))
@@ -2179,10 +2179,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
   /// Intermediate drilldown: Fee Group → Course + Class groups.
   /// Shown between "Pending Fees > SCHOOL FEES" and the student list.
   Widget _buildPendingCourseClassList(String feeGroupName, List<Map<String, dynamic>> groupDemands) {
-    // Group demands by "COURSE|CLASS"
+    // Group demands by "STANDARD|CLASS"
     final Map<String, List<Map<String, dynamic>>> byGroup = {};
     for (final d in groupDemands) {
-      final course = d['courname']?.toString() ?? '-';
+      final course = d['clagrpname']?.toString() ?? '-';
       final cls = d['stuclass']?.toString() ?? '-';
       final key = '$course|$cls';
       byGroup.putIfAbsent(key, () => []).add(d);
@@ -2291,7 +2291,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
               columns: const [
                 DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('COURSE')),
+                DataColumn(label: Text('STANDARD')),
                 DataColumn(label: Text('CLASS')),
                 DataColumn(label: Text('STUDENTS'), numeric: true),
                 DataColumn(label: Text('TOTAL DEMAND'), numeric: true),
@@ -2366,7 +2366,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final selCourse = parts.isNotEmpty ? parts[0] : '';
     final selClass = parts.length > 1 ? parts[1] : '';
     final filteredDemands = groupDemands.where((d) {
-      final c = d['courname']?.toString() ?? '';
+      final c = d['clagrpname']?.toString() ?? '';
       final cl = d['stuclass']?.toString() ?? '';
       return c == selCourse && cl == selClass;
     }).toList();
@@ -2438,7 +2438,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 _pendingStudentSearch = '';
                 _pendingPage = 0;
               }),
-              tooltip: 'Back to Courses',
+              tooltip: 'Back to Standards',
             ),
             SizedBox(width: 4.w),
             AppIcon('folder-2', size: 18, color: AppColors.accent),
@@ -2596,7 +2596,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 DataColumn(label: Text('S No.')),
                 DataColumn(label: Text('ROLL NO')),
                 DataColumn(label: Text('STUDENT NAME')),
-                DataColumn(label: Text('COURSE')),
+                DataColumn(label: Text('STANDARD')),
                 DataColumn(label: Text('CLASS')),
                 DataColumn(label: Text('FEE AMOUNT'), numeric: true),
                 DataColumn(label: Text('PAID'), numeric: true),
@@ -2618,7 +2618,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   final admNo = first['stuadmno']?.toString() ?? '-';
                   final stuName = _getStudentName(first);
                   final stuClass = first['stuclass']?.toString() ?? '-';
-                  final stuCourse = first['courname']?.toString() ?? '-';
+                  final stuCourse = first['clagrpname']?.toString() ?? '-';
                   double sDemand = 0, sPaid = 0, sFine = 0, sBalance = 0;
                   for (final d in demands) {
                     sDemand += (d['feeamount'] as num?)?.toDouble() ?? 0;
@@ -3352,7 +3352,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           DataColumn(label: Text('TIME')),
                           DataColumn(label: Text('ROLL NO')),
                           DataColumn(label: Text('STUDENT NAME')),
-                          DataColumn(label: Text('COURSE')),
+                          DataColumn(label: Text('STANDARD')),
                           DataColumn(label: Text('CLASS')),
                           DataColumn(label: Text('MODE')),
                           DataColumn(label: Text('COLLECTION'), numeric: true),
@@ -3377,7 +3377,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                 DataCell(Text(timeStr, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(student?['stuadmno']?.toString() ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: Text(student?['stuname']?.toString() ?? '-', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
-                                DataCell(Text(student?['courname']?.toString().isNotEmpty == true ? student!['courname'].toString() : (_stuIdToCourse[p['stu_id'] as int?] ?? '-'), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                DataCell(Text(student?['clagrpname']?.toString().isNotEmpty == true ? student!['clagrpname'].toString() : (_stuIdToCourse[p['stu_id'] as int?] ?? '-'), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(student?['stuclass']?.toString() ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(p['paymethod'] ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(_formatCurrency(collection), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
@@ -3525,8 +3525,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       address: stuAddress,
       admissionNo: admNo,
       className: stuClass,
-      courseName: (student?['courname']?.toString().isNotEmpty == true)
-          ? student!['courname'].toString()
+      courseName: (student?['clagrpname']?.toString().isNotEmpty == true)
+          ? student!['clagrpname'].toString()
           : (_stuIdToCourse[student?['stu_id'] as int?] ?? '-'),
       schoolName: _insName ?? auth.insName ?? 'Institution',
       schoolAddress: _insAddress ?? '-',
@@ -3803,7 +3803,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                 DataColumn(label: Text('TIME')),
                                 DataColumn(label: Text('ROLL NO')),
                                 DataColumn(label: Text('STUDENT NAME')),
-                                DataColumn(label: Text('COURSE')),
+                                DataColumn(label: Text('STANDARD')),
                                 DataColumn(label: Text('CLASS')),
                                 DataColumn(label: Text('MODE')),
                                 DataColumn(label: Text('COLLECTION'), numeric: true),
@@ -3828,7 +3828,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                       DataCell(Text(timeStr, style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(student?['stuadmno']?.toString() ?? '-', style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 180), child: Text(student?['stuname']?.toString() ?? '-', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
-                                      DataCell(Text(student?['courname']?.toString().isNotEmpty == true ? student!['courname'].toString() : (_stuIdToCourse[p['stu_id'] as int?] ?? '-'), style: const TextStyle(color: AppColors.textSecondary))),
+                                      DataCell(Text(student?['clagrpname']?.toString().isNotEmpty == true ? student!['clagrpname'].toString() : (_stuIdToCourse[p['stu_id'] as int?] ?? '-'), style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(student?['stuclass']?.toString() ?? '-', style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(p['paymethod'] ?? '-', style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(_formatCurrency(collection), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
@@ -4329,7 +4329,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       int offset = 0;
       while (true) {
         final batch = await SupabaseService.fromSchema('feedemand')
-            .select('stu_id, stuadmno, stuclass, courname, demfeetype, demfeeterm, feeamount, conamount, balancedue, reconbalancedue, paidstatus')
+            .select('stu_id, stuadmno, stuclass, clagrpname, demfeetype, demfeeterm, feeamount, conamount, balancedue, reconbalancedue, paidstatus')
             .eq('ins_id', insId).eq('activestatus', 1).range(offset, offset + pageSize - 1);
         allFresh.addAll(List<Map<String, dynamic>>.from(batch));
         if (batch.length < pageSize) break;
@@ -4511,7 +4511,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       final stuDemands = entry.value;
       final first = stuDemands.first;
       final stuClass = first['stuclass']?.toString() ?? '-';
-      final courName = first['courname']?.toString() ?? '';
+      final courName = first['clagrpname']?.toString() ?? '';
       final admNo = first['stuadmno']?.toString() ?? '-';
       final stuName = nameMap[admNo] ?? _getStudentName(first);
       final stuId = first['stu_id'] as int?;
@@ -4531,7 +4531,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
 
       studentRows.add({
         'class': stuClass,
-        'courname': courName,
+        'clagrpname': courName,
         'groupKey': courName.isNotEmpty ? '$courName - $stuClass' : stuClass,
         'admNo': admNo,
         'stuName': stuName,
@@ -4543,7 +4543,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
 
     // Sort by course, then class (I Year, II Year, III Year), then admNo
     studentRows.sort((a, b) {
-      final courseCmp = (a['courname'] as String).compareTo(b['courname'] as String);
+      final courseCmp = (a['clagrpname'] as String).compareTo(b['clagrpname'] as String);
       if (courseCmp != 0) return courseCmp;
       final classCmp = _compareClass(a['class'] as String, b['class'] as String);
       if (classCmp != 0) return classCmp;
@@ -4817,7 +4817,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
   // unknown names so they sink to the bottom instead of jumping to the top.
   Map<String, int> _classOrdid = {};
   Map<String, int> _courseOrdidByName = {};
-  Map<String, int> _classCourseOrdid = {}; // claname → course.ordid via class.cour_id
+  Map<String, int> _classCourseOrdid = {}; // claname → course.ordid via class.cgrp_id
 
   Future<void> _fetchData() async {
     final auth = context.read<AuthProvider>();
@@ -4835,11 +4835,11 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
           .eq('ins_id', insId)
           .eq('activestatus', 1),
       SupabaseService.fromSchema('class')
-          .select('claname, ordid, cour_id')
+          .select('claname, ordid, cgrp_id')
           .eq('ins_id', insId)
           .eq('activestatus', 1),
-      SupabaseService.fromSchema('course')
-          .select('cour_id, courname, ordid')
+      SupabaseService.fromSchema('clagrp')
+          .select('cgrp_id, clagrpname, ordid')
           .eq('ins_id', insId)
           .eq('activestatus', 1),
     ]);
@@ -4852,9 +4852,9 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
     final courseNameById = <int, String>{};
     final courseOrdidByName = <String, int>{};
     for (final c in courseMaster) {
-      final id = (c['cour_id'] as num?)?.toInt();
+      final id = (c['cgrp_id'] as num?)?.toInt();
       final ord = (c['ordid'] as num?)?.toInt() ?? 9999;
-      final nm = c['courname']?.toString() ?? '';
+      final nm = c['clagrpname']?.toString() ?? '';
       if (id != null) {
         courseOrdidById[id] = ord;
         courseNameById[id] = nm;
@@ -4867,7 +4867,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
       final nm = c['claname']?.toString() ?? '';
       if (nm.isEmpty) continue;
       classOrdid[nm] = (c['ordid'] as num?)?.toInt() ?? 9999;
-      final cid = (c['cour_id'] as num?)?.toInt();
+      final cid = (c['cgrp_id'] as num?)?.toInt();
       classCourseOrdid[nm] = (cid != null ? courseOrdidById[cid] : null) ?? 9999;
     }
 
@@ -4897,7 +4897,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
       final rawFine = (r['total_fine'] as num?)?.toDouble() ?? 0;
       return _ClassGroup(
         className: r['stuclass']?.toString() ?? '',
-        courseName: r['courname']?.toString(),
+        courseName: r['clagrpname']?.toString(),
         demands: const [],
         totalDemand: (r['total_demand'] as num?)?.toDouble() ?? 0,
         totalConcession: (r['total_concession'] as num?)?.toDouble() ?? 0,
@@ -4909,7 +4909,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
         feeTypes: feeTypes,
       );
     }).toList();
-    // Sort by course.ordid (resolved via the class's cour_id, falling back
+    // Sort by course.ordid (resolved via the class's cgrp_id, falling back
     // to the course name lookup) then by class.ordid. Falls back to the old
     // string compare when neither master has a matching row.
     int courseOrd(_ClassGroup g) {
@@ -5129,7 +5129,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   final classHeaderRow = cBuildRow(
                     [
                       cBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('COURSE', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                      cBuildCell('STANDARD', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('CLASS', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('STUDENTS', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('FEE TYPES', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -5174,7 +5174,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                           final demands = await SupabaseService.getFeeDemandsByClass(insId, g.className);
                           // Filter by course
                           final filtered = g.courseName != null
-                              ? demands.where((d) => (d['courname']?.toString() ?? '') == g.courseName).toList()
+                              ? demands.where((d) => (d['clagrpname']?.toString() ?? '') == g.courseName).toList()
                               : demands;
                           for (final d in filtered) {
                             d['_stuname'] = d['stuname']?.toString() ?? '';
@@ -5249,7 +5249,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
 
                   // --- FOOTER (GRAND TOTAL) ---
                   // Align each summary to the matching header column:
-                  //  0:S No | 1:COURSE | 2:CLASS | 3:STUDENTS | 4:FEE TYPES
+                  //  0:S No | 1:STANDARD | 2:CLASS | 3:STUDENTS | 4:FEE TYPES
                   //  5:TOTAL DEMAND | 6:PAID | 7:FINE | 8:%COLLECTED | 9:PENDING
                   final classFooterRow = cBuildRow(
                     [
@@ -5354,7 +5354,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
         ? (first['students'] is Map ? (first['students']['stuname']?.toString() ?? '-') : (first['stuname']?.toString() ?? '-'))
         : '-';
     final stuClass = first?['stuclass']?.toString() ?? '-';
-    final stuCourse = first?['courname']?.toString() ?? '';
+    final stuCourse = first?['clagrpname']?.toString() ?? '';
 
     return Container(
       decoration: BoxDecoration(
@@ -6578,7 +6578,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
           ? (first['students']['stuname']?.toString() ?? '-')
           : (first['stuname']?.toString() ?? '-');
       final stuClass = first['stuclass']?.toString() ?? '-';
-      final stuCourse = first['courname']?.toString() ?? '-';
+      final stuCourse = first['clagrpname']?.toString() ?? '-';
       final admNo = first['stuadmno']?.toString() ?? '-';
       final payNo = _payNumberMap[payId] ?? '-';
 
@@ -6859,7 +6859,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             final dateHeaderBg = AppColors.accent.withValues(alpha: 0.10);
                             const subTotalBg = AppColors.tableHeadBg;
 
-                            // Column widths: SNO, RECPT.NO, ROLL NO, NAME, COURSE, CLASS, ...feeTypes, TOTAL
+                            // Column widths: SNO, RECPT.NO, ROLL NO, NAME, STANDARD, CLASS, ...feeTypes, TOTAL
                             const double colSpacing = 8;
                             const double hMargin = 6;
                             const double snoW = 40;
@@ -6930,7 +6930,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                 buildCell('RECPT.NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('ROLL NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('COURSE', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('STANDARD', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('CLASS', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 for (int i = 0; i < feeCount; i++)
                                   buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 6 + i, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -7201,7 +7201,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     row++;
 
     // Column headers (no Challan No.)
-    final headers = ['SNO', 'Recpt. No.', 'Roll No.', 'Name', 'Course', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
+    final headers = ['SNO', 'Recpt. No.', 'Roll No.', 'Name', 'Standard', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);

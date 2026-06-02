@@ -84,7 +84,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     'demno',
     'stuadmno',
     'stuclass',
-    'courname',
+    'clagrpname',
     'demfeetype',
     'yr_id',
     'demfeeterm',
@@ -98,7 +98,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     'demno': 'Demand No',
     'stuadmno': 'Roll No',
     'stuclass': 'Class',
-    'courname': 'Course',
+    'clagrpname': 'Standard',
     'demfeetype': 'Fee Type',
     'yr_id': 'Fee Year',
     'demfeeterm': 'Semester',
@@ -188,8 +188,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         int courseKey(String name) => ord.courseOrd[name.trim()] ?? tail;
         int classKey(String name) => ord.classOrd[name.trim()] ?? tail;
         summary.sort((a, b) {
-          final aCourse = a['courname']?.toString() ?? '';
-          final bCourse = b['courname']?.toString() ?? '';
+          final aCourse = a['clagrpname']?.toString() ?? '';
+          final bCourse = b['clagrpname']?.toString() ?? '';
           final c = courseKey(aCourse).compareTo(courseKey(bCourse));
           if (c != 0) return c;
           final nameCmp = aCourse.compareTo(bCourse);
@@ -228,7 +228,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       final demands = await SupabaseService.getFeeDemandsByClass(insId, className);
       // Filter by course if specified
       final filtered = courseName != null
-          ? demands.where((d) => (d['courname']?.toString() ?? d['stuname_course'] ?? '') == courseName || courseName == 'Other').toList()
+          ? demands.where((d) => (d['clagrpname']?.toString() ?? d['stuname_course'] ?? '') == courseName || courseName == 'Other').toList()
           : demands;
       if (mounted) {
         setState(() {
@@ -389,7 +389,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       'demno': 'demno', 'demandno': 'demno', 'demandnumber': 'demno', 'docno': 'demno',
       'admissionno': 'stuadmno', 'admno': 'stuadmno', 'stuadmno': 'stuadmno', 'admissionnumber': 'stuadmno', 'rollno': 'stuadmno', 'roll': 'stuadmno', 'rollnumber': 'stuadmno',
       'class': 'stuclass', 'stuclass': 'stuclass',
-      'course': 'courname', 'courname': 'courname', 'coursename': 'courname',
+      'standard': 'clagrpname', 'standard name': 'clagrpname',
+      'course': 'clagrpname', 'clagrpname': 'clagrpname', 'coursename': 'clagrpname',
       'feetype': 'demfeetype', 'demfeetype': 'demfeetype', 'type': 'demfeetype',
       'feeyear': 'yr_id', 'yrid': 'yr_id', 'year': 'yr_id',
       'feeterm': 'demfeeterm', 'demfeeterm': 'demfeeterm', 'term': 'demfeeterm', 'semester': 'demfeeterm', 'sem': 'demfeeterm',
@@ -462,7 +463,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
     try {
       final rows = await SupabaseService.fromSchema('students')
-          .select('stuadmno, stuclass, courname')
+          .select('stuadmno, stuclass, clagrpname')
           .eq('ins_id', insId)
           .eq('activestatus', 1);
       final map = <String, Map<String, String>>{};
@@ -471,7 +472,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         if (adm.isEmpty) continue;
         map[norm(adm)] = {
           'stuclass': (s['stuclass']?.toString() ?? '').trim(),
-          'courname': (s['courname']?.toString() ?? '').trim(),
+          'clagrpname': (s['clagrpname']?.toString() ?? '').trim(),
         };
       }
       if (mounted) setState(() => _importStudentByAdmno = map);
@@ -510,10 +511,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             && norm(clsRaw) != norm(student['stuclass']!)) {
           errors['stuclass'] = 'Class "$clsRaw" doesn\'t match student (registered as "${student['stuclass']}")';
         }
-        final courRaw = _cellByKey(row, 'courname');
-        if (courRaw != null && (student['courname'] ?? '').isNotEmpty
-            && norm(courRaw) != norm(student['courname']!)) {
-          errors['courname'] = 'Course "$courRaw" doesn\'t match student (registered as "${student['courname']}")';
+        final courRaw = _cellByKey(row, 'clagrpname');
+        if (courRaw != null && (student['clagrpname'] ?? '').isNotEmpty
+            && norm(courRaw) != norm(student['clagrpname']!)) {
+          errors['clagrpname'] = 'Standard "$courRaw" doesn\'t match student (registered as "${student['clagrpname']}")';
         }
       }
     }
@@ -696,7 +697,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           'stuadmno': admNoRaw,
           'stu_id': stuId,
           'stuclass': _cellByKey(row, 'stuclass'),
-          'courname': _cellByKey(row, 'courname'),
+          'clagrpname': _cellByKey(row, 'clagrpname'),
           'demfeetype': _cellByKey(row, 'demfeetype'),
           'yr_id': yrId,
           'demfeeyear': yrLabel ?? yrRaw ?? '',
@@ -1285,7 +1286,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (_searchQuery.isEmpty) return _classSummary;
     return _classSummary.where((c) {
       final cls = c['stuclass']?.toString().toLowerCase() ?? '';
-      final course = c['courname']?.toString().toLowerCase() ?? '';
+      final course = c['clagrpname']?.toString().toLowerCase() ?? '';
       return cls.contains(_searchQuery) || course.contains(_searchQuery);
     }).toList();
   }
@@ -1310,7 +1311,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         grouped[admNo] = {
           'stuadmno': admNo,
           'stuname': d['stuname'] ?? d['studentname'] ?? '',
-          'courname': d['courname']?.toString(),
+          'clagrpname': d['clagrpname']?.toString(),
           'total_demand': 0.0,
           'total_concession': 0.0,
           'total_paid': 0.0,
@@ -1401,7 +1402,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               color: AppColors.tableHeadBg,
               child: Row(
                 children: [
-                  Expanded(child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                  Expanded(child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                   Expanded(child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                   Expanded(child: Text('STUDENTS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
                   Expanded(child: Text('TOTAL DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
@@ -1427,13 +1428,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   final totalPending = (s['total_pending'] as num?)?.toDouble() ?? 0;
 
                   return InkWell(
-                    onTap: () => _loadDrilldown(className, courseName: s['courname']?.toString()),
+                    onTap: () => _loadDrilldown(className, courseName: s['clagrpname']?.toString()),
                     child: Container(
                       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                       color: i.isEven ? Colors.white : AppColors.surface,
                       child: Row(
                         children: [
-                          Expanded(child: Text(s['courname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                          Expanded(child: Text(s['clagrpname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                           Expanded(child: Text(className, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                           Expanded(child: Text('$studentCount', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.center)),
                           Expanded(child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
@@ -1528,7 +1529,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   children: [
                     Expanded(flex: 1, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 1, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('PAID', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
@@ -1579,7 +1580,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text(s['courname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                              child: Text(s['clagrpname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                             ),
                             Expanded(
                               flex: 1,
@@ -1978,7 +1979,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _gridHeaderDivider(),
                         _gridHeaderCell('Roll No *', flex: 3),
                         _gridHeaderDivider(),
-                        _gridHeaderCell('Course', flex: 2),
+                        _gridHeaderCell('Standard', flex: 2),
                         _gridHeaderDivider(),
                         _gridHeaderCell('Class *', flex: 2),
                         _gridHeaderDivider(),
@@ -2048,7 +2049,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                     _gridDataCell('${index + 1}', width: 60, center: true),
                                     cell('demno', 2),
                                     cell('stuadmno', 3),
-                                    cell('courname', 2),
+                                    cell('clagrpname', 2),
                                     cell('stuclass', 2),
                                     cell('demfeetype', 3),
                                     cell('yr_id', 2),
@@ -2244,7 +2245,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final headers = [
       'Demand No',
       'Roll No *',
-      'Course',
+      'Standard',
       'Class *',
       'Fee Type *',
       'Fee Year *',
@@ -2303,7 +2304,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final sheet = excel['Fee Demands'];
     excel.delete('Sheet1');
 
-    final headers = ['Demand No', 'Roll No *', 'Course', 'Class *', 'Fee Type *', 'Fee Year *', 'Semester *', 'Concession', 'Fee Amount *', 'Concession Amount', 'Due Date *'];
+    final headers = ['Demand No', 'Roll No *', 'Standard', 'Class *', 'Fee Type *', 'Fee Year *', 'Semester *', 'Concession', 'Fee Amount *', 'Concession Amount', 'Due Date *'];
     final sampleRows = [
       ['', 'CS001', 'BSC-CS', 'I Year', 'SCHOOL FEES', '2026-2027', 'I TERM', 'GENERAL', '10080', '0', '2026-05-31'],
       ['', 'CS001', 'BSC-CS', 'I Year', 'TUITION FEES', '2026-2027', 'JUNE', 'GENERAL', '700', '0', '2026-06-30'],

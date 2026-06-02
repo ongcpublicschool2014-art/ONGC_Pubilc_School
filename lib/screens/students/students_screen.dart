@@ -50,11 +50,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
   List<String> _classes = [];
   String? _selectedConId;
   List<Map<String, dynamic>> _concessions = [];
-  String? _selectedAdmName;
-  List<Map<String, dynamic>> _admissionTypes = [];
-  String? _selectedQuoName;
-  List<Map<String, dynamic>> _quotas = [];
-  final _batchController = TextEditingController();
   String? _photoUrl;
   String? _insName;
   String? _insLogo;
@@ -82,7 +77,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   bool _isFormEnabled = true;
   List<StudentModel> _students = [];
   Map<String, int> _classCounts = {};
-  // Master-table ordering: claname -> ordid, courname -> ordid.
+  // Master-table ordering: claname -> ordid, clagrpname -> ordid.
   // Used by _buildClassList to honour the institution's preferred sort.
   Map<String, int> _classOrdMap = {};
   Map<String, int> _courseOrdMap = {};
@@ -119,11 +114,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
   // reject rows whose class/course doesn't exist or whose class→course
   // mapping disagrees with the master.
   Set<String> _importClassNames = {};         // normalized claname
-  Set<String> _importCourseNames = {};        // normalized courname
-  Map<String, String?> _importClassToCourse = {}; // normalized claname → normalized course name (from class.cour_id)
+  Set<String> _importCourseNames = {};        // normalized clagrpname
+  Map<String, String?> _importClassToCourse = {}; // normalized claname → normalized course name (from class.cgrp_id)
 
   static const _importGridKeys = [
-    'stuadmno', 'stuname', 'stugender', 'studob', 'stuadmdate', 'courname', 'stuclass',
+    'stuadmno', 'stuname', 'stugender', 'studob', 'stuadmdate', 'clagrpname', 'stuclass',
     'stumobile', 'stuemail', 'concession',
     'stuaddress', 'stucity', 'stustate', 'stucountry',
     'stupin', 'stubloodgrp',
@@ -131,7 +126,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'mothername', 'mothermobile', 'motheroccupation',
     'guardianname', 'guardianmobile', 'guardianoccupation',
     'payincharge', 'payinchargemob',
-    'admname', 'quoname', 'batch', 'admittyear',
+    'admittyear',
   ];
 
   static const Map<String, String> _importGridLabels = {
@@ -141,13 +136,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'studob': 'DOB *',
     'stuadmdate': 'Adm Date',
     'stuclass': 'Class *',
-    'courname': 'Course',
+    'clagrpname': 'Standard',
     'stumobile': 'Mobile',
     'stuemail': 'Email',
     'concession': 'Concession *',
-    'admname': 'Admission Type',
-    'quoname': 'Quota',
-    'batch': 'Batch',
     'admittyear': 'Admitted Year',
     'stuaddress': 'Address',
     'stucity': 'City',
@@ -233,7 +225,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _guardianOccController.dispose();
     _payNameController.dispose();
     _payMobileController.dispose();
-    _batchController.dispose();
     _searchController.dispose();
     _globalSearchController.dispose();
     super.dispose();
@@ -281,11 +272,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
       SupabaseService.getClasses(insId),
       SupabaseService.getInstitutionInfo(insId),
       SupabaseService.getStudentCountsByClass(insId),
-      SupabaseService.getAdmissionTypes(insId),
-      SupabaseService.getQuotas(insId),
       // class + course masters with ordid for the sidebar ordering.
       SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-      SupabaseService.fromSchema('course').select('courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+      SupabaseService.fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
     ]);
 
     if (!mounted) return;
@@ -294,10 +283,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final rawClasses = (results[2] as List<String>).toSet().toList();
     final insInfo = results[3] as ({String? name, String? logo, String? address, String? mobile, String? email});
     final classCounts = results[4] as Map<String, int>;
-    final admissionTypes = results[5] as List<Map<String, dynamic>>;
-    final quotas = results[6] as List<Map<String, dynamic>>;
-    final classMaster = results[7] as List<dynamic>;
-    final courseMaster = results[8] as List<dynamic>;
+    final classMaster = results[5] as List<dynamic>;
+    final courseMaster = results[6] as List<dynamic>;
     final classOrdMap = <String, int>{
       for (final r in classMaster)
         if (r['claname'] != null && r['ordid'] != null)
@@ -305,11 +292,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     };
     final courseOrdMap = <String, int>{
       for (final r in courseMaster)
-        if (r['courname'] != null && r['ordid'] != null)
-          r['courname'].toString().trim(): (r['ordid'] as num).toInt(),
+        if (r['clagrpname'] != null && r['ordid'] != null)
+          r['clagrpname'].toString().trim(): (r['ordid'] as num).toInt(),
     };
     // Dedupe rawClasses while preserving first-seen order — the class table
-    // sometimes has multiple rows with the same claname (different cour_id),
+    // sometimes has multiple rows with the same claname (different cgrp_id),
     // which would otherwise crash DropdownButton with duplicate values.
     final seen = <String>{};
     final dedupedRaw = <String>[];
@@ -323,8 +310,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
     setState(() {
       _years = years;
       _concessions = concessions;
-      _admissionTypes = admissionTypes;
-      _quotas = quotas;
       _classes = allClasses;
       _classCounts = classCounts;
       _classOrdMap = classOrdMap;
@@ -393,14 +378,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _guardianOccController.clear();
     _payNameController.clear();
     _payMobileController.clear();
-    _batchController.clear();
     setState(() {
       _selectedGender = null;
       _selectedBloodGroup = null;
       _selectedClass = null;
       _selectedConId = null;
-      _selectedAdmName = null;
-      _selectedQuoName = null;
       _admDate = null;
       _dob = null;
       _photoUrl = null;
@@ -421,7 +403,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _stateController.text = clean(s.stustate);
     _countryController.text = clean(s.stucountry);
     _pinController.text = clean(s.stupin);
-    _batchController.text = clean(s.batch);
 
     // Fetch parent data
     final parent = await SupabaseService.getStudentParent(s.stuId);
@@ -445,8 +426,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _selectedBloodGroup = _normalizeBloodGroup(s.stubloodgrp);
       _selectedClass = s.stuclass.trim();
       _selectedConId = s.conId?.toString();
-      _selectedAdmName = s.admname;
-      _selectedQuoName = s.quoname;
       _admDate = s.stuadmdate;
       _dob = s.studob;
       _photoUrl = s.stuphoto;
@@ -475,14 +454,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _guardianOccController.clear();
     _payNameController.clear();
     _payMobileController.clear();
-    _batchController.clear();
     setState(() {
       _selectedGender = null;
       _selectedBloodGroup = null;
       _selectedClass = null;
       _selectedConId = null;
-      _selectedAdmName = null;
-      _selectedQuoName = null;
       _admDate = null;
       _dob = null;
       _photoUrl = null;
@@ -539,9 +515,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuclass': _selectedClass,
         'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
         'stucondesc': _selectedConId != null ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId, orElse: () => {})['condesc'] : null,
-        'admname': _selectedAdmName,
-        'quoname': _selectedQuoName,
-        'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
         'stuphoto': _photoUrl,
         'stuser_id': _admNoController.text.trim(),
         'stuotpstatus': 0,
@@ -844,7 +817,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // Sort by course ordid → class ordid → name so the main list mirrors the
     // sidebar grouping (which is also driven by the same master ordids).
     int courseOrd(StudentModel s) =>
-        _courseOrdMap[(s.courname ?? '').trim()] ?? 1 << 30;
+        _courseOrdMap[(s.clagrpname ?? '').trim()] ?? 1 << 30;
     int classOrd(StudentModel s) =>
         _classOrdMap[s.stuclass.trim()] ?? 1 << 30;
     filtered.sort((a, b) {
@@ -916,7 +889,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   Map<String, Map<String, int>> _getCoursewiseClassCounts() {
     final courseMap = <String, Map<String, int>>{};
     for (final s in _students) {
-      final course = s.courname ?? 'Other';
+      final course = s.clagrpname ?? 'Other';
       final cls = s.stuclass;
       courseMap.putIfAbsent(course, () => {});
       courseMap[course]![cls] = (courseMap[course]![cls] ?? 0) + 1;
@@ -1083,7 +1056,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         : _cachedClassStudents[className] ?? [];
     // Filter by course if selected
     if (_selectedCourseFilter != null) {
-      allStudents = allStudents.where((s) => (s.courname ?? 'Other') == _selectedCourseFilter).toList();
+      allStudents = allStudents.where((s) => (s.clagrpname ?? 'Other') == _selectedCourseFilter).toList();
     }
     if (_loadingClassStudents && allStudents.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -1241,7 +1214,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final q = _searchController.text.toLowerCase();
     final allStudents = q.isEmpty
         ? _students
-        : _students.where((s) => s.stuname.toLowerCase().contains(q) || s.stuadmno.toLowerCase().contains(q) || (s.courname ?? '').toLowerCase().contains(q)).toList();
+        : _students.where((s) => s.stuname.toLowerCase().contains(q) || s.stuadmno.toLowerCase().contains(q) || (s.clagrpname ?? '').toLowerCase().contains(q)).toList();
     final totalStudents = allStudents.length;
 
     final cellStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
@@ -1294,9 +1267,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                         Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('MOBILE NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
@@ -1322,9 +1294,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                 Expanded(flex: 1, child: Text('$serialNo', style: cellStyle)),
                                 Expanded(flex: 2, child: Text(s.stuadmno, style: cellStyle)),
                                 Expanded(flex: 3, child: Text(s.stuname, style: cellStyle, overflow: TextOverflow.ellipsis)),
-                                Expanded(flex: 2, child: Text(s.courname ?? '-', style: cellStyle)),
+                                Expanded(flex: 2, child: Text(s.clagrpname ?? '-', style: cellStyle)),
                                 Expanded(flex: 2, child: Text(s.stuclass, style: cellStyle)),
-                                Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
                                 Expanded(flex: 2, child: Text(s.stumobile.isEmpty ? '-' : s.stumobile, style: cellStyle)),
                                 Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
                               ],
@@ -1347,7 +1318,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         : _cachedClassStudents[className] ?? [];
     // Filter by course
     if (_selectedCourseFilter != null) {
-      allStudents = allStudents.where((s) => (s.courname ?? 'Other') == _selectedCourseFilter).toList();
+      allStudents = allStudents.where((s) => (s.clagrpname ?? 'Other') == _selectedCourseFilter).toList();
     }
     if (_loadingClassStudents && allStudents.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -1425,8 +1396,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 2, child: Text('MOBILE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
@@ -1455,8 +1425,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               Expanded(flex: 1, child: Text('${index + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               Expanded(flex: 2, child: Text(s.stuadmno, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
                               Expanded(flex: 3, child: Text(s.stuname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis)),
-                              Expanded(flex: 2, child: Text(s.courname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                              Expanded(flex: 2, child: Text(s.batch ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                              Expanded(flex: 2, child: Text(s.clagrpname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               Expanded(flex: 1, child: Text(s.stugender, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               Expanded(flex: 2, child: Text(s.stumobile, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.accent))),
@@ -1912,9 +1881,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
             style: _inputStyle,
             keyboardType: TextInputType.emailAddress,
           )),
-          _fieldFull(label: 'Course', child: TextFormField(
-            initialValue: _selectedStudent?.courname ?? '',
-            decoration: _dec('Course'),
+          _fieldFull(label: 'Standard', child: TextFormField(
+            initialValue: _selectedStudent?.clagrpname ?? '',
+            decoration: _dec('Standard'),
             style: _inputStyle,
             enabled: false,
           )),
@@ -1976,57 +1945,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
               onChanged: (v) => setState(() => _selectedConId = v),
             );
           })),
-        ),
-        SizedBox(height: 14.h),
-
-        _row3(
-          _fieldFull(label: 'Admission Type', child: Builder(builder: (_) {
-            final seen = <String>{};
-            final items = <DropdownMenuItem<String>>[];
-            for (final a in _admissionTypes) {
-              final v = a['admname']?.toString();
-              if (v == null || v.isEmpty || !seen.add(v)) continue;
-              items.add(DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis)));
-            }
-            final value = seen.contains(_selectedAdmName) ? _selectedAdmName : null;
-            return DropdownButtonFormField<String>(
-              initialValue: value,
-              isExpanded: true,
-              dropdownColor: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              elevation: 6,
-              decoration: _dec('Select admission type'),
-              style: _inputStyle,
-              items: items,
-              onChanged: (v) => setState(() => _selectedAdmName = v),
-            );
-          })),
-          _fieldFull(label: 'Quota', child: Builder(builder: (_) {
-            final seen = <String>{};
-            final items = <DropdownMenuItem<String>>[];
-            for (final q in _quotas) {
-              final v = q['quoname']?.toString();
-              if (v == null || v.isEmpty || !seen.add(v)) continue;
-              items.add(DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis)));
-            }
-            final value = seen.contains(_selectedQuoName) ? _selectedQuoName : null;
-            return DropdownButtonFormField<String>(
-              initialValue: value,
-              isExpanded: true,
-              dropdownColor: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              elevation: 6,
-              decoration: _dec('Select quota'),
-              style: _inputStyle,
-              items: items,
-              onChanged: (v) => setState(() => _selectedQuoName = v),
-            );
-          })),
-          _fieldFull(label: 'Batch', child: TextFormField(
-            controller: _batchController,
-            decoration: _dec('e.g. 2024-2028'),
-            style: _inputStyle,
-          )),
         ),
         SizedBox(height: 14.h),
 
@@ -2146,7 +2064,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'studob': 'DOB',
     'stumobile': 'Mobile',
     'stuclass': 'Class',
-    'courname': 'Course',
+    'clagrpname': 'Standard',
     'stuemail': 'Email',
     'stuaddress': 'Address',
     'stucity': 'City',
@@ -2167,9 +2085,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'guardianoccupation': 'Guardian Occupation',
     'payincharge': 'Payment In Charge',
     'payinchargemob': 'Payment Mobile',
-    'admname': 'Admission Type',
-    'quoname': 'Quota',
-    'batch': 'Batch',
   };
 
   /// Auto-map header text to field key (case-insensitive)
@@ -2184,7 +2099,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'dob': 'studob', 'date of birth': 'studob', 'birth date': 'studob',
       'mobile': 'stumobile', 'phone': 'stumobile', 'mobile no': 'stumobile', 'phone no': 'stumobile',
       'class': 'stuclass', 'grade': 'stuclass',
-      'course': 'courname', 'course name': 'courname', 'courname': 'courname',
+      'standard': 'clagrpname', 'standard name': 'clagrpname',
+      'course': 'clagrpname', 'course name': 'clagrpname', 'clagrpname': 'clagrpname',
       'email': 'stuemail', 'e-mail': 'stuemail',
       'address': 'stuaddress',
       'city': 'stucity', 'town': 'stucity',
@@ -2206,9 +2122,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'concession': 'concession', 'concession category': 'concession',
       'payment in charge': 'payincharge', 'pay in charge': 'payincharge', 'payincharge': 'payincharge', 'pay name': 'payincharge',
       'payment mobile': 'payinchargemob', 'pay mobile': 'payinchargemob', 'payinchargemob': 'payinchargemob',
-      'admission type': 'admname', 'admtype': 'admname', 'admname': 'admname',
-      'quota': 'quoname', 'quota name': 'quoname', 'quoname': 'quoname',
-      'batch': 'batch', 'batch no': 'batch', 'batch number': 'batch',
     };
     return map[h] ?? '';
   }
@@ -2336,19 +2249,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
     try {
       final results = await Future.wait([
         SupabaseService.fromSchema('class')
-            .select('cla_id, claname, cour_id')
+            .select('cla_id, claname, cgrp_id')
             .eq('ins_id', insId)
             .eq('activestatus', 1),
-        SupabaseService.fromSchema('course')
-            .select('cour_id, courname')
+        SupabaseService.fromSchema('clagrp')
+            .select('cgrp_id, clagrpname')
             .eq('ins_id', insId),
       ]);
       final classRows = results[0] as List;
       final courseRows = results[1] as List;
       final courNameById = <int, String>{
         for (final c in courseRows)
-          if (c['cour_id'] is int && (c['courname']?.toString() ?? '').isNotEmpty)
-            c['cour_id'] as int: c['courname'].toString().trim(),
+          if (c['cgrp_id'] is int && (c['clagrpname']?.toString() ?? '').isNotEmpty)
+            c['cgrp_id'] as int: c['clagrpname'].toString().trim(),
       };
       final classNames = <String>{};
       final classToCourse = <String, String?>{};
@@ -2357,7 +2270,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         if (name.isEmpty) continue;
         final k = norm(name);
         classNames.add(k);
-        final cid = r['cour_id'];
+        final cid = r['cgrp_id'];
         if (cid is int && courNameById.containsKey(cid)) {
           classToCourse[k] = norm(courNameById[cid]!);
         }
@@ -2453,13 +2366,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // (_importRequiredFields = stuadmno, stuname, stugender, stuclass,
     // payincharge, payinchargemob).
     final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Course', 'Class *', 'Mobile', 'Email', 'Concession',
+      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
       'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
       'Father Name', 'Father Mobile', 'Father Occupation',
       'Mother Name', 'Mother Mobile', 'Mother Occupation',
       'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
       'Payment In Charge *', 'Payment Mobile *',
-      'Admission Type', 'Quota', 'Batch', 'Admitted Year',
+      'Admitted Year',
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2509,19 +2422,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
     excel.delete('Sheet1');
 
     final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Course', 'Class *', 'Mobile', 'Email', 'Concession',
+      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Standard', 'Class *', 'Mobile', 'Email', 'Concession',
       'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
       'Father Name', 'Father Mobile', 'Father Occupation',
       'Mother Name', 'Mother Mobile', 'Mother Occupation',
       'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
       'Payment In Charge *', 'Payment Mobile *',
-      'Admission Type', 'Quota', 'Batch', 'Admitted Year',
+      'Admitted Year',
     ];
     final sampleRows = [
-      ['CS001', 'RAHUL KUMAR', 'Male', '2004-06-15', '2025-06-01', 'BSC-CS', 'I Year', '9876543210', 'rahul@email.com', 'GENERAL', 'No.5 Main Street', 'Chennai', 'Tamil Nadu', 'India', '600001', 'B+', 'KUMAR S', '9876543210', 'Business', 'LAKSHMI K', '9876543211', 'Teacher', '', '', '', 'KUMAR S', '9876543210', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['CS002', 'PRIYA S', 'Female', '2004-03-22', '2025-06-01', 'BSC-CS', 'I Year', '9876543220', '', 'GENERAL', 'No.10 Anna Nagar', 'Chennai', 'Tamil Nadu', 'India', '600040', 'O+', 'SENTHIL S', '9876543220', 'Engineer', 'MEENA S', '9876543221', 'Homemaker', '', '', '', 'SENTHIL S', '9876543220', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['BBA001', 'ARUN M', 'Male', '2003-11-08', '2025-06-01', 'BBA', 'II Year', '9876543230', 'arun@email.com', 'GENERAL', 'No.15 Park Road', 'Madurai', 'Tamil Nadu', 'India', '625001', 'A+', 'MURUGAN A', '9876543230', 'Doctor', 'SELVI M', '9876543231', 'Nurse', '', '', '', 'MURUGAN A', '9876543230', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['MCA001', 'DIVYA R', 'Female', '2002-08-30', '2025-06-01', 'MCA', 'I Year', '9876543240', '', 'GENERAL', 'No.20 Lake View', 'Coimbatore', 'Tamil Nadu', 'India', '641001', 'AB+', 'RAJAN D', '9876543240', 'Farmer', 'KALA R', '9876543241', 'Homemaker', '', '', '', 'RAJAN D', '9876543240', 'GEN', 'GQ', '2025-2026', '25-26'],
+      ['CS001', 'RAHUL KUMAR', 'Male', '2004-06-15', '2025-06-01', 'BSC-CS', 'I Year', '9876543210', 'rahul@email.com', 'GENERAL', 'No.5 Main Street', 'Chennai', 'Tamil Nadu', 'India', '600001', 'B+', 'KUMAR S', '9876543210', 'Business', 'LAKSHMI K', '9876543211', 'Teacher', '', '', '', 'KUMAR S', '9876543210', '25-26'],
+      ['CS002', 'PRIYA S', 'Female', '2004-03-22', '2025-06-01', 'BSC-CS', 'I Year', '9876543220', '', 'GENERAL', 'No.10 Anna Nagar', 'Chennai', 'Tamil Nadu', 'India', '600040', 'O+', 'SENTHIL S', '9876543220', 'Engineer', 'MEENA S', '9876543221', 'Homemaker', '', '', '', 'SENTHIL S', '9876543220', '25-26'],
+      ['BBA001', 'ARUN M', 'Male', '2003-11-08', '2025-06-01', 'BBA', 'II Year', '9876543230', 'arun@email.com', 'GENERAL', 'No.15 Park Road', 'Madurai', 'Tamil Nadu', 'India', '625001', 'A+', 'MURUGAN A', '9876543230', 'Doctor', 'SELVI M', '9876543231', 'Nurse', '', '', '', 'MURUGAN A', '9876543230', '25-26'],
+      ['MCA001', 'DIVYA R', 'Female', '2002-08-30', '2025-06-01', 'MCA', 'I Year', '9876543240', '', 'GENERAL', 'No.20 Lake View', 'Coimbatore', 'Tamil Nadu', 'India', '641001', 'AB+', 'RAJAN D', '9876543240', 'Farmer', 'KALA R', '9876543241', 'Homemaker', '', '', '', 'RAJAN D', '9876543240', '25-26'],
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2618,7 +2531,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // server enforces too.
     String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
     final classRaw = (_importCellByKey(row, 'stuclass') ?? '').trim();
-    final courseRaw = (_importCellByKey(row, 'courname') ?? '').trim();
+    final courseRaw = (_importCellByKey(row, 'clagrpname') ?? '').trim();
     if (classRaw.isNotEmpty && _importClassNames.isNotEmpty) {
       final k = norm(classRaw);
       if (!_importClassNames.contains(k)) {
@@ -2626,11 +2539,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
       } else if (courseRaw.isNotEmpty && _importCourseNames.isNotEmpty) {
         final ck = norm(courseRaw);
         if (!_importCourseNames.contains(ck)) {
-          errors['courname'] = 'Course "$courseRaw" not found in master';
+          errors['clagrpname'] = 'Standard "$courseRaw" not found in master';
         } else {
           final expected = _importClassToCourse[k];
           if (expected != null && expected != ck) {
-            errors['courname'] = 'Class "$classRaw" belongs to "$expected"';
+            errors['clagrpname'] = 'Class "$classRaw" belongs to "$expected"';
           }
         }
       }
@@ -2745,13 +2658,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
     });
 
     // Pre-fetch class + course masters so each staging row gets the matching
-    // cla_id and cour_id resolved from the canonical master tables.
+    // cla_id and cgrp_id resolved from the canonical master tables.
     final classMasterRaw = await SupabaseService.fromSchema('class')
         .select('cla_id, claname')
         .eq('ins_id', insId)
         .eq('activestatus', 1);
-    final courseMasterRaw = await SupabaseService.fromSchema('course')
-        .select('cour_id, courname')
+    final courseMasterRaw = await SupabaseService.fromSchema('clagrp')
+        .select('cgrp_id, clagrpname')
         .eq('ins_id', insId);
     String _normKey(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
     final claIdByName = <String, int>{};
@@ -2763,13 +2676,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
       claIdByName.putIfAbsent(_normKey(name), () => id);
       claNameById[id] = name;
     }
-    final courIdByName = <String, int>{};
+    final cgrpIdByName = <String, int>{};
     final courNameById = <int, String>{};
     for (final c in (courseMasterRaw as List)) {
-      final id = c['cour_id'] as int?;
-      final name = (c['courname'] ?? '').toString().trim();
+      final id = c['cgrp_id'] as int?;
+      final name = (c['clagrpname'] ?? '').toString().trim();
       if (id == null || name.isEmpty) continue;
-      courIdByName.putIfAbsent(_normKey(name), () => id);
+      cgrpIdByName.putIfAbsent(_normKey(name), () => id);
       courNameById[id] = name;
     }
 
@@ -2787,8 +2700,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       final admDate = _parseDate(_importCellByKey(row, 'stuadmdate'));
       // Resolve class/course names against the master. Excel may carry the
       // class as either a numeric id (e.g. "53") OR the name (e.g. "B.E ECE -II").
-      // Always write the canonical claname/courname from the master back into
-      // stuclass / courname so downstream JOINs and dashboards work.
+      // Always write the canonical claname/clagrpname from the master back into
+      // stuclass / clagrpname so downstream JOINs and dashboards work.
       final classRaw = (_importCellByKey(row, 'stuclass') ?? '').trim();
       int? claId;
       String claNameCanon = classRaw;
@@ -2806,18 +2719,18 @@ class _StudentsScreenState extends State<StudentsScreen> {
         }
       }
 
-      final courseRaw = (_importCellByKey(row, 'courname') ?? '').trim();
-      int? courId;
+      final courseRaw = (_importCellByKey(row, 'clagrpname') ?? '').trim();
+      int? cgrpId;
       String? courNameCanon = _nullIfEmpty(courseRaw);
       final courseAsInt = int.tryParse(courseRaw);
       if (courseAsInt != null && courNameById.containsKey(courseAsInt)) {
-        courId = courseAsInt;
-        courNameCanon = courNameById[courId];
+        cgrpId = courseAsInt;
+        courNameCanon = courNameById[cgrpId];
       } else {
-        final byName = courIdByName[_normKey(courseRaw)];
+        final byName = cgrpIdByName[_normKey(courseRaw)];
         if (byName != null) {
-          courId = byName;
-          courNameCanon = courNameById[courId];
+          cgrpId = byName;
+          courNameCanon = courNameById[cgrpId];
         }
       }
       stagingRows.add({
@@ -2832,8 +2745,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuadmdate': (admDate ?? DateTime.now()).toIso8601String().split('T').first,
         'stuclass': claNameCanon,
         'cla_id': claId,
-        'courname': courNameCanon,
-        'cour_id': courId,
+        'clagrpname': courNameCanon,
+        'cgrp_id': cgrpId,
         'stumobile': _importCellByKey(row, 'stumobile'),
         'stuemail': _validEmail(_importCellByKey(row, 'stuemail')),
         'concession': _nullIfEmpty(_importCellByKey(row, 'concession')),
@@ -2854,9 +2767,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'guardianoccupation': _nullIfEmpty(_importCellByKey(row, 'guardianoccupation')),
         'payincharge': _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? '-',
         'payinchargemob': _nullIfEmpty(_importCellByKey(row, 'payinchargemob')),
-        'admname': _nullIfEmpty(_importCellByKey(row, 'admname')),
-        'quoname': _nullIfEmpty(_importCellByKey(row, 'quoname')),
-        'batch': _truncate(_nullIfEmpty(_importCellByKey(row, 'batch')), 9),
         'admittyear': _truncate(_nullIfEmpty(_importCellByKey(row, 'admittyear')), 9),
         'status': 'PENDING',
       });
@@ -3288,7 +3198,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'studob': return 100;            // DOB *
       case 'stuadmdate': return 120;        // ADM DATE
       case 'stuclass': return 100;          // CLASS *
-      case 'courname': return 110;          // COURSE
+      case 'clagrpname': return 110;          // STANDARD
       case 'stumobile': return 120;         // MOBILE
       case 'stuemail': return 170;          // EMAIL
       case 'concession': return 150;        // CONCESSION *
@@ -3305,9 +3215,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'fatheroccupation': case 'motheroccupation': case 'guardianoccupation': return 150;
       case 'payincharge': return 160;       // PAY IN CHARGE *
       case 'payinchargemob': return 140;    // PAY MOBILE *
-      case 'admname': return 160;           // ADMISSION TYPE
-      case 'quoname': return 110;           // QUOTA
-      case 'batch': return 110;             // BATCH
       case 'admittyear': return 140;        // ADMITTED YEAR
       default: return 120;
     }

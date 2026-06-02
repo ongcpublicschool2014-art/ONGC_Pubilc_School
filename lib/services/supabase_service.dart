@@ -405,6 +405,22 @@ class SupabaseService {
     }
   }
 
+  /// Short name + city for an institution — used to prefill bank-account defaults.
+  static Future<({String? shortName, String? city})> getInstitutionShortCity(int insId) async {
+    try {
+      final result = await client
+          .from('institution')
+          .select('inshortname, inscity')
+          .eq('ins_id', insId)
+          .maybeSingle();
+      if (result == null) return (shortName: null, city: null);
+      return (shortName: result['inshortname'] as String?, city: result['inscity'] as String?);
+    } catch (e) {
+      debugPrint('Error fetching institution short/city: $e');
+      return (shortName: null, city: null);
+    }
+  }
+
   /// Create a new institution and return the inserted row (with ins_id)
   static Future<Map<String, dynamic>?> createInstitution(Map<String, dynamic> data) async {
     try {
@@ -564,7 +580,7 @@ class SupabaseService {
       final Map<int, Map<String, String>> result = {};
       while (true) {
         final batch = await fromSchema('students')
-            .select('stu_id, stuname, stuadmno, stuclass, courname')
+            .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
             .eq('ins_id', insId)
             .eq('activestatus', 1)
             .range(offset, offset + batchSize - 1);
@@ -574,7 +590,7 @@ class SupabaseService {
             'stuname': s['stuname'] as String? ?? '',
             'stuadmno': s['stuadmno'] as String? ?? '',
             'stuclass': s['stuclass'] as String? ?? '',
-            'courname': s['courname'] as String? ?? '',
+            'clagrpname': s['clagrpname'] as String? ?? '',
           };
         }
         if (list.length < batchSize) break;
@@ -624,16 +640,16 @@ class SupabaseService {
   static Future<Map<String, List<String>>> getCourseClassMap(int insId) async {
     try {
       final response = await fromSchema('students')
-          .select('courname, stuclass')
+          .select('clagrpname, stuclass')
           .eq('ins_id', insId)
           .eq('activestatus', 1);
       final map = <String, Set<String>>{};
       for (final r in response as List) {
         final cls = r['stuclass']?.toString() ?? '';
         if (cls.isEmpty) continue;
-        final course = (r['courname']?.toString() ?? '').trim().isEmpty
+        final course = (r['clagrpname']?.toString() ?? '').trim().isEmpty
             ? 'Other'
-            : r['courname'].toString();
+            : r['clagrpname'].toString();
         map.putIfAbsent(course, () => <String>{}).add(cls);
       }
       return {
@@ -683,33 +699,6 @@ class SupabaseService {
       return List<Map<String, dynamic>>.from(response as List);
     } catch (e) {
       debugPrint('Error fetching concessions: $e');
-      return [];
-    }
-  }
-
-  static Future<List<Map<String, dynamic>>> getAdmissionTypes(int insId) async {
-    try {
-      final response = await fromSchema('admissiontype')
-          .select('adm_id, admname')
-          .eq('activestatus', 1)
-          .order('adm_id', ascending: true);
-      return List<Map<String, dynamic>>.from(response as List);
-    } catch (e) {
-      debugPrint('Error fetching admission types: $e');
-      return [];
-    }
-  }
-
-  static Future<List<Map<String, dynamic>>> getQuotas(int insId) async {
-    try {
-      final response = await fromSchema('quota')
-          .select('quo_id, quoname')
-          .eq('ins_id', insId)
-          .eq('activestatus', 1)
-          .order('quo_id', ascending: true);
-      return List<Map<String, dynamic>>.from(response as List);
-    } catch (e) {
-      debugPrint('Error fetching quotas: $e');
       return [];
     }
   }
@@ -1109,7 +1098,7 @@ class SupabaseService {
       int offset = 0;
       while (true) {
         final demands = await fromSchema('feedemand')
-            .select('fee_id, ins_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, paidstatus, stuclass, courname, stuadmno, demfeetype, demfeeterm, pay_id')
+            .select('fee_id, ins_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, paidstatus, stuclass, clagrpname, stuadmno, demfeetype, demfeeterm, pay_id')
             .eq('ins_id', insId)
             .inFilter('paidstatus', ['P', 'U'])
             .eq('activestatus', 1)
@@ -1311,19 +1300,19 @@ class SupabaseService {
   }
 
   /// Fetch ordering maps for the institution's courses and classes
-  /// (course.ordid keyed by courname, class.ordid keyed by claname). Used by
+  /// (course.ordid keyed by clagrpname, class.ordid keyed by claname). Used by
   /// summary screens that need to sort rows by master-data order rather than
   /// alphabetic / hard-coded class order.
   static Future<({Map<String, int> courseOrd, Map<String, int> classOrd})>
       getCourseClassOrdering(int insId) async {
     try {
       final results = await Future.wait<dynamic>([
-        fromSchema('course').select('courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        fromSchema('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
         fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       ]);
       final courseOrd = <String, int>{};
       for (final r in (results[0] as List)) {
-        final name = (r['courname'] as String?)?.trim();
+        final name = (r['clagrpname'] as String?)?.trim();
         final ord = (r['ordid'] as num?)?.toInt();
         if (name != null && name.isNotEmpty && ord != null) courseOrd[name] = ord;
       }
@@ -1426,7 +1415,7 @@ class SupabaseService {
             'stuname': p['stuname'],
             'stuadmno': p['stuadmno'],
             'stuclass': p['stuclass'],
-            'courname': p['courname'] ?? '',
+            'clagrpname': p['clagrpname'] ?? '',
           };
         }
       }
@@ -1472,7 +1461,7 @@ class SupabaseService {
 
       if (stuIds.isNotEmpty) {
         final students = await fromSchema('students')
-            .select('stu_id, stuname, stuadmno, stuclass, courname')
+            .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
             .inFilter('stu_id', stuIds);
         final stuMap = <int, Map<String, dynamic>>{};
         for (final s in (students as List)) {

@@ -653,7 +653,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final allResults = <Map<String, dynamic>>[];
     while (true) {
       final batch = await SupabaseService.fromSchema('feedemand')
-          .select('fee_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, paidstatus, stuclass, courname, stuadmno, demfeetype, demfeeterm, activestatus')
+          .select('fee_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, paidstatus, stuclass, clagrpname, stuadmno, demfeetype, demfeeterm, activestatus')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .range(offset, offset + batchSize - 1);
@@ -707,7 +707,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final classSet = <String>{};
       final feeTypeSet = <String>{};
       for (final d in demands) {
-        final c = d['courname']?.toString() ?? '';
+        final c = d['clagrpname']?.toString() ?? '';
         final cl = d['stuclass']?.toString() ?? '';
         final ft = d['demfeetype']?.toString() ?? '';
         if (c.isNotEmpty) courseSet.add(c);
@@ -769,7 +769,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           'paynumber': r['paynumber']?.toString() ?? '',
           'stuadmno': r['stuadmno']?.toString() ?? '',
           'stuname': r['stuname']?.toString() ?? '',
-          'courname': r['courname']?.toString() ?? '',
+          'clagrpname': r['clagrpname']?.toString() ?? '',
           'stuclass': r['stuclass']?.toString() ?? '',
           'total': (r['total'] as num?)?.toDouble() ?? 0,
           'fine': (r['fine'] as num?)?.toDouble() ?? 0,
@@ -794,7 +794,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   List<Map<String, dynamic>> get _filteredDemands {
     return _allDemands.where((d) {
-      if (_selectedCourse != null && d['courname']?.toString() != _selectedCourse) return false;
+      if (_selectedCourse != null && d['clagrpname']?.toString() != _selectedCourse) return false;
       if (_selectedClass != null && d['stuclass']?.toString() != _selectedClass) return false;
       if (_selectedFeeTypes.isNotEmpty && !_selectedFeeTypes.contains(d['demfeetype']?.toString())) return false;
       return true;
@@ -829,7 +829,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       studentMap.putIfAbsent(admNo, () => {
         'stuadmno': admNo,
         'stuname': d['stuname']?.toString() ?? d['stuadmno']?.toString() ?? '',
-        'courname': d['courname']?.toString() ?? '',
+        'clagrpname': d['clagrpname']?.toString() ?? '',
         'stuclass': d['stuclass']?.toString() ?? '',
       });
 
@@ -1164,10 +1164,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     // Course filter
           _filterDropdown<String?>(
             value: _selectedCourse,
-            hint: 'All Courses',
+            hint: 'All Standards',
             width: 160.w,
             items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All Courses')),
+              const DropdownMenuItem<String?>(value: null, child: Text('All Standards')),
               ..._courses.map((c) => DropdownMenuItem(value: c, child: Text(c))),
             ],
             onChanged: (v) => setState(() { _selectedCourse = v; _selectedClass = null; }),
@@ -1182,7 +1182,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             items: [
               const DropdownMenuItem<String?>(value: null, child: Text('All Classes')),
               ...(_selectedCourse != null
-                  ? _classes.where((c) => _allDemands.any((d) => d['courname']?.toString() == _selectedCourse && d['stuclass']?.toString() == c))
+                  ? _classes.where((c) => _allDemands.any((d) => d['clagrpname']?.toString() == _selectedCourse && d['stuclass']?.toString() == c))
                   : _classes
               ).map((c) => DropdownMenuItem(value: c, child: Text(c))),
             ],
@@ -1320,7 +1320,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Expanded(
               child: _stickyTable(
             columnWidths: const [90, 110, 90, 110, 200, 100, 90, 110, 100, 120, 100, 110],
-            headers: const ['COURSE', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
               for (final r in rows)
                 [
@@ -1377,7 +1377,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Course', 'Class', 'Strength', 'Semester', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
+      const headers = ['Standard', 'Class', 'Strength', 'Semester', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1492,7 +1492,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['COURSE', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'SEMESTER', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -1548,21 +1548,19 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       debugPrint('Pending rows: ${pendingList.length}, Conso rows: ${consoList.length}');
       final pending = pendingList.isNotEmpty
           ? List<Map<String, dynamic>>.from(pendingList).map((r) => {
-              'course': r['courname']?.toString() ?? '',
+              'course': r['clagrpname']?.toString() ?? '',
               'class': r['stuclass']?.toString() ?? '',
               'semester': r['semester']?.toString() ?? '',
-              'admname': r['admname']?.toString() ?? '',
               'stuadmno': r['stuadmno']?.toString() ?? '',
               'stuname': r['stuname']?.toString() ?? '',
               'pending': (r['pending'] as num?)?.toDouble() ?? 0,
               'concession': (r['concession'] as num?)?.toDouble() ?? 0,
-              'quoname': r['quoname']?.toString() ?? '',
               'stumobile': r['stumobile']?.toString() ?? '',
             }).toList()
           : <Map<String, dynamic>>[];
       final conso = consoList.isNotEmpty
           ? List<Map<String, dynamic>>.from(consoList).map((r) => {
-              'course': r['courname']?.toString() ?? '',
+              'course': r['clagrpname']?.toString() ?? '',
               'class': r['stuclass']?.toString() ?? '',
               'strength': (r['strength'] as num?)?.toInt() ?? 0,
               'semester': r['semester']?.toString() ?? '',
@@ -1644,30 +1642,28 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
             Expanded(
               child: _stickyTable(
-                columnWidths: const [90, 90, 100, 140, 120, 140, 110, 100, 90, 110],
-                headers: const ['COURSE', 'CLASS', 'SEMESTER', 'ADMN TYPE', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'QUOTA', 'MOBILE NO'],
+                columnWidths: const [90, 90, 100, 120, 140, 110, 100, 110],
+                headers: const ['STANDARD', 'CLASS', 'SEMESTER', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
                 rows: [
                   for (final r in rows)
                     [
                       r['course']?.toString() ?? '',
                       r['class']?.toString() ?? '',
                       r['semester']?.toString() ?? '',
-                      r['admname']?.toString() ?? '',
                       r['stuadmno']?.toString() ?? '',
                       r['stuname']?.toString() ?? '',
                       _formatNumber((r['pending'] as double?) ?? 0),
                       _formatNumber((r['concession'] as double?) ?? 0),
-                      r['quoname']?.toString() ?? '',
                       r['stumobile']?.toString() ?? '',
                     ],
                 ],
                 footer: [
-                  'G.Tot', '', '', '', '', '',
+                  'G.Tot', '', '', '', '',
                   _formatNumber(grandPending),
                   _formatNumber(grandConcess),
-                  '', '',
+                  '',
                 ],
-                numericCols: const {6, 7},
+                numericCols: const {5, 6},
               ),
             ),
           ],
@@ -1737,7 +1733,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Course', 'Class', 'Semester', 'Admn Type', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Quota', 'Mobile No'];
+      const headers = ['Standard', 'Class', 'Semester', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Mobile No'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1749,33 +1745,31 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(r['course']?.toString() ?? '');
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(r['class']?.toString() ?? '');
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['semester']?.toString() ?? '');
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['admname']?.toString() ?? '');
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(r['stuadmno']?.toString() ?? '');
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue((r['pending'] as double?) ?? 0);
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuadmno']?.toString() ?? '');
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.DoubleCellValue((r['pending'] as double?) ?? 0);
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).cellStyle = numStyle;
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue((r['concession'] as double?) ?? 0);
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).cellStyle = numStyle;
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.DoubleCellValue((r['concession'] as double?) ?? 0);
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).cellStyle = numStyle;
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: row)).value = xl.TextCellValue(r['quoname']?.toString() ?? '');
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: row)).value = xl.TextCellValue(r['stumobile']?.toString() ?? '');
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.TextCellValue(r['stumobile']?.toString() ?? '');
           row++;
         }
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue('Sub Total');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).cellStyle = boldStyle;
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue(entry.value.fold<double>(0, (s, r) => s + (r['pending'] as double)));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.DoubleCellValue(entry.value.fold<double>(0, (s, r) => s + (r['pending'] as double)));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).cellStyle = totalStyle;
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue(entry.value.fold<double>(0, (s, r) => s + (r['concession'] as double)));
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).cellStyle = totalStyle;
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.DoubleCellValue(entry.value.fold<double>(0, (s, r) => s + (r['concession'] as double)));
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).cellStyle = totalStyle;
         row++;
       }
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue('G.Tot');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).cellStyle = boldStyle;
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue(grandPending);
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.DoubleCellValue(grandPending);
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).cellStyle = totalStyle;
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.DoubleCellValue(grandConcess);
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).cellStyle = totalStyle;
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.DoubleCellValue(grandConcess);
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).cellStyle = totalStyle;
 
-      for (int c = 0; c < headers.length; c++) sheet.setColumnWidth(c, c == 5 ? 22 : (c == 3 ? 18 : 14));
+      for (int c = 0; c < headers.length; c++) sheet.setColumnWidth(c, c == 4 ? 22 : 14);
 
       await _saveExcel(excel, 'Pending_Payment_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
@@ -1793,21 +1787,19 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             r['course']?.toString() ?? '',
             r['class']?.toString() ?? '',
             r['semester']?.toString() ?? '',
-            r['admname']?.toString() ?? '',
             r['stuadmno']?.toString() ?? '',
             r['stuname']?.toString() ?? '',
             _formatNumber((r['pending'] as double?) ?? 0),
             _formatNumber((r['concession'] as double?) ?? 0),
-            r['quoname']?.toString() ?? '',
             r['stumobile']?.toString() ?? '',
           ]);
         }
-        data.add(['', 'Sub Total', '', '', '', '',
+        data.add(['', 'Sub Total', '', '', '',
           _formatNumber(entry.value.fold<double>(0, (s, r) => s + (r['pending'] as double))),
           _formatNumber(entry.value.fold<double>(0, (s, r) => s + (r['concession'] as double))),
-          '', '']);
+          '']);
       }
-      data.add(['', 'G.Tot', '', '', '', '', _formatNumber(grandPending), _formatNumber(grandConcess), '', '']);
+      data.add(['', 'G.Tot', '', '', '', _formatNumber(grandPending), _formatNumber(grandConcess), '']);
 
       pdf.addPage(pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
@@ -1827,12 +1819,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['COURSE', 'CLASS', 'SEMESTER', 'ADMN TYPE', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'QUOTA', 'MOBILE'],
+            headers: const ['STANDARD', 'CLASS', 'SEMESTER', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
             cellStyle: const pw.TextStyle(fontSize: 8),
-            cellAlignments: {6: pw.Alignment.centerRight, 7: pw.Alignment.centerRight},
+            cellAlignments: {5: pw.Alignment.centerRight, 6: pw.Alignment.centerRight},
             border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
           ),
         ],
@@ -1851,15 +1843,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     for (final d in _allDemands) {
       final admno = d['stuadmno']?.toString() ?? '';
       if (admno.isEmpty || map.containsKey(admno)) continue;
-      final course = d['courname']?.toString() ?? '';
+      final course = d['clagrpname']?.toString() ?? '';
       final cls = d['stuclass']?.toString() ?? '';
-      // Respect the All Courses / All Classes dropdowns at the top.
+      // Respect the All Standards / All Classes dropdowns at the top.
       if (_selectedCourse != null && course != _selectedCourse) continue;
       if (_selectedClass != null && cls != _selectedClass) continue;
       map[admno] = {
         'stuadmno': admno,
         'stuname': d['stuname']?.toString() ?? '',
-        'courname': course,
+        'clagrpname': course,
         'stuclass': cls,
       };
     }
@@ -2055,7 +2047,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 ]),
                 SizedBox(height: 4.h),
                 Row(children: [
-                  Expanded(child: Text('Course: ${_ledgerStudent!['courname'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
+                  Expanded(child: Text('Standard: ${_ledgerStudent!['clagrpname'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
                   Expanded(child: Text('Class: ${_ledgerStudent!['stuclass'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
                 ]),
               ],
@@ -2130,7 +2122,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                       children: [
                         Expanded(child: Text('ROLL NO', style: headerStyle)),
                         Expanded(child: Text('STUDENT NAME', style: headerStyle)),
-                        Expanded(child: Text('COURSE', style: headerStyle)),
+                        Expanded(child: Text('STANDARD', style: headerStyle)),
                         Expanded(child: Text('CLASS', style: headerStyle)),
                       ],
                     ),
@@ -2150,7 +2142,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                               children: [
                                 Expanded(child: Text(s['stuadmno'] ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
                                 Expanded(child: Text(s['stuname'] ?? '-', style: cellStyle, overflow: TextOverflow.ellipsis)),
-                                Expanded(child: Text(s['courname'] ?? '-', style: cellStyle)),
+                                Expanded(child: Text(s['clagrpname'] ?? '-', style: cellStyle)),
                                 Expanded(child: Text(s['stuclass'] ?? '-', style: cellStyle)),
                               ],
                             ),
@@ -2162,7 +2154,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
           ),
         ] else
-          Expanded(child: _emptyState('Select course and class, or search a student')),
+          Expanded(child: _emptyState('Select standard and class, or search a student')),
       ],
     );
   }
@@ -2195,7 +2187,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Student Name : ${_ledgerStudent?['stuname'] ?? ''}');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('Reg. No : ${_ledgerStudent?['stuadmno'] ?? ''}');
       row++;
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Course : ${_ledgerStudent?['courname'] ?? ''}');
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Standard : ${_ledgerStudent?['clagrpname'] ?? ''}');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('Class : ${_ledgerStudent?['stuclass'] ?? ''}');
       row++;
       row++;
@@ -2329,7 +2321,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ]),
             pw.SizedBox(height: 4),
             pw.Text('Student Name: ${_ledgerStudent?['stuname'] ?? ''}    Reg. No: ${_ledgerStudent?['stuadmno'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
-            pw.Text('Course: ${_ledgerStudent?['courname'] ?? ''}    Class: ${_ledgerStudent?['stuclass'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
+            pw.Text('Standard: ${_ledgerStudent?['clagrpname'] ?? ''}    Class: ${_ledgerStudent?['stuclass'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
             pw.SizedBox(height: 6),
           ],
         ),
@@ -2378,7 +2370,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textPrimary);
 
     final visibleRows = _dailyRows.where((r) {
-      if (_selectedCourse != null && r['courname']?.toString() != _selectedCourse) return false;
+      if (_selectedCourse != null && r['clagrpname']?.toString() != _selectedCourse) return false;
       if (_selectedClass != null && r['stuclass']?.toString() != _selectedClass) return false;
       if (_selectedFeeTypes.isNotEmpty) {
         final fees = r['fees'] as Map<String, double>;
@@ -2498,7 +2490,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     }
                   }
                   final headers = <String>[
-                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'COURSE', 'CLASS',
+                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'STANDARD', 'CLASS',
                     ...visibleFeeTypes.map((t) => t.toUpperCase()),
                     'FINE', 'TOTAL',
                     if (showCash) 'CASH',
@@ -2520,7 +2512,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     130,
                   ];
                   // Numeric (right-aligned) columns start after the 6 text
-                  // columns: DATE, RECEIPT NO, REG NO, NAME, COURSE, CLASS.
+                  // columns: DATE, RECEIPT NO, REG NO, NAME, STANDARD, CLASS.
                   final numericCols = <int>{
                     for (int i = 6; i < headers.length; i++) i,
                   };
@@ -2540,7 +2532,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                             r['paynumber']?.toString() ?? '',
                             r['stuadmno']?.toString() ?? '',
                             r['stuname']?.toString() ?? '',
-                            r['courname']?.toString() ?? '',
+                            r['clagrpname']?.toString() ?? '',
                             r['stuclass']?.toString() ?? '',
                             ...visibleFeeTypes.map((ft) => (fees[ft] != null && fees[ft] != 0) ? _formatNumber(fees[ft]!) : ''),
                             fine != 0 ? _formatNumber(fine) : '',
@@ -2606,7 +2598,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   // ═══════════════════════════════════════════════
-  // TAB 2: PENDING - COURSE WISE
+  // TAB 2: PENDING - STANDARD WISE
   // ═══════════════════════════════════════════════
   Widget _buildPendingCourseWise() {
     final demands = _filteredDemands.where((d) {
@@ -2618,7 +2610,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     // Group by course
     final Map<String, List<Map<String, dynamic>>> courseGroups = {};
     for (final d in demands) {
-      final course = d['courname']?.toString() ?? 'Unknown';
+      final course = d['clagrpname']?.toString() ?? 'Unknown';
       courseGroups.putIfAbsent(course, () => []).add(d);
     }
 
@@ -2633,11 +2625,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             padding: EdgeInsets.all(12.w),
             child: Row(
               children: [
-                Text('PENDING FEE REPORT - COURSE WISE',
+                Text('PENDING FEE REPORT - STANDARD WISE',
                     style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                 const Spacer(),
                 TextButton.icon(
-                  onPressed: () => _exportPendingReport(demands, terms, 'Course_Wise'),
+                  onPressed: () => _exportPendingReport(demands, terms, 'Standard_Wise'),
                   icon: Icon(Icons.download_rounded, size: 16.sp),
                   label: Text('Export Excel', style: TextStyle(fontSize: 13.sp)),
                 ),
@@ -2853,7 +2845,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     // Group by course + class for display.
     final Map<String, List<Map<String, dynamic>>> classGroups = {};
     for (final row in pivotData) {
-      final course = row['courname']?.toString() ?? '';
+      final course = row['clagrpname']?.toString() ?? '';
       final cls = row['stuclass']?.toString() ?? 'Unknown';
       final key = course.isNotEmpty ? '$course - $cls' : cls;
       classGroups.putIfAbsent(key, () => []).add(row);
@@ -3114,7 +3106,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Group by course + class
       final Map<String, List<Map<String, dynamic>>> classGroups = {};
       for (final s in pivotData) {
-        final course = s['courname']?.toString() ?? '';
+        final course = s['clagrpname']?.toString() ?? '';
         final cls = s['stuclass']?.toString() ?? 'Unknown';
         final key = course.isNotEmpty ? '$course - $cls' : cls;
         classGroups.putIfAbsent(key, () => []).add(s);
@@ -3254,7 +3246,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Group by course + class
       final Map<String, List<Map<String, dynamic>>> classGroups = {};
       for (final d in demands) {
-        final course = d['courname']?.toString() ?? '';
+        final course = d['clagrpname']?.toString() ?? '';
         final cls = d['stuclass']?.toString() ?? 'Unknown';
         final key = course.isNotEmpty ? '$course - $cls' : cls;
         classGroups.putIfAbsent(key, () => []).add(d);
@@ -3335,7 +3327,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _exportDailyCollectionExcel() async {
     try {
       final visibleRows = _dailyRows.where((r) {
-        if (_selectedCourse != null && r['courname']?.toString() != _selectedCourse) return false;
+        if (_selectedCourse != null && r['clagrpname']?.toString() != _selectedCourse) return false;
         if (_selectedClass != null && r['stuclass']?.toString() != _selectedClass) return false;
         if (_selectedFeeTypes.isNotEmpty) {
           final fees = r['fees'] as Map<String, double>;
@@ -3404,7 +3396,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Course', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
+      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Standard', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -3452,7 +3444,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(r['paynumber']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(r['stuadmno']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['courname']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['clagrpname']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(r['stuclass']?.toString() ?? '');
         for (int c = 0; c < feeTypes.length; c++) {
           final v = fees[feeTypes[c]] ?? 0;
@@ -3607,7 +3599,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final numStyle = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
 
       const headers = [
-        'Roll No', 'Name', 'Course', 'Class',
+        'Roll No', 'Name', 'Standard', 'Class',
         'Transaction Date', 'Payment Mode', 'Doc No', 'Term', 'Fee Type',
         'Amount', 'Fine', 'Bank Name', 'Settlement Date',
       ];
@@ -3637,7 +3629,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(r['stuadmno']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['courname']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['clagrpname']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuclass']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(fmtDate(r['paydate']));
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['paymethod']?.toString() ?? '');
@@ -3771,7 +3763,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _exportDailyCollectionPdf() async {
     try {
       final visibleRows = _dailyRows.where((r) {
-        if (_selectedCourse != null && r['courname']?.toString() != _selectedCourse) return false;
+        if (_selectedCourse != null && r['clagrpname']?.toString() != _selectedCourse) return false;
         if (_selectedClass != null && r['stuclass']?.toString() != _selectedClass) return false;
         if (_selectedFeeTypes.isNotEmpty) {
           final fees = r['fees'] as Map<String, double>;
@@ -3835,7 +3827,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Course', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
+      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Standard', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
       final rows = <List<String>>[];
       for (final r in visibleRows) {
         final fees = r['fees'] as Map<String, double>;
@@ -3846,7 +3838,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           r['paynumber']?.toString() ?? '',
           r['stuadmno']?.toString() ?? '',
           r['stuname']?.toString() ?? '',
-          r['courname']?.toString() ?? '',
+          r['clagrpname']?.toString() ?? '',
           r['stuclass']?.toString() ?? '',
           ...feeTypes.map((ft) => (fees[ft] ?? 0) > 0 ? _formatNumber(fees[ft]!) : ''),
           fine > 0 ? _formatNumber(fine) : '',
@@ -4187,7 +4179,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
     120, 220, 110, 130, 170, 140, 130, 90, 200, 100, 90, 240, 180, 170,
   ];
   static const _headers = <String>[
-    'ROLL NO', 'NAME', 'COURSE', 'CLASS',
+    'ROLL NO', 'NAME', 'STANDARD', 'CLASS',
     'TRANSACTION DATE', 'PAYMENT MODE', 'DOC NO', 'TERM', 'FEE TYPE',
     'AMOUNT', 'FINE', 'BANK NAME', 'SETTLEMENT ID', 'SETTLEMENT DATE',
   ];
@@ -4310,7 +4302,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
                                       children: [
                                         _bodyCell(0, r['stuadmno']?.toString() ?? '', adj[0]),
                                         _bodyCell(1, r['stuname']?.toString() ?? '', adj[1]),
-                                        _bodyCell(2, r['courname']?.toString() ?? '', adj[2]),
+                                        _bodyCell(2, r['clagrpname']?.toString() ?? '', adj[2]),
                                         _bodyCell(3, r['stuclass']?.toString() ?? '', adj[3]),
                                         _bodyCell(4, widget.fmt(r['paydate']), adj[4]),
                                         _bodyCell(5, r['paymethod']?.toString() ?? '', adj[5]),

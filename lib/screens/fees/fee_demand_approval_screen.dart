@@ -566,7 +566,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                               _headerCell('Roll No', 3),
                               _headerCell('Student Name', 5),
                               _headerCell('Class', 3),
-                              _headerCell('Course', 2, center: true),
+                              _headerCell('Standard', 2, center: true),
                               _headerCell('Year', 3, center: true),
                               _headerCell('Semester', 3, center: true),
                               _headerCell('Fee Type', 3),
@@ -866,7 +866,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               // Course
               Expanded(
                 flex: 2,
-                child: Text(d['courname']?.toString() ?? '-',
+                child: Text(d['clagrpname']?.toString() ?? '-',
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center),
               ),
