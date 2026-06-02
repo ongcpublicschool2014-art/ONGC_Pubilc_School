@@ -203,7 +203,7 @@ class ReceiptWidget extends StatelessWidget {
     return s;
   }
 
-  TextStyle _body({double size = 10.5, FontWeight weight = FontWeight.w400}) =>
+  TextStyle _body({double size = 9, FontWeight weight = FontWeight.w400}) =>
       GoogleFonts.inter(fontSize: size, fontWeight: weight, color: Colors.black);
 
   @override
@@ -212,7 +212,7 @@ class ReceiptWidget extends StatelessWidget {
       width: b5Width,
       height: b5Height,
       color: Colors.white,
-      padding: const EdgeInsets.all(40),
+      padding: const EdgeInsets.all(48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -221,7 +221,7 @@ class ReceiptWidget extends StatelessWidget {
           Text(
             'RECEIPT',
             textAlign: TextAlign.center,
-            style: _body(size: 13, weight: FontWeight.w700),
+            style: _body(size: 9, weight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Expanded(child: _table()),
@@ -234,12 +234,11 @@ class ReceiptWidget extends StatelessWidget {
   Widget _header() {
     final banner = receiptHeaderImage(data.schoolName);
     if (banner != null) {
-      // Three-grid header: 25% logo | 50% banner | 25% empty.
+      // Two-grid header: 20% crest | 5% gap | 75% banner.
       return SizedBox(
         height: 100,
         child: Row(
           children: [
-            // 16% logo | 4% gap | 60% banner | 4% gap | 16% empty.
             Expanded(
               flex: 4,
               child: Center(
@@ -254,8 +253,6 @@ class ReceiptWidget extends StatelessWidget {
                 child: Image.asset(banner, fit: BoxFit.contain),
               ),
             ),
-            const Expanded(flex: 1, child: SizedBox()),
-            const Expanded(flex: 4, child: SizedBox()),
           ],
         ),
       );
@@ -285,7 +282,7 @@ class ReceiptWidget extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(data.schoolName,
-                    style: _body(size: 15, weight: FontWeight.w800)),
+                    style: _body(size: 9, weight: FontWeight.w800)),
                 const SizedBox(height: 3),
                 Text(data.schoolAddress,
                     maxLines: 2,
@@ -366,7 +363,7 @@ class ReceiptWidget extends StatelessWidget {
   Widget _kv(String label, String value) {
     return RichText(
       text: TextSpan(
-        style: _body(size: 10),
+        style: _body(size: 9),
         children: [
           TextSpan(
               text: '$label : ',
@@ -393,7 +390,7 @@ class ReceiptWidget extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Text('PARTICULARS',
                     textAlign: TextAlign.center,
-                    style: _body(size: 11, weight: FontWeight.w700)),
+                    style: _body(size: 9, weight: FontWeight.w700)),
               ),
             ),
             Container(width: 1, color: Colors.black),
@@ -404,7 +401,7 @@ class ReceiptWidget extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Text('AMOUNTS (Rs)',
                     textAlign: TextAlign.right,
-                    style: _body(size: 11, weight: FontWeight.w700)),
+                    style: _body(size: 9, weight: FontWeight.w700)),
               ),
             ),
           ],
@@ -473,7 +470,7 @@ class ReceiptWidget extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Text('TOTAL',
                     textAlign: TextAlign.right,
-                    style: _body(size: 12, weight: FontWeight.w700)),
+                    style: _body(size: 9, weight: FontWeight.w700)),
               ),
             ),
             Container(width: 1, color: Colors.black),
@@ -484,7 +481,7 @@ class ReceiptWidget extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Text(formatReceiptAmount(data.total),
                     textAlign: TextAlign.right,
-                    style: _body(size: 12, weight: FontWeight.w700)),
+                    style: _body(size: 9, weight: FontWeight.w700)),
               ),
             ),
           ],
@@ -507,18 +504,18 @@ class ReceiptWidget extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(amountInWords(data.total),
-              style: _body(size: 11, weight: FontWeight.w500)),
+              style: _body(size: 9, weight: FontWeight.w500)),
           if (isPending) ...[
             const SizedBox(height: 4),
             Text('* Subject to Realization',
-                style: _body(size: 10, weight: FontWeight.w600).copyWith(color: const Color(0xFFB85C00))),
+                style: _body(size: 9, weight: FontWeight.w600).copyWith(color: const Color(0xFFB85C00))),
           ],
           const Spacer(),
           Padding(
             padding: const EdgeInsets.only(right: 34),
             child: Text('Cashier',
                 textAlign: TextAlign.right,
-                style: _body(size: 12, weight: FontWeight.w700)),
+                style: _body(size: 9, weight: FontWeight.w700)),
           ),
         ],
       ),

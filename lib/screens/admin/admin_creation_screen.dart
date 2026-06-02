@@ -251,6 +251,9 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   }
 
   void _clearForm() {
+    // Reset first so onUserInteraction fields drop their "touched" flag —
+    // otherwise autovalidation re-flags the now-empty fields as "Required".
+    _formKey.currentState?.reset();
     _nameController.clear();
     _emailController.clear();
     _phoneController.clear();
@@ -332,7 +335,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             Row(
               children: [
                 AppIcon('user-add',
-                    size: 18, color: AppColors.textSecondary),
+                    size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Create New User',
                     style:
@@ -644,7 +647,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 8.h),
             child: Row(
               children: [
-                AppIcon('people', size: 18, color: AppColors.textSecondary),
+                AppIcon('people', size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
                 Text('Existing Users', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
                 const Spacer(),
@@ -688,12 +691,12 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             color: AppColors.tableHeadBg,
             child: Row(
               children: [
-                SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                 SizedBox(width: 16.w),
-                Expanded(flex: 3, child: Text('NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('DESIGNATION', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('ROLE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 3, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 2, child: Text('DESIGNATION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 2, child: Text('ROLE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                 SizedBox(width: 30.w),
               ],
             ),
@@ -709,7 +712,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               return InkWell(
                 onTap: () => setState(() => _selectedUser = u),
                 child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                   color: i.isEven ? Colors.white : AppColors.surface,
                   child: Row(
                     children: [

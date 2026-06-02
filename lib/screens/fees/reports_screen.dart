@@ -16,6 +16,7 @@ import '../../widgets/classic_h_scrollbar.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 
 const _termOrder = [
   'I TERM', 'I TERM', 'II TERM', 'II TERM', 'III TERM', 'III TERM',
@@ -33,18 +34,7 @@ int _termIndex(String t) {
 String _formatDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 String _formatDateCompact(DateTime d) => '${d.day.toString().padLeft(2, '0')}${d.month.toString().padLeft(2, '0')}${d.year}';
 
-String _formatNumber(double v) {
-  if (v == 0) return '0';
-  final s = v.toStringAsFixed(0);
-  final result = StringBuffer();
-  int count = 0;
-  for (int i = s.length - 1; i >= 0; i--) {
-    if (count == 3 || (count > 3 && (count - 3) % 2 == 0)) result.write(',');
-    result.write(s[i]);
-    count++;
-  }
-  return result.toString().split('').reversed.join();
-}
+String _formatNumber(double v) => formatIndianNumber(v);
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -142,7 +132,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   String _dailyDateMethodLabel() {
     final hasDate = _dailyFrom != null || _dailyTo != null;
     final hasMode = _selectedMode != null;
-    if (!hasDate && !hasMode) return 'Date';
+    if (!hasDate && !hasMode) return 'Date & Mode';
     String datePart;
     if (!hasDate) {
       datePart = 'All Dates';
@@ -1332,7 +1322,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             columnWidths: const [90, 110, 90, 110, 200, 100, 90, 110, 100, 120, 100, 110],
             headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
-              for (final r in rows.skip(_consolidatedPage * _tablePageSize).take(_tablePageSize))
+              for (final r in rows)
                 [
                   r['course']?.toString() ?? '',
                   r['class']?.toString() ?? '',
@@ -1360,14 +1350,6 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             centerCols: const {2, 5},
           ),
         ),
-            _pagerBar(
-              total: rows.length,
-              page: _consolidatedPage,
-              onPrev: _consolidatedPage > 0 ? () => setState(() => _consolidatedPage--) : null,
-              onNext: (_consolidatedPage + 1) * _tablePageSize < rows.length
-                  ? () => setState(() => _consolidatedPage++)
-                  : null,
-            ),
           ],
     );
   }
@@ -1531,8 +1513,6 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   // ═══════════════════════════════════════════════
   bool _pendingMetaLoaded = false;
   static const int _tablePageSize = 50;
-  int _pendingPage = 0;
-  int _consolidatedPage = 0;
   int _dailyPage = 0;
   List<Map<String, dynamic>> _pendingRowsCache = [];
   List<Map<String, dynamic>> _consolidatedRowsCache = [];
@@ -1662,10 +1642,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
             Expanded(
               child: _stickyTable(
-                columnWidths: const [90, 90, 100, 90, 170, 110, 100, 110],
-                headers: const ['STANDARD', 'CLASS', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
+                columnWidths: const [90, 90, 100, 120, 140, 110, 100, 110],
+                headers: const ['STANDARD', 'CLASS', 'SEMESTER', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
                 rows: [
-                  for (final r in rows.skip(_pendingPage * _tablePageSize).take(_tablePageSize))
+                  for (final r in rows)
                     [
                       r['course']?.toString() ?? '',
                       r['class']?.toString() ?? '',
@@ -1685,14 +1665,6 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 ],
                 numericCols: const {5, 6},
               ),
-            ),
-            _pagerBar(
-              total: rows.length,
-              page: _pendingPage,
-              onPrev: _pendingPage > 0 ? () => setState(() => _pendingPage--) : null,
-              onNext: (_pendingPage + 1) * _tablePageSize < rows.length
-                  ? () => setState(() => _pendingPage++)
-                  : null,
             ),
           ],
     );
@@ -1934,7 +1906,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   Widget _buildStudentLedger() {
     final students = _studentsForLedger();
-    final headerStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final headerStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
     final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
     // Build rows grouped by term (YEARLY / V SEM / VI SEM / Misc)
@@ -2896,7 +2868,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     bool rightAlign(int i) => i >= 4 && i <= lastNumericIdx;
 
     final hStyle = TextStyle(
-        fontSize: 13.sp,
+        fontSize: 12.sp,
         fontWeight: FontWeight.w700,
         color: AppColors.textPrimary,
         letterSpacing: 0.3);
@@ -2931,10 +2903,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           final val = (row[t] as double?) ?? 0;
           if (val > 0) classTotals[t] = (classTotals[t] ?? 0) + val;
         }
-        final cs = TextStyle(fontSize: 13.sp, color: AppColors.textPrimary);
+        final cs = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
         rowWidgets.add(Container(
           color: zebra ? AppColors.surface : Colors.white,
-          padding: EdgeInsets.symmetric(vertical: 8.h),
+          padding: EdgeInsets.symmetric(vertical: 6.h),
           child: Row(children: [
             cell(0, Text('$sno', style: cs)),
             cell(1, Text(row['stuclass']?.toString() ?? '', style: cs)),
@@ -2972,7 +2944,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Per-class total row.
       rowWidgets.add(Container(
         color: const Color(0xFFE2E8F0),
-        padding: EdgeInsets.symmetric(vertical: 8.h),
+        padding: EdgeInsets.symmetric(vertical: 6.h),
         child: Row(children: [
           cell(0, const SizedBox()),
           cell(
@@ -3019,7 +2991,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
     final header = Container(
       color: AppColors.tableHeadBg,
-      padding: EdgeInsets.symmetric(vertical: 10.h),
+      padding: EdgeInsets.symmetric(vertical: 12.h),
       child: Row(children: [
         for (var i = 0; i < headers.length; i++)
           cell(i, Text(headers[i], style: hStyle)),
@@ -3763,7 +3735,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 onPressed: (_pcRows.isEmpty || _pcExporting) ? () {} : _exportPowerCollege,
                 icon: Icons.download_rounded,
                 label: _pcExporting ? 'Exporting…' : 'Excel',
-                color: const Color(0xFF6366F1),
+                color: const Color(0xFF10B981),
               ),
             ],
           ),
@@ -4047,7 +4019,7 @@ class _StickyTableState extends State<_StickyTable> {
     assert(widget.columnWidths.length == widget.headers.length);
     final baseTotal = widget.columnWidths.fold<double>(0, (a, b) => a + b.w);
     final headerStyle = TextStyle(
-      fontSize: 13.sp,
+      fontSize: 12.sp,
       fontWeight: FontWeight.w700,
       color: AppColors.textPrimary,
       letterSpacing: 0.3,
@@ -4059,11 +4031,11 @@ class _StickyTableState extends State<_StickyTable> {
     );
     final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
-    Widget rowWidget(List<String> values, List<double> widths, {Color? bg, TextStyle? style}) {
+    Widget rowWidget(List<String> values, List<double> widths, {Color? bg, TextStyle? style, double? vPad}) {
       return Container(
         width: double.infinity,
         color: bg,
-        padding: EdgeInsets.symmetric(vertical: 6.h),
+        padding: EdgeInsets.symmetric(vertical: vPad ?? 6.h),
         child: Row(
           mainAxisSize: MainAxisSize.max,
           children: [
@@ -4124,7 +4096,7 @@ class _StickyTableState extends State<_StickyTable> {
                           height: constraints.maxHeight - scrollbarHeight,
                           child: Column(
                             children: [
-                              rowWidget(widget.headers, widths, bg: AppColors.tableHeadBg, style: headerStyle),
+                              rowWidget(widget.headers, widths, bg: AppColors.tableHeadBg, style: headerStyle, vPad: 12.h),
                               Container(height: 1, color: AppColors.border),
                               Expanded(
                                 // Suppress the framework scrollbar; the pinned
@@ -4141,7 +4113,7 @@ class _StickyTableState extends State<_StickyTable> {
                                 ),
                               ),
                               Container(height: 1, color: AppColors.border),
-                              rowWidget(widget.footer, widths, bg: AppColors.tableHeadBg, style: footerStyle),
+                              rowWidget(widget.footer, widths, bg: AppColors.tableHeadBg, style: footerStyle, vPad: 12.h),
                             ],
                           ),
                         ),
@@ -4223,7 +4195,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
   Widget _headerCell(int i, double w) {
     return Container(
       width: w,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12.h),
       alignment: _numericColumns.contains(i) ? Alignment.centerRight : Alignment.centerLeft,
       child: Text(
         _headers[i],
@@ -4231,7 +4203,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
         overflow: TextOverflow.ellipsis,
         softWrap: false,
         style: TextStyle(
-          fontSize: 13.sp,
+          fontSize: 12.sp,
           fontWeight: FontWeight.w700,
           color: AppColors.textPrimary,
           letterSpacing: 0.3,
@@ -4243,7 +4215,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
   Widget _bodyCell(int i, String text, double w) {
     return Container(
       width: w,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6.h),
       alignment: _numericColumns.contains(i) ? Alignment.centerRight : Alignment.centerLeft,
       child: Text(
         text,
@@ -4278,7 +4250,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
           .toList(growable: false);
       // Header padding (vertical 12) + ~18px text line ≈ 42, plus the 1px
       // divider below.
-      const headerH = 43.0;
+      final headerH = 44.h;
       return Column(
         children: [
           Expanded(
@@ -4337,8 +4309,8 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
                                         _bodyCell(6, r['docno']?.toString() ?? '', adj[6]),
                                         _bodyCell(7, r['demfeeterm']?.toString() ?? '', adj[7]),
                                         _bodyCell(8, r['demfeetype']?.toString() ?? '', adj[8]),
-                                        _bodyCell(9, amt.toStringAsFixed(2), adj[9]),
-                                        _bodyCell(10, fine.toStringAsFixed(2), adj[10]),
+                                        _bodyCell(9, formatIndianNumber(amt), adj[9]),
+                                        _bodyCell(10, formatIndianNumber(fine), adj[10]),
                                         _bodyCell(11, r['banname']?.toString() ?? '', adj[11]),
                                         _bodyCell(12, r['settlement_id']?.toString() ?? '', adj[12]),
                                         _bodyCell(13, widget.fmt(r['settlement_date']), adj[13]),

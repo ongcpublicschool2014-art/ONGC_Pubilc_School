@@ -72,7 +72,7 @@ class _LoginScreenState extends State<LoginScreen> {
           .eq('activestatus', 1)
           .order('iyr_id', ascending: false);
       final rawYears = List<Map<String, dynamic>>.from(result);
-      // Deduplicate by yrlabel â€” the Material DropdownButton crashes if two
+      // Deduplicate by yrlabel — the Material DropdownButton crashes if two
       // items share the same value. Defensive against duplicate rows in
       // public.institutionyear.
       final seen = <String>{};
@@ -629,7 +629,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           controller: _passwordController,
                           obscureText: _obscurePassword,
                           decoration: InputDecoration(
-                            hintText: 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢',
+                            hintText: '••••••••',
                             prefixIcon: AppIcon.linear('lock',
                                 size: 20, color: AppColors.textLight),
                             prefixIconConstraints: BoxConstraints(
