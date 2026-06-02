@@ -282,7 +282,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                       final idx = entry.key;
                       final des = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                         decoration: BoxDecoration(
                           color: idx.isEven ? Colors.white : AppColors.surface,
                           border: Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.5))),

@@ -279,7 +279,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                       final idx = entry.key;
                       final role = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                         color: idx.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [

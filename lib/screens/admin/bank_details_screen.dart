@@ -534,8 +534,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        Expanded(flex: 3, child: Text('FEE GROUP', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 4, child: Text('ROUTED TO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 3, child: Text('FEE GROUP', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 4, child: Text('ROUTED TO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
                     ),
                   ),
@@ -550,7 +550,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                         ? rawBanId
                         : null;
                     return Container(
-                      padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 10.h),
+                      padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                       color: i.isEven ? Colors.white : AppColors.surface,
                       child: Row(
                         children: [
@@ -668,11 +668,11 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                   color: AppColors.tableHeadBg,
                   child: Row(
                     children: [
-                      SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       SizedBox(width: 16.w),
-                      Expanded(flex: 3, child: Text('BANK', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                      Expanded(flex: 2, child: Text('BRANCH', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                      Expanded(flex: 3, child: Text('A/C NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      Expanded(flex: 3, child: Text('BANK', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      Expanded(flex: 2, child: Text('BRANCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      Expanded(flex: 3, child: Text('A/C NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       SizedBox(width: 30.w),
                     ],
                   ),
@@ -694,7 +694,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                     return InkWell(
                       onTap: () => setState(() => _selectedBank = b),
                       child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                         color: i.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [

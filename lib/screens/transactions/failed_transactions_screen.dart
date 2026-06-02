@@ -12,6 +12,7 @@ import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/formatters.dart';
 import '../../services/supabase_service.dart';
 import '../../models/payment_model.dart';
 import '../../models/student_model.dart';
@@ -1221,7 +1222,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
         Expanded(
           child: _buildSummaryCard(
             'Total Paid',
-            '\u20B9 ${paidTotal.toStringAsFixed(2)}',
+            formatIndianNumber(paidTotal),
             '${filteredPaid.length} transactions',
             Colors.green,
             'tick-circle',
@@ -1232,7 +1233,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
         Expanded(
           child: _buildSummaryCard(
             'Total Failed',
-            '\u20B9 ${failedTotal.toStringAsFixed(2)}',
+            formatIndianNumber(failedTotal),
             '${filteredFailed.length} transactions',
             Colors.red,
             'info-circle',
@@ -1347,7 +1348,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
 
   Widget _buildStickyTable(List<PaymentModel> transactions, {bool? fixedIsPaid}) {
     final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
-    final headerStyle = TextStyle(fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final headerStyle = TextStyle(fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary, letterSpacing: 0.3);
 
     final baseTotal = _txColWidths.fold<double>(0, (a, b) => a + b) + 32;
     final ctrlKey = fixedIsPaid == null ? 'all' : (fixedIsPaid ? 'paid' : 'failed');
@@ -1412,7 +1413,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                   SizedBox(width: widths[4], child: Text(stuName, style: cellStyle, overflow: TextOverflow.ellipsis)),
                   SizedBox(width: widths[5], child: Text(stu?.stuclass ?? '-', style: cellStyle)),
                   SizedBox(width: widths[6], child: Text(t.paymethod ?? '-', style: cellStyle)),
-                  SizedBox(width: widths[7], child: Text(t.transtotalamount.toStringAsFixed(2), style: cellStyle)),
+                  SizedBox(width: widths[7], child: Text(formatIndianNumber(t.transtotalamount), style: cellStyle)),
                   SizedBox(
                     width: widths[8],
                     child: Align(

@@ -688,12 +688,12 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             color: AppColors.tableHeadBg,
             child: Row(
               children: [
-                SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                 SizedBox(width: 16.w),
-                Expanded(flex: 3, child: Text('NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('DESIGNATION', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('ROLE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 3, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 2, child: Text('DESIGNATION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 2, child: Text('ROLE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                 SizedBox(width: 30.w),
               ],
             ),
@@ -709,7 +709,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               return InkWell(
                 onTap: () => setState(() => _selectedUser = u),
                 child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                   color: i.isEven ? Colors.white : AppColors.surface,
                   child: Row(
                     children: [

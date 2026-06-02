@@ -45,20 +45,20 @@ void main() {
   });
 
   group('formatCurrency', () {
-    test('with rupee symbol by default', () {
-      expect(formatCurrency(1234), '₹1,234');
+    test('no rupee symbol by default (on-screen UI)', () {
+      expect(formatCurrency(1234), '1,234');
     });
 
-    test('without symbol when withSymbol=false', () {
-      expect(formatCurrency(1234, withSymbol: false), '1,234');
+    test('with symbol when withSymbol=true (PDF / Excel)', () {
+      expect(formatCurrency(1234, withSymbol: true), '₹1,234');
     });
 
     test('handles 0', () {
-      expect(formatCurrency(0), '₹0');
+      expect(formatCurrency(0), '0');
     });
 
     test('handles large lakh value', () {
-      expect(formatCurrency(1234567), '₹12,34,567');
+      expect(formatCurrency(1234567), '12,34,567');
     });
   });
 }
