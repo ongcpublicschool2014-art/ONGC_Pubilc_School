@@ -8,6 +8,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -359,10 +360,10 @@ class _StaffDesignationTabState extends State<_StaffDesignationTab> with Automat
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 3, child: Text('DESIGNATION NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 3, child: Text('REPORTS TO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 3, child: Text('DESIGNATION NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 3, child: Text('REPORTS TO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
                     ),
                   ),
@@ -376,7 +377,7 @@ class _StaffDesignationTabState extends State<_StaffDesignationTab> with Automat
                       final idx = entry.key;
                       final des = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                         color: idx.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [
@@ -663,10 +664,10 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 3, child: Text('ROLE NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('INS CODE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 3, child: Text('ROLE NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('INS CODE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
                     ),
                   ),
@@ -680,7 +681,7 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
                       final idx = entry.key;
                       final role = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                         color: idx.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [
@@ -914,12 +915,12 @@ class _PaymentSequenceTabState extends State<_PaymentSequenceTab> with Automatic
                     child: DataTable(
                 dividerThickness: 1,
                 headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                headingTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary, letterSpacing: 0.3),
-                dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+                headingTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary, letterSpacing: 0.3),
+                dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                 columnSpacing: 24,
                 horizontalMargin: 20,
                 headingRowHeight: 44.h,
-                dataRowMinHeight: 43.h,
+                dataRowMinHeight: 36.h,
                 // dataRowMaxHeight set to double.infinity so the editable prefix
                 // TextFormField can grow; without this, Flutter's default max
                 // (48px) clashes with `dataRowMinHeight` once ScreenUtil scales
@@ -1406,7 +1407,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
                                 'TYPE', 'VALUE', 'ACTIONS',
                               ];
                               final hStyle = TextStyle(
-                                  fontSize: 13.sp,
+                                  fontSize: 12.sp,
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.textPrimary,
                                   letterSpacing: 0.3);
@@ -1480,7 +1481,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
                                               : Colors.white,
                                           padding: EdgeInsets.symmetric(
                                               horizontal: 20,
-                                              vertical: 9.h),
+                                              vertical: 6.h),
                                           child: Row(children: [
                                             cell(
                                                 0,
@@ -1543,7 +1544,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
                                                 5,
                                                 Text(
                                                     isFixed
-                                                        ? '₹${fineValue.toStringAsFixed(0)}'
+                                                        ? formatIndianNumber(fineValue)
                                                         : '${fineValue.toStringAsFixed(1)}%',
                                                     style: TextStyle(
                                                         fontSize:

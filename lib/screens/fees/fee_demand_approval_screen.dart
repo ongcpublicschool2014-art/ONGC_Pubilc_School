@@ -10,6 +10,7 @@ import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 class FeeDemandApprovalScreen extends StatefulWidget {
   const FeeDemandApprovalScreen({super.key});
 
@@ -776,7 +777,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         softWrap: false,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-            fontSize: 13.sp,
+            fontSize: 12.sp,
             fontWeight: FontWeight.w700,
             color: AppColors.textPrimary,
             letterSpacing: 0.3),
@@ -898,7 +899,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               // Fee Amount
               Expanded(
                 flex: 3,
-                child: Text('₹${_fmt(feeAmt)}',
+                child: Text('${_fmt(feeAmt)}',
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.right),
               ),
@@ -914,7 +915,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               // Balance Due
               Expanded(
                 flex: 3,
-                child: Text('₹${_fmt(balance)}',
+                child: Text('${_fmt(balance)}',
                     style: TextStyle(
                         fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                     textAlign: TextAlign.right),
@@ -1060,7 +1061,5 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
     );
   }
 
-  String _fmt(double v) {
-    return v.toStringAsFixed(0);
-  }
+  String _fmt(double v) => formatIndianNumber(v);
 }

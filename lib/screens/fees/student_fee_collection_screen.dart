@@ -13,6 +13,7 @@ import 'package:webview_windows/webview_windows.dart'
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../services/supabase_service.dart';
@@ -1239,7 +1240,7 @@ class _StudentFeeCollectionScreenState
                     ? AppColors.accent.withValues(alpha: 0.04)
                     : null,
                 padding: EdgeInsets.symmetric(
-                    horizontal: 12.w, vertical: 10.h),
+                    horizontal: 12.w, vertical: 6.h),
                 child: Row(
                   children: [
                     SizedBox(
@@ -1287,13 +1288,13 @@ class _StudentFeeCollectionScreenState
                         style: TextStyle(
                             fontSize: 13.sp,
                             color: AppColors.textSecondary)),
-                    _TDCell(feeAmt.toStringAsFixed(2),
+                    _TDCell(formatIndianNumber(feeAmt),
                         flex: 2,
                         textAlign: TextAlign.right,
                         style: TextStyle(
                             fontSize: 13.sp,
                             color: AppColors.textPrimary)),
-                    _TDCell(bal.toStringAsFixed(2),
+                    _TDCell(formatIndianNumber(bal),
                         flex: 2,
                         textAlign: TextAlign.right,
                         style: TextStyle(
@@ -1330,7 +1331,7 @@ class _StudentFeeCollectionScreenState
                                   ..hideCurrentSnackBar()
                                   ..showSnackBar(
                                     SnackBar(
-                                      content: Text('Collection amount cannot exceed balance due (₹${bal.toStringAsFixed(0)})'),
+                                      content: Text('Collection amount cannot exceed balance due (${formatIndianNumber(bal)})'),
                                       backgroundColor: Colors.red,
                                       duration: const Duration(seconds: 2),
                                     ),
@@ -1402,7 +1403,7 @@ class _StudentFeeCollectionScreenState
                         builder: (_, __) {
                           final live = _netAmt(d);
                           return Text(
-                            live.toStringAsFixed(2),
+                            formatIndianNumber(live),
                             textAlign: TextAlign.right,
                             style: TextStyle(
                                 fontSize: 13.sp,
@@ -1473,7 +1474,7 @@ class _StudentFeeCollectionScreenState
                           ..._fineCtrl.values,
                         ]),
                         builder: (_, __) => Text(
-                          'Rs.${_totalNetSelected.toStringAsFixed(2)}',
+                          formatIndianNumber(_totalNetSelected),
                           style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.accent),
                         ),
                       ),
@@ -1598,7 +1599,7 @@ class _StudentFeeCollectionScreenState
                   Text('Cash Payment',
                       style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                   SizedBox(height: 12.h),
-                  _cashRow('Net Amount', 'Rs.${total.toStringAsFixed(2)}', highlight: true),
+                  _cashRow('Net Amount', formatIndianNumber(total), highlight: true),
                   SizedBox(height: 14.h),
                   Text('Tender Amount *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
                   SizedBox(height: 6.h),
@@ -1619,12 +1620,12 @@ class _StudentFeeCollectionScreenState
                   if ((_cashTenderAmount ?? 0) < total && (_cashTenderAmount ?? 0) > 0) ...[
                     SizedBox(height: 6.h),
                     Text(
-                      'Tender must be at least Rs.${total.toStringAsFixed(2)}',
+                      'Tender must be at least ${formatIndianNumber(total)}',
                       style: TextStyle(fontSize: 12.sp, color: AppColors.error, fontWeight: FontWeight.w600),
                     ),
                   ],
                   SizedBox(height: 14.h),
-                  _cashRow('Refund (Change)', 'Rs.${(_cashRefundAmount ?? 0).toStringAsFixed(2)}'),
+                  _cashRow('Refund (Change)', formatIndianNumber(_cashRefundAmount ?? 0)),
                   SizedBox(height: 20.h),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -1826,7 +1827,7 @@ class _StudentFeeCollectionScreenState
                     ),
                     SizedBox(height: 12.h),
                     Text(
-                      'Total: Rs.${totalNet.toStringAsFixed(2)}',
+                      'Total: ${formatIndianNumber(totalNet)}',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 16.sp,
@@ -2079,7 +2080,7 @@ class _StudentFeeCollectionScreenState
             Text('Payment Successful', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
             SizedBox(height: 8.h),
             Text('Receipt No: $payNumber', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-            Text('Amount: Rs.${totalNet.toStringAsFixed(2)}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+            Text('Amount: ${formatIndianNumber(totalNet)}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
             Text('Mode: $_paymentMode', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
             SizedBox(height: 16.h),
             OutlinedButton.icon(
@@ -2206,6 +2207,9 @@ class _StudentFeeCollectionScreenState
                         try {
                           final pdf = await buildReceiptPdf(receiptData);
                           await Printing.layoutPdf(
+                            // Match the A5 page so the printer doesn't fall
+                            // back to A4 and clip the right edge.
+                            format: a5PageFormat,
                             onLayout: (PdfPageFormat format) async => pdf.save(),
                             name: 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}',
                           );
@@ -3020,7 +3024,7 @@ class _StudentFeeCollectionScreenState
                       SizedBox(width: 8.w),
                       Expanded(
                         child: Text(
-                          'Razorpay Payment  -  Rs.${totalNet.toStringAsFixed(2)}',
+                          'Razorpay Payment  -  ${formatIndianNumber(totalNet)}',
                           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15.sp),
                         ),
                       ),
@@ -3370,7 +3374,7 @@ class _THCell extends StatelessWidget {
       child: Text(text.toUpperCase(),
           textAlign: textAlign,
           style: TextStyle(
-              fontSize: 13.sp,
+              fontSize: 12.sp,
               fontWeight: FontWeight.w700,
               color: AppColors.textPrimary,
               letterSpacing: 0.3)),

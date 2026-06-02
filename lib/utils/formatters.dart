@@ -57,9 +57,10 @@ bool _hasDecimals(num v) {
   return (v - v.truncate()).abs() > 1e-9;
 }
 
-/// Format an amount like `₹1,23,456.00`. Pass [withSymbol] = false for the
-/// number-only variant.
-String formatCurrency(num value, {bool withSymbol = true}) {
+/// Format an amount as a number-only string like `1,23,456` (decimals kept
+/// only when non-zero). Pass [withSymbol] = true to prepend `₹` — used by PDF
+/// receipts and Excel exports. On-screen UI defaults to no symbol.
+String formatCurrency(num value, {bool withSymbol = false}) {
   final n = formatIndianNumber(value);
   return withSymbol ? '₹$n' : n;
 }

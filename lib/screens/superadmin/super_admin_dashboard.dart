@@ -19,6 +19,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 class SuperAdminDashboard extends StatefulWidget {
   const SuperAdminDashboard({super.key});
 
@@ -1833,15 +1834,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     setState(() => _aggregateDrilldownMode = mode);
   }
 
-  String _formatAmount(double amount) {
-    if (amount == amount.roundToDouble()) {
-      return '₹${amount.toInt().toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},')}';
-    }
-    final parts = amount.toStringAsFixed(2).split('.');
-    final intPart = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},');
-    return '₹$intPart.${parts[1]}';
-  }
+  String _formatAmount(double amount) => formatIndianNumber(amount);
 
   Widget _buildInstitutionCard(
       BuildContext context, _InstitutionFinanceSummary s) {
@@ -2221,6 +2214,18 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 child: DataTable(
                 headingRowColor: WidgetStateProperty.all(
                     AppColors.primary.withValues(alpha: 0.08)),
+                headingTextStyle: TextStyle(
+                    fontSize: 12.sp,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                    letterSpacing: 0.3),
+                dataTextStyle: TextStyle(
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary),
+                dataRowMinHeight: 36.h,
+                dataRowMaxHeight: 36.h,
+                headingRowHeight: 44.h,
                 columns: const [
                   DataColumn(label: Text('COLLEGE')),
                   DataColumn(label: Text('CODE')),
@@ -2319,6 +2324,18 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 child: DataTable(
                 headingRowColor: WidgetStateProperty.all(
                     AppColors.primary.withValues(alpha: 0.08)),
+                headingTextStyle: TextStyle(
+                    fontSize: 12.sp,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                    letterSpacing: 0.3),
+                dataTextStyle: TextStyle(
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary),
+                dataRowMinHeight: 36.h,
+                dataRowMaxHeight: 36.h,
+                headingRowHeight: 44.h,
                 columns: const [
                   DataColumn(label: Text('COLLEGE')),
                   DataColumn(label: Text('PAY NO')),
@@ -2382,15 +2399,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     );
   }
 
-  String _formatCurrency(double value) {
-    final fixed = value.toStringAsFixed(2);
-    final parts = fixed.split('.');
-    final whole = parts[0].replaceAllMapped(
-      RegExp(r'\B(?=(\d{3})+(?!\d))'),
-      (match) => ',',
-    );
-    return 'Rs. $whole.${parts[1]}';
-  }
+  String _formatCurrency(double value) => formatIndianNumber(value);
 
   String _formatDate(DateTime date) {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
@@ -2692,15 +2701,7 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
     }
   }
 
-  String _fmt(double amount) {
-    if (amount == amount.roundToDouble()) {
-      return '₹${amount.toInt().toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},')}';
-    }
-    final parts = amount.toStringAsFixed(2).split('.');
-    final intPart = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},');
-    return '₹$intPart.${parts[1]}';
-  }
+  String _fmt(double amount) => formatIndianNumber(amount);
 
   @override
   Widget build(BuildContext context) {
@@ -3459,15 +3460,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
     );
   }
 
-  String _fmt(double amount) {
-    if (amount == amount.roundToDouble()) {
-      return '₹${amount.toInt().toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},')}';
-    }
-    final parts = amount.toStringAsFixed(2).split('.');
-    final intPart = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},');
-    return '₹$intPart.${parts[1]}';
-  }
+  String _fmt(double amount) => formatIndianNumber(amount);
 
   int _studentsOf(Map<String, dynamic> r) {
     if (widget.mode == 'pending') {
@@ -3500,7 +3493,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 13.sp,
                   fontWeight: weight ?? FontWeight.w600,
                   color: color ?? AppColors.textSecondary)),
         );
@@ -3515,7 +3508,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
         final amount = (r[widget.mode] as num?)?.toDouble() ?? 0;
         rows.add(Container(
           color: i.isEven ? Colors.white : AppColors.surface,
-          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 8),
+          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 6.h),
           child: Row(
             children: [
               cell(i == 0 ? course : '', 3,
@@ -3538,7 +3531,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
           0, (s, r) => s + ((r[widget.mode] as num?)?.toDouble() ?? 0));
       rows.add(Container(
         color: AppColors.tableHeadBg,
-        padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 7),
+        padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 12.h),
         child: Row(
           children: [
             cell('S.Total', 3,
@@ -3830,45 +3823,45 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                     Container(
                                       color: AppColors.tableHeadBg,
                                       padding: EdgeInsets.symmetric(
-                                          horizontal: rowPadH, vertical: 12),
+                                          horizontal: rowPadH, vertical: 12.h),
                                       child: Row(
                                         children: [
                                           Expanded(
                                               flex: 3,
                                               child: Text('STANDARD',
                                                   style: TextStyle(
-                                                      fontSize: 12,
+                                                      fontSize: 12.sp,
                                                       fontWeight: FontWeight.w700,
                                                       color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                      letterSpacing: 0.3))),
                                           Expanded(
                                               flex: 2,
                                               child: Text('CLASS',
                                                   style: TextStyle(
-                                                      fontSize: 12,
+                                                      fontSize: 12.sp,
                                                       fontWeight: FontWeight.w700,
                                                       color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                      letterSpacing: 0.3))),
                                           Expanded(
                                               flex: 2,
                                               child: Text(
                                                   studentsHeader,
                                                   textAlign: TextAlign.right,
                                                   style: TextStyle(
-                                                      fontSize: 12,
+                                                      fontSize: 12.sp,
                                                       fontWeight: FontWeight.w700,
                                                       color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                      letterSpacing: 0.3))),
                                           Expanded(
                                               flex: 4,
                                               child: Text(
                                                   valueLabel.toUpperCase(),
                                                   textAlign: TextAlign.right,
                                                   style: TextStyle(
-                                                      fontSize: 12,
+                                                      fontSize: 12.sp,
                                                       fontWeight: FontWeight.w700,
                                                       color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                      letterSpacing: 0.3))),
                                         ],
                                       ),
                                     ),
@@ -3905,14 +3898,14 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                             color: AppColors.tableHeadBg,
                                             border: Border(top: BorderSide(color: AppColors.border)),
                                           ),
-                                          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 14),
+                                          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 12.h),
                                           child: Row(
                                             children: [
-                                              const Expanded(
+                                              Expanded(
                                                   flex: 3,
                                                   child: Text('GRAND TOTAL',
                                                       style: TextStyle(
-                                                          fontSize: 13,
+                                                          fontSize: 13.sp,
                                                           fontWeight: FontWeight.w800,
                                                           color: AppColors.textPrimary,
                                                           letterSpacing: 0.4))),
@@ -3921,8 +3914,8 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                                   flex: 2,
                                                   child: Text('$totalStudents',
                                                       textAlign: TextAlign.right,
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
+                                                      style: TextStyle(
+                                                          fontSize: 13.sp,
                                                           fontWeight: FontWeight.w800,
                                                           color: AppColors.textPrimary))),
                                               Expanded(
@@ -3931,8 +3924,8 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                                       textAlign: TextAlign.right,
                                                       maxLines: 1,
                                                       overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
+                                                      style: TextStyle(
+                                                          fontSize: 13.sp,
                                                           fontWeight: FontWeight.w800,
                                                           color: AppColors.textPrimary))),
                                             ],
@@ -4722,15 +4715,7 @@ class _AggregateDrilldownPage extends StatelessWidget {
     }
   }
 
-  String _formatAmount(double amount) {
-    if (amount == amount.roundToDouble()) {
-      return '₹${amount.toInt().toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},')}';
-    }
-    final parts = amount.toStringAsFixed(2).split('.');
-    final intPart = parts[0].replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{2})+(\d)(?!\d))'), (m) => '${m[1]},');
-    return '₹$intPart.${parts[1]}';
-  }
+  String _formatAmount(double amount) => formatIndianNumber(amount);
 
   double _value(_InstitutionFinanceSummary s) {
     switch (mode) {
@@ -4899,13 +4884,13 @@ class _AggregateDrilldownPage extends StatelessWidget {
                           children: [
                             Container(
                               color: AppColors.tableHeadBg,
-                              padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 12),
+                              padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 12.h),
                               child: Row(
                                 children: [
-                                  const SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  const Expanded(flex: 5, child: Text('INSTITUTION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  Expanded(flex: 2, child: Text('CODE', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  Expanded(flex: 4, child: Text(columnLabel, textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
+                                  SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                                  Expanded(flex: 5, child: Text('INSTITUTION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                                  Expanded(flex: 2, child: Text('CODE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                                  Expanded(flex: 4, child: Text(columnLabel, textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                                 ],
                               ),
                             ),
@@ -4922,12 +4907,12 @@ class _AggregateDrilldownPage extends StatelessWidget {
                                         final zebra = i.isOdd ? AppColors.surface : Colors.white;
                                         return Container(
                                           color: zebra,
-                                          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 14),
+                                          padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 6.h),
                                           child: Row(
                                             children: [
-                                              SizedBox(width: 28, child: Text('${i + 1}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              SizedBox(width: 28, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                               Expanded(
                                                 flex: 4,
                                                 child: mode == 'active'
