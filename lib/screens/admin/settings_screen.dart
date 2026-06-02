@@ -754,7 +754,7 @@ class _PaymentSequenceTabState extends State<_PaymentSequenceTab> with Automatic
 
     setState(() => _isLoading = true);
     try {
-      final fgResult = await SupabaseService.fromSchema('feegroup')
+      final fgResult = await SupabaseService.client.from('feegroup')
           .select('fg_id, fgdesc')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
@@ -1030,7 +1030,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
   final _toDaysCtrl = TextEditingController();
   final _fineValueCtrl = TextEditingController();
   String _fineType = 'FIXED';
-  String _feeType = '';
+  String _feeType = 'ALL';
   List<String> _feeTypes = [];
   int? _editingId;
 
@@ -1073,7 +1073,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
     if (insId == null) return;
     try {
       // Only show fee types where fines are applicable (feefineapplicable = 1)
-      final response = await SupabaseService.fromSchema('feetype')
+      final response = await SupabaseService.client.from('feetype')
           .select('feedesc')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
@@ -1086,8 +1086,8 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
       if (mounted) {
         setState(() {
           _feeTypes = types;
-          if (types.isNotEmpty && (_feeType == 'ALL' || !types.contains(_feeType))) {
-            _feeType = types.first;
+          if (_feeType != 'ALL' && !types.contains(_feeType)) {
+            _feeType = types.isNotEmpty ? types.first : 'ALL';
           }
         });
       }
@@ -1102,7 +1102,7 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
     _toDaysCtrl.clear();
     _fineValueCtrl.clear();
     _fineType = 'FIXED';
-    _feeType = _feeTypes.isNotEmpty ? _feeTypes.first : '';
+    _feeType = _feeTypes.isNotEmpty ? _feeTypes.first : 'ALL';
     _editingId = null;
   }
 
@@ -1115,9 +1115,9 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
       _fineValueCtrl.text = rule['fine_value']?.toString() ?? '';
       _fineType = rule['fine_type']?.toString() ?? 'FIXED';
       final ruleFeeType = rule['feetype']?.toString() ?? '';
-      _feeType = (ruleFeeType.isNotEmpty && _feeTypes.contains(ruleFeeType))
+      _feeType = (ruleFeeType == 'ALL' || (ruleFeeType.isNotEmpty && _feeTypes.contains(ruleFeeType)))
           ? ruleFeeType
-          : (_feeTypes.isNotEmpty ? _feeTypes.first : '');
+          : (_feeTypes.isNotEmpty ? _feeTypes.first : 'ALL');
     });
   }
 
@@ -1238,7 +1238,10 @@ class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveCli
                     elevation: 6,
                     style: _fieldTextStyle(),
                     decoration: _fieldDecoration(),
-                    items: _feeTypes.map((f) => DropdownMenuItem(value: f, child: Text(f, style: _fieldTextStyle()))).toList(),
+                    items: [
+                      DropdownMenuItem(value: 'ALL', child: Text('All', style: _fieldTextStyle())),
+                      ..._feeTypes.map((f) => DropdownMenuItem(value: f, child: Text(f, style: _fieldTextStyle()))),
+                    ],
                     onChanged: (v) => setState(() => _feeType = v ?? 'ALL'),
                   ),
                   SizedBox(height: 14.h),

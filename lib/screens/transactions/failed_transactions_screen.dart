@@ -542,7 +542,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                   pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.end,
                     children: [
-                      labelValue('Roll No:', data.admissionNo),
+                      labelValue('Admission No:', data.admissionNo),
                       pw.SizedBox(height: 6),
                       labelValue('Class:', data.className),
                     ],
@@ -568,7 +568,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                             decoration: const pw.BoxDecoration(color: headerBg),
                             children: [
                               tableCell('S.No', sSemiBold.copyWith(color: primaryBlue)),
-                              tableCell('Semester', sSemiBold.copyWith(color: primaryBlue)),
+                              tableCell('Term', sSemiBold.copyWith(color: primaryBlue)),
                               tableCell('Fee Type', sSemiBold.copyWith(color: primaryBlue)),
                               tableCell('Amount', sSemiBold.copyWith(color: primaryBlue)),
                             ],
@@ -1327,7 +1327,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   // download. Payment Method renamed to "Mode" for brevity.
   static const _txColWidths = <double>[60, 110, 100, 130, 180, 120, 120, 100, 90, 120];
   static const _txHeaders = <String>[
-    'S NO.', 'DATE', 'RECEIPT NO', 'ROLL NO', 'NAME', 'CLASS',
+    'S NO.', 'DATE', 'RECEIPT NO', 'ADMISSION NO', 'NAME', 'CLASS',
     'MODE', 'AMOUNT', 'STATUS', 'RECEIPT',
   ];
 

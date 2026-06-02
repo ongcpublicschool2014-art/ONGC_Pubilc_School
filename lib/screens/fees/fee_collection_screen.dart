@@ -1706,7 +1706,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             const Spacer(),
             // Search field
             AppSearchField(
-              hintText: 'Search student / roll no...',
+              hintText: 'Search student / admission no...',
               onChanged: (v) => setState(() => _pendingSearchQuery = v),
               width: 220,
             ),
@@ -2116,7 +2116,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
               columns: const [
                 DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('SEMESTER')),
+                DataColumn(label: Text('TERM')),
                 DataColumn(label: Text('FEE TYPE')),
                 DataColumn(label: Text('FEE AMOUNT'), numeric: true),
                 DataColumn(label: Text('PAID'), numeric: true),
@@ -2471,7 +2471,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             // Search field
             AppSearchField(
               controller: _pendingStudentSearchController,
-              hintText: 'Search student / roll no...',
+              hintText: 'Search student / admission no...',
               onChanged: (v) => setState(() {
                 _pendingStudentSearch = v;
                 _pendingPage = 0;
@@ -2597,7 +2597,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
               columns: const [
                 DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('ROLL NO')),
+                DataColumn(label: Text('ADMISSION NO')),
                 DataColumn(label: Text('STUDENT NAME')),
                 DataColumn(label: Text('STANDARD')),
                 DataColumn(label: Text('CLASS')),
@@ -3353,7 +3353,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           DataColumn(label: Text('S No.')),
                           DataColumn(label: Text('PAY NO')),
                           DataColumn(label: Text('TIME')),
-                          DataColumn(label: Text('ROLL NO')),
+                          DataColumn(label: Text('ADMISSION NO')),
                           DataColumn(label: Text('STUDENT NAME')),
                           DataColumn(label: Text('STANDARD')),
                           DataColumn(label: Text('CLASS')),
@@ -3801,7 +3801,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                 DataColumn(label: Text('S No.')),
                                 DataColumn(label: Text('PAY NO')),
                                 DataColumn(label: Text('TIME')),
-                                DataColumn(label: Text('ROLL NO')),
+                                DataColumn(label: Text('ADMISSION NO')),
                                 DataColumn(label: Text('STUDENT NAME')),
                                 DataColumn(label: Text('STANDARD')),
                                 DataColumn(label: Text('CLASS')),
@@ -3991,7 +3991,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
                       columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
                       columns: const [
-                        DataColumn(label: Text('S No.')), DataColumn(label: Text('SEMESTER')), DataColumn(label: Text('FEE TYPE')),
+                        DataColumn(label: Text('S No.')), DataColumn(label: Text('TERM')), DataColumn(label: Text('FEE TYPE')),
                         DataColumn(label: Text('AMOUNT'), numeric: true), DataColumn(label: Text('PAID'), numeric: true),
                         DataColumn(label: Text('FINE'), numeric: true),
                         DataColumn(label: Text('BALANCE'), numeric: true), DataColumn(label: Text('STATUS')),
@@ -4375,8 +4375,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       if (t.isNotEmpty) termSet.add(t);
     }
     const _pendingTermOrder = [
-      'I SEMESTER', 'I TERM', 'II SEMESTER', 'II TERM', 'III SEMESTER', 'III TERM',
-      'IV SEMESTER', 'V SEMESTER', 'VI SEMESTER',
+      'I TERM', 'I TERM', 'II TERM', 'II TERM', 'III TERM', 'III TERM',
+      'IV TERM', 'V TERM', 'VI TERM',
       'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER',
       'NOVEMBER', 'DECEMBER', 'JANUARY', 'FEBRUARY',
       'MARCH', 'APRIL', 'MAY',
@@ -4409,7 +4409,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
-    final headers = ['Sno', 'Class', 'Roll No', 'Student Name', ...termCols, 'Total', 'Remarks'];
+    final headers = ['Sno', 'Class', 'Admission No', 'Student Name', ...termCols, 'Total', 'Remarks'];
     final totalCols = headers.length;
     int row = 0;
 
@@ -4835,15 +4835,15 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
     // is ordered by course.ordid → class.ordid instead of alphabetical.
     final results = await Future.wait([
       SupabaseService.getFeeDemandSummary(insId),
-      SupabaseService.fromSchema('feetype')
+      SupabaseService.client.from('feetype')
           .select('feedesc, feeshort')
           .eq('ins_id', insId)
           .eq('activestatus', 1),
-      SupabaseService.fromSchema('class')
+      SupabaseService.client.from('class')
           .select('claname, ordid, cgrp_id')
           .eq('ins_id', insId)
           .eq('activestatus', 1),
-      SupabaseService.fromSchema('clagrp')
+      SupabaseService.client.from('clagrp')
           .select('cgrp_id, clagrpname, ordid')
           .eq('ins_id', insId)
           .eq('activestatus', 1),
@@ -5472,7 +5472,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
             return SizedBox(
               width: dWidths[col],
               child: Align(
-                // S No., SEMESTER, FEE TYPE → left; AMOUNT/PAID/FINE/BALANCE → right; STATUS → left
+                // S No., TERM, FEE TYPE → left; AMOUNT/PAID/FINE/BALANCE → right; STATUS → left
                 alignment: (col >= 3 && col <= 6) ? Alignment.centerRight : Alignment.centerLeft,
                 child: Text(
                   text,
@@ -5507,7 +5507,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
 
           final headerRow = dRow([
             dCellText('S No.', 0, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-            dCellText('SEMESTER', 1, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+            dCellText('TERM', 1, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('FEE TYPE', 2, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('AMOUNT', 3, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('PAID', 4, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
@@ -5847,7 +5847,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                 final stuHeaderRow = sBuildRow(
                   [
                     sBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('ROLL NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                    sBuildCell('ADMISSION NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('STUDENT NAME', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('FEE AMOUNT', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('PAID', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -6243,7 +6243,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
       final results = await Future.wait([
         SupabaseService.getPaidFeeDemands(insId),
         SupabaseService.getFeeTotals(insId),
-        SupabaseService.fromSchema('feetype')
+        SupabaseService.client.from('feetype')
             .select('feedesc, feeshort')
             .eq('ins_id', insId)
             .eq('activestatus', 1),
@@ -6874,12 +6874,12 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             final dateHeaderBg = AppColors.accent.withValues(alpha: 0.10);
                             const subTotalBg = AppColors.tableHeadBg;
 
-                            // Column widths: SNO, RECPT.NO, ROLL NO, NAME, STANDARD, CLASS, ...feeTypes, TOTAL
+                            // Column widths: SNO, RECPT.NO, ADMISSION NO, NAME, STANDARD, CLASS, ...feeTypes, TOTAL
                             const double colSpacing = 8;
                             const double hMargin = 6;
                             const double snoW = 40;
                             const double recptW = 80;
-                            const double admnW = 100;   // ROLL NO — fits 12-digit numbers
+                            const double admnW = 100;   // ADMISSION NO — fits 12-digit numbers
                             const double nameW = 140;
                             const double courseW = 80;
                             const double classW = 80;
@@ -6943,7 +6943,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                               [
                                 buildCell('SNO', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('RECPT.NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('ROLL NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('ADMISSION NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('STANDARD', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('CLASS', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -7216,7 +7216,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     row++;
 
     // Column headers (no Challan No.)
-    final headers = ['SNO', 'Recpt. No.', 'Roll No.', 'Name', 'Standard', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
+    final headers = ['SNO', 'Recpt. No.', 'Admission No.', 'Name', 'Standard', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);
@@ -7535,7 +7535,7 @@ class _StudentAccordionState extends State<_StudentAccordion> {
                   ),
                   child: Row(
                     children: [
-                      Expanded(flex: 2, child: Text('Semester', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                      Expanded(flex: 2, child: Text('Term', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 3, child: Text('Fee Type', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 2, child: Text('Due Date', textAlign: TextAlign.center, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 2, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
