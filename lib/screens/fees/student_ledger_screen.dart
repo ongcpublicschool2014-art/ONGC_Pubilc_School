@@ -88,8 +88,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         SupabaseService.getStudents(insId),
         // class + course masters with ordid for sidebar ordering — same
         // source the Students screen sidebar uses.
-        SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('claname', ascending: true),
+        SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('clagrpname', ascending: true),
       ]);
       final students = results[0] as List<StudentModel>;
       final classMaster = results[1] as List<dynamic>;
@@ -555,7 +555,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                         Expanded(flex: 2, child: Text('ADMISSION NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('SECTION', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
@@ -1196,7 +1196,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       row++;
     }
 
-    addInfo('Class', ':  ${s.stuclass}');
+    addInfo('Section', ':  ${s.stuclass}');
     addInfo('Student Name', ':  ${s.stuname}');
     // Add roll no on same row as student name but further right
     final admCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row - 1));

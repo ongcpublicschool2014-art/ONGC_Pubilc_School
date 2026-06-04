@@ -18,10 +18,15 @@ import '../notices/notices_screen.dart';
 import '../notifications/notification_screen.dart';
 import '../fees/fee_demand_screen.dart';
 import '../fees/fee_demand_approval_screen.dart';
-import '../admin/master_import_screen.dart';
-import '../admin/settings_screen.dart';
+import '../admin/master_data_screen.dart';
 import '../fees/bank_reconciliation_screen.dart';
 import '../fees/reports_screen.dart';
+import '../fees/fee_concession_screen.dart';
+import '../fees/fee_master_screen.dart';
+import '../admission/admission_screen.dart';
+import '../admission/admission_master_screen.dart';
+import '../admission/fast_admission_screen.dart';
+import '../admission/class_allocation_screen.dart';
 
 
 
@@ -56,21 +61,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   static const List<_NavItem> _allNavItems = [
     _NavItem('element-3', 'Dashboard', section: 'MAIN MENU'),
-    _NavItem('document-upload', 'Master Data', section: 'ADMIN', adminOnly: true, subItems: [
-      _NavSubItem('teacher', 'Standard'),
-      _NavSubItem('book-1', 'Class'),
-      _NavSubItem('category-2', 'Fee Group'),
-      _NavSubItem('receipt-1', 'Fee Type'),
-      _NavSubItem('receipt-discount', 'Concession'),
-      _NavSubItem('note-2', 'Class Fee Demand'),
-    ]),
-    _NavItem('setting-2', 'Sequence Creation', section: 'ADMIN', adminOnly: true),
+    _NavItem('document-upload', 'Master Data', section: 'ADMIN', adminOnly: true),
     _NavItem('bank', 'Bank Accounts', section: 'ADMIN', adminOnly: true),
     _NavItem('security-user', 'User Creation', section: 'ADMIN', adminOnly: true),
+    _NavItem('category-2', 'Admission Master', section: 'ADMISSION', adminOnly: true),
+    _NavItem('profile-add', 'Admission', section: 'ADMISSION', adminOnly: true),
+    _NavItem('flash', 'Fast Admission', section: 'ADMISSION', adminOnly: true),
+    _NavItem('task-square', 'Section Allocation', section: 'ADMISSION', adminOnly: true),
     _NavItem('people', 'Student', section: 'STUDENTS', adminOnly: true),
     _NavItem('book-1', 'Student Ledger', section: 'STUDENTS'),
+    _NavItem('receipt-discount', 'Fee Master', section: 'FEES', accountantOnly: true),
     _NavItem('receipt-edit', 'Fee Demand', section: 'FEES'),
     _NavItem('tick-square', 'Fee Demand Approval', section: 'FEES', adminOnly: true),
+    _NavItem('discount-shape', 'Fee Concession', section: 'FEES', accountantOnly: true),
     _NavItem('bank', 'Bank Reconciliation', section: 'FEES', adminOnly: true),
     _NavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
     _NavItem('receipt-2', 'Transactions', section: 'FEES'),
@@ -1059,7 +1062,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Screens that manage their own scroll and need full bounded height
   bool _isFullHeightScreen() {
     final label = _navItems[_selectedNavIndex].label;
-    return label == 'Dashboard' || label == 'Student' || label == 'Fee Demand' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'User Creation' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Sequence Creation' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports';
+    return label == 'Dashboard' || label == 'Student' || label == 'Fee Demand' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'User Creation' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Admission' || label == 'Admission Master' || label == 'Fast Admission' || label == 'Section Allocation' || label == 'Fee Concession' || label == 'Fee Master';
   }
 
   Widget _buildDashboardContent(BuildContext context, bool isDesktop) {
@@ -1068,6 +1071,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final student = _navigateToStudent;
       _navigateToStudent = null;
       return StudentsScreen(key: student != null ? ValueKey(student.stuId) : null, initialStudent: student);
+    }
+    if (selectedMenu == 'Admission') {
+      return const AdmissionScreen();
+    }
+    if (selectedMenu == 'Fast Admission') {
+      return const FastAdmissionScreen();
+    }
+    if (selectedMenu == 'Section Allocation') {
+      return const ClassAllocationScreen();
+    }
+    if (selectedMenu == 'Admission Master') {
+      return const AdmissionMasterScreen();
     }
     if (selectedMenu == 'Fee Demand') {
       return const FeeDemandScreen();
@@ -1089,6 +1104,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Fee Demand Approval') {
       return const FeeDemandApprovalScreen();
     }
+    if (selectedMenu == 'Fee Concession') {
+      return const FeeConcessionScreen();
+    }
+    if (selectedMenu == 'Fee Master') {
+      return const FeeMasterScreen();
+    }
     if (selectedMenu == 'User Creation') {
       return const AdminCreationScreen();
     }
@@ -1099,13 +1120,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return NotificationScreen(onReadChanged: _loadUnreadNotifCount);
     }
     if (selectedMenu == 'Master Data') {
-      return MasterImportScreen(
-        initialTabIndex: _selectedSubIndex,
-        showInternalTabs: false,
-      );
-    }
-    if (selectedMenu == 'Sequence Creation') {
-      return const SettingsScreen();
+      return const MasterDataScreen();
     }
     if (selectedMenu == 'Bank Accounts') {
       return const BankDetailsScreen();

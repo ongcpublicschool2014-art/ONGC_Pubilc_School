@@ -1327,7 +1327,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   // download. Payment Method renamed to "Mode" for brevity.
   static const _txColWidths = <double>[60, 110, 100, 130, 180, 120, 120, 100, 90, 120];
   static const _txHeaders = <String>[
-    'S NO.', 'DATE', 'RECEIPT NO', 'ADMISSION NO', 'NAME', 'CLASS',
+    'S NO.', 'DATE', 'RECEIPT NO', 'ADMISSION NO', 'NAME', 'SECTION',
     'MODE', 'AMOUNT', 'STATUS', 'RECEIPT',
   ];
 

@@ -279,8 +279,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       SupabaseService.getInstitutionInfo(insId),
       SupabaseService.getStudentCountsByClass(insId),
       // class + course masters with ordid for the sidebar ordering.
-      SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-      SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+      SupabaseService.client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('claname', ascending: true),
+      SupabaseService.client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('clagrpname', ascending: true),
     ]);
 
     if (!mounted) return;
@@ -1282,7 +1282,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                         Expanded(flex: 2, child: Text('ADMISSION NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('STANDARD', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('SECTION', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('MOBILE NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                       ],
@@ -2093,7 +2093,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'stugender': 'Gender',
     'studob': 'DOB',
     'stumobile': 'Mobile',
-    'stuclass': 'Class',
+    'stuclass': 'Section',
     'clagrpname': 'Standard',
     'stuemail': 'Email',
     'stuaddress': 'Address',
@@ -2130,7 +2130,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'gender': 'stugender', 'sex': 'stugender',
       'dob': 'studob', 'date of birth': 'studob', 'birth date': 'studob',
       'mobile': 'stumobile', 'phone': 'stumobile', 'mobile no': 'stumobile', 'phone no': 'stumobile',
-      'class': 'stuclass', 'grade': 'stuclass',
+      'section': 'stuclass', 'class': 'stuclass', 'grade': 'stuclass',
       'standard': 'clagrpname', 'standard name': 'clagrpname',
       'course': 'clagrpname', 'course name': 'clagrpname', 'clagrpname': 'clagrpname',
       'email': 'stuemail', 'e-mail': 'stuemail',
@@ -2285,10 +2285,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
         SupabaseService.client.from('class')
             .select('cla_id, claname, cgrp_id')
             .eq('ins_id', insId)
-            .eq('activestatus', 1),
+            .eq('activestatus', 1)
+            .order('ordid', ascending: true)
+            .order('claname', ascending: true),
         SupabaseService.client.from('clagrp')
             .select('cgrp_id, clagrpname')
-            .eq('ins_id', insId),
+            .eq('ins_id', insId)
+            .order('ordid', ascending: true)
+            .order('clagrpname', ascending: true),
       ]);
       final classRows = results[0] as List;
       final courseRows = results[1] as List;
@@ -2632,7 +2636,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (m.contains('not-null') || m.contains('null value')) {
       final match = RegExp(r'column "(\w+)"').firstMatch(msg);
       final col = match?.group(1) ?? '';
-      final labels = {'stuadmno': 'Admission No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
+      final labels = {'stuadmno': 'Admission No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Section', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
       return '${labels[col] ?? col} is required';
     }
     if (m.contains('foreign key') || m.contains('fkey')) return 'Invalid reference - check class, year, or concession values';

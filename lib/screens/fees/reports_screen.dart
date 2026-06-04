@@ -1187,10 +1187,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           _filterDropdown<String?>(
             key: ValueKey(_selectedCourse),
             value: _selectedClass,
-            hint: 'All Classes',
+            hint: 'All Sections',
             width: 160.w,
             items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All Classes')),
+              const DropdownMenuItem<String?>(value: null, child: Text('All Sections')),
               ...(_selectedCourse != null
                   ? _classes.where((c) => _allDemands.any((d) => d['clagrpname']?.toString() == _selectedCourse && d['stuclass']?.toString() == c))
                   : _classes
@@ -1330,7 +1330,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Expanded(
               child: _stickyTable(
             columnWidths: const [90, 110, 90, 110, 200, 100, 90, 110, 100, 120, 100, 110],
-            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'SECTION', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
               for (final r in rows.skip(_consolidatedPage * _tablePageSize).take(_tablePageSize))
                 [
@@ -1395,7 +1395,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Standard', 'Class', 'Strength', 'Term', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
+      const headers = ['Standard', 'Section', 'Strength', 'Term', 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1510,7 +1510,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['STANDARD', 'CLASS', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: const ['STANDARD', 'SECTION', 'STRENGTH', 'TERM', 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -1663,7 +1663,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Expanded(
               child: _stickyTable(
                 columnWidths: const [90, 90, 100, 90, 170, 110, 100, 110],
-                headers: const ['STANDARD', 'CLASS', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
+                headers: const ['STANDARD', 'SECTION', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE NO'],
                 rows: [
                   for (final r in rows.skip(_pendingPage * _tablePageSize).take(_tablePageSize))
                     [
@@ -1761,7 +1761,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Standard', 'Class', 'Term', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Mobile No'];
+      const headers = ['Standard', 'Section', 'Term', 'Adm. No', 'Name', 'Pending Amount', 'Con. Amount', 'Mobile No'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -1847,7 +1847,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: const ['STANDARD', 'CLASS', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE'],
+            headers: const ['STANDARD', 'SECTION', 'TERM', 'REG. NO', 'NAME', 'PENDING AMT', 'CON. AMT', 'MOBILE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -2071,7 +2071,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 SizedBox(height: 8.h),
                 Row(children: [
                   Expanded(child: Text('Name: ${_ledgerStudent!['stuname'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
-                  Expanded(child: Text('Reg No: ${_ledgerStudent!['stuadmno'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
+                  Expanded(child: Text('Adm No: ${_ledgerStudent!['stuadmno'] ?? ''}', style: TextStyle(fontSize: 13.sp))),
                 ]),
                 SizedBox(height: 4.h),
                 Row(children: [
@@ -2151,7 +2151,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                         Expanded(child: Text('ADMISSION NO', style: headerStyle)),
                         Expanded(child: Text('STUDENT NAME', style: headerStyle)),
                         Expanded(child: Text('STANDARD', style: headerStyle)),
-                        Expanded(child: Text('CLASS', style: headerStyle)),
+                        Expanded(child: Text('SECTION', style: headerStyle)),
                       ],
                     ),
                   ),
@@ -2213,7 +2213,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).cellStyle = boldStyle;
       row++;
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Student Name : ${_ledgerStudent?['stuname'] ?? ''}');
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('Reg. No : ${_ledgerStudent?['stuadmno'] ?? ''}');
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('Adm. No : ${_ledgerStudent?['stuadmno'] ?? ''}');
       row++;
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Standard : ${_ledgerStudent?['clagrpname'] ?? ''}');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('Class : ${_ledgerStudent?['stuclass'] ?? ''}');
@@ -2348,7 +2348,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               pw.Text('DATE: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
             ]),
             pw.SizedBox(height: 4),
-            pw.Text('Student Name: ${_ledgerStudent?['stuname'] ?? ''}    Reg. No: ${_ledgerStudent?['stuadmno'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
+            pw.Text('Student Name: ${_ledgerStudent?['stuname'] ?? ''}    Adm. No: ${_ledgerStudent?['stuadmno'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
             pw.Text('Standard: ${_ledgerStudent?['clagrpname'] ?? ''}    Class: ${_ledgerStudent?['stuclass'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
             pw.SizedBox(height: 6),
           ],
@@ -2518,7 +2518,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     }
                   }
                   final headers = <String>[
-                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'STANDARD', 'CLASS',
+                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'STANDARD', 'SECTION',
                     ...visibleFeeTypes.map((t) => t.toUpperCase()),
                     'FINE', 'TOTAL',
                     if (showCash) 'CASH',
@@ -2888,7 +2888,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     ];
     final tableWidth = colWidths.fold<double>(0, (a, b) => a + b);
     final headers = <String>[
-      'SNO', 'CLASS', 'ADMN. NO', 'STUDENT NAME',
+      'SNO', 'SECTION', 'ADMN. NO', 'STUDENT NAME',
       for (final t in terms) t.toUpperCase(),
       'FINE', 'TOTAL', 'REMARKS',
     ];
@@ -3124,7 +3124,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       row++; // blank row
 
       // Column headers: Sno, Class, Admn. No, Student Name, [terms], Total, Remarks
-      final headers = ['Sno', 'Class', 'Admn. No', 'Student Name', ...terms, 'Fine', 'Total', 'Remarks'];
+      final headers = ['Sno', 'Section', 'Admn. No', 'Student Name', ...terms, 'Fine', 'Total', 'Remarks'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = colHeader;
@@ -3264,7 +3264,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       row++; // blank row
 
       // Column headers
-      final headers = ['Sno', 'Class', 'Admn. No', 'Student Name', ...terms, 'Fine', 'Total', 'Remarks'];
+      final headers = ['Sno', 'Section', 'Admn. No', 'Student Name', ...terms, 'Fine', 'Total', 'Remarks'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = colHeader;
@@ -3424,7 +3424,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Standard', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
+      final headers = ['Receipt No', 'Adm No', 'Student Name', 'Standard', 'Section', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -3627,7 +3627,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final numStyle = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
 
       const headers = [
-        'Admission No', 'Name', 'Standard', 'Class',
+        'Admission No', 'Name', 'Standard', 'Section',
         'Transaction Date', 'Payment Mode', 'Doc No', 'Term', 'Fee Type',
         'Amount', 'Fine', 'Bank Name', 'Settlement Date',
       ];
@@ -3855,7 +3855,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', 'Reg No', 'Student Name', 'Standard', 'Class', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
+      final headers = ['Receipt No', 'Adm No', 'Student Name', 'Standard', 'Section', ...feeTypes, 'Fine', 'Total', ...modeHeaders, 'Net Amt'];
       final rows = <List<String>>[];
       for (final r in visibleRows) {
         final fees = r['fees'] as Map<String, double>;
@@ -4207,7 +4207,7 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
     120, 220, 110, 130, 170, 140, 130, 90, 200, 100, 90, 240, 180, 170,
   ];
   static const _headers = <String>[
-    'ADMISSION NO', 'NAME', 'STANDARD', 'CLASS',
+    'ADMISSION NO', 'NAME', 'STANDARD', 'SECTION',
     'TRANSACTION DATE', 'PAYMENT MODE', 'DOC NO', 'TERM', 'FEE TYPE',
     'AMOUNT', 'FINE', 'BANK NAME', 'SETTLEMENT ID', 'SETTLEMENT DATE',
   ];

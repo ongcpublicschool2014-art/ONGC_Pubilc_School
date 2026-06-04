@@ -412,7 +412,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String?>(
               value: _selectedClass,
-              hint: Text('All Classes',
+              hint: Text('All Sections',
                   style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
@@ -430,7 +430,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               items: [
                 DropdownMenuItem<String?>(
                   value: null,
-                  child: Text('All Classes',
+                  child: Text('All Sections',
                       style: TextStyle(fontSize: 13.sp)),
                 ),
                 ..._classList.map((cls) => DropdownMenuItem<String?>(
@@ -564,7 +564,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                               SizedBox(width: 40.w),
                               _headerCell('Admission No', 3),
                               _headerCell('Student Name', 5),
-                              _headerCell('Class', 3),
+                              _headerCell('Section', 3),
                               _headerCell('Standard', 3, center: true),
                               _headerCell('Year', 3, center: true),
                               _headerCell('Term', 3, center: true),

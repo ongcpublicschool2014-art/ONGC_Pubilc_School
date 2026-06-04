@@ -1278,7 +1278,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         const flexes = <int>[1, 2, 3, 2, 2, 2, 2, 2];
                         const headers = <String>[
                           'S No.', 'PAY NO', 'STUDENT', 'STANDARD',
-                          'CLASS', 'DATE', 'MODE', 'AMOUNT',
+                          'SECTION', 'DATE', 'MODE', 'AMOUNT',
                         ];
                         final hStyle = TextStyle(
                             fontSize: 13.sp,
@@ -1765,7 +1765,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String?>(
                       value: classes.contains(_pendingClassFilter) ? _pendingClassFilter : null,
-                      hint: Text('All Classes', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                      hint: Text('All Sections', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                       isDense: true,
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -1773,7 +1773,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                       icon: AppIcon.linear('Chevron Down', size: AppBtn.iconSize(context)),
                       items: [
-                        const DropdownMenuItem<String?>(value: null, child: Text('All Classes')),
+                        const DropdownMenuItem<String?>(value: null, child: Text('All Sections')),
                         ...classes.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
                       ],
                       onChanged: (v) => setState(() => _pendingClassFilter = v),
@@ -2295,7 +2295,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               columns: const [
                 DataColumn(label: Text('S No.')),
                 DataColumn(label: Text('STANDARD')),
-                DataColumn(label: Text('CLASS')),
+                DataColumn(label: Text('SECTION')),
                 DataColumn(label: Text('STUDENTS'), numeric: true),
                 DataColumn(label: Text('TOTAL DEMAND'), numeric: true),
                 DataColumn(label: Text('PAID'), numeric: true),
@@ -2549,7 +2549,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String?>(
                       value: classes.contains(_pendingClassFilter) ? _pendingClassFilter : null,
-                      hint: Text('All Classes', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                      hint: Text('All Sections', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                       isDense: true,
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -2557,7 +2557,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                       icon: AppIcon.linear('Chevron Down', size: AppBtn.iconSize(context)),
                       items: [
-                        const DropdownMenuItem<String?>(value: null, child: Text('All Classes')),
+                        const DropdownMenuItem<String?>(value: null, child: Text('All Sections')),
                         ...classes.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
                       ],
                       onChanged: (v) => setState(() { _pendingClassFilter = v; _pendingPage = 0; }),
@@ -2600,7 +2600,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 DataColumn(label: Text('ADMISSION NO')),
                 DataColumn(label: Text('STUDENT NAME')),
                 DataColumn(label: Text('STANDARD')),
-                DataColumn(label: Text('CLASS')),
+                DataColumn(label: Text('SECTION')),
                 DataColumn(label: Text('FEE AMOUNT'), numeric: true),
                 DataColumn(label: Text('PAID'), numeric: true),
                 DataColumn(label: Text('FINE'), numeric: true),
@@ -3356,7 +3356,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           DataColumn(label: Text('ADMISSION NO')),
                           DataColumn(label: Text('STUDENT NAME')),
                           DataColumn(label: Text('STANDARD')),
-                          DataColumn(label: Text('CLASS')),
+                          DataColumn(label: Text('SECTION')),
                           DataColumn(label: Text('MODE')),
                           DataColumn(label: Text('COLLECTION'), numeric: true),
                           DataColumn(label: Text('FINE'), numeric: true),
@@ -3804,7 +3804,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                 DataColumn(label: Text('ADMISSION NO')),
                                 DataColumn(label: Text('STUDENT NAME')),
                                 DataColumn(label: Text('STANDARD')),
-                                DataColumn(label: Text('CLASS')),
+                                DataColumn(label: Text('SECTION')),
                                 DataColumn(label: Text('MODE')),
                                 DataColumn(label: Text('COLLECTION'), numeric: true),
                                 DataColumn(label: Text('FINE'), numeric: true),
@@ -4409,7 +4409,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
-    final headers = ['Sno', 'Class', 'Admission No', 'Student Name', ...termCols, 'Total', 'Remarks'];
+    final headers = ['Sno', 'Section', 'Admission No', 'Student Name', ...termCols, 'Total', 'Remarks'];
     final totalCols = headers.length;
     int row = 0;
 
@@ -4842,11 +4842,15 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
       SupabaseService.client.from('class')
           .select('claname, ordid, cgrp_id')
           .eq('ins_id', insId)
-          .eq('activestatus', 1),
+          .eq('activestatus', 1)
+          .order('ordid', ascending: true)
+          .order('claname', ascending: true),
       SupabaseService.client.from('clagrp')
           .select('cgrp_id, clagrpname, ordid')
           .eq('ins_id', insId)
-          .eq('activestatus', 1),
+          .eq('activestatus', 1)
+          .order('ordid', ascending: true)
+          .order('clagrpname', ascending: true),
     ]);
     final summaryRows = results[0] as List<Map<String, dynamic>>;
     final feeTypeMaster = results[1] as List;
@@ -5135,7 +5139,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                     [
                       cBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('STANDARD', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('CLASS', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                      cBuildCell('SECTION', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('STUDENTS', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('FEE TYPES', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('TOTAL DEMAND', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -6946,7 +6950,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                 buildCell('ADMISSION NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('STANDARD', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('CLASS', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('SECTION', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 for (int i = 0; i < feeCount; i++)
                                   buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 6 + i, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('FINE', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -7216,7 +7220,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     row++;
 
     // Column headers (no Challan No.)
-    final headers = ['SNO', 'Recpt. No.', 'Admission No.', 'Name', 'Standard', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
+    final headers = ['SNO', 'Recpt. No.', 'Admission No.', 'Name', 'Standard', 'Section', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);

@@ -69,8 +69,8 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
           child: TabBarView(
             controller: _tabController,
             children: const [
-              _PaymentSequenceTab(),
-              _FineRulesTab(),
+              PaymentSequenceTab(),
+              FineRulesTab(),
             ],
           ),
         ),
@@ -714,14 +714,14 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
 
 // ==================== Tab 3: Payment Sequence ====================
 
-class _PaymentSequenceTab extends StatefulWidget {
-  const _PaymentSequenceTab();
+class PaymentSequenceTab extends StatefulWidget {
+  const PaymentSequenceTab({super.key});
 
   @override
-  State<_PaymentSequenceTab> createState() => _PaymentSequenceTabState();
+  State<PaymentSequenceTab> createState() => PaymentSequenceTabState();
 }
 
-class _PaymentSequenceTabState extends State<_PaymentSequenceTab> with AutomaticKeepAliveClientMixin {
+class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKeepAliveClientMixin {
   bool _isLoading = false;
   bool _isSaving = false;
   List<Map<String, dynamic>> _feeGroups = [];
@@ -1010,14 +1010,14 @@ class _PaymentSequenceTabState extends State<_PaymentSequenceTab> with Automatic
 
 // ==================== Fine Rules Tab ====================
 
-class _FineRulesTab extends StatefulWidget {
-  const _FineRulesTab();
+class FineRulesTab extends StatefulWidget {
+  const FineRulesTab({super.key});
 
   @override
-  State<_FineRulesTab> createState() => _FineRulesTabState();
+  State<FineRulesTab> createState() => FineRulesTabState();
 }
 
-class _FineRulesTabState extends State<_FineRulesTab> with AutomaticKeepAliveClientMixin {
+class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 

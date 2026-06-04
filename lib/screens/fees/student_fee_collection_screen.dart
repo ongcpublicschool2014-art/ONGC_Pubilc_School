@@ -17,6 +17,7 @@ import '../../utils/receipt_pdf.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/receipt_widget.dart';
+import 'student_fee_definition_dialog.dart';
 
 import '../../widgets/app_icon.dart';
 const _classOrder = ['PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
@@ -607,18 +608,21 @@ class _StudentFeeCollectionScreenState
       // actual stuadmno so the join works even when the user searched by
       // student name in the combined search field.
       final parentFuture = SupabaseService.getStudentParent(stuId, stuadmno: stuAdmno);
+      // Show every collectible row: Regular fees (collectible defaults to true)
+      // and any Optional fee a cashier opted the student into via the Fee
+      // Definition dialog (collectible flipped to true).
       final demandsFuture = SupabaseService.fromSchema('feedemand')
           .select(
               'dem_id, demno, yr_id, demfeeyear, demfeetype, demfeeterm, feeamount, conamount, balancedue, paidamount, fineamount, duedate, paidstatus, stuclass')
           .eq('ins_id', insId)
           .eq('stuadmno', stuAdmno)
           .eq('paidstatus', 'U')
+          .eq('collectible', true)
           .gt('balancedue', 0)
           .order('duedate', ascending: true);
 
       final parent = await parentFuture;
-      final demandList =
-          List<Map<String, dynamic>>.from((await demandsFuture) as List);
+      final demandList = List<Map<String, dynamic>>.from((await demandsFuture) as List);
 
       // Sort by due date (oldest first) so cashiers collect overdue fees first.
       demandList.sort((a, b) {
@@ -880,7 +884,7 @@ class _StudentFeeCollectionScreenState
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       elevation: 6,
-                      decoration: _inputDec('Class'),
+                      decoration: _inputDec('Section'),
                       style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                       items: items,
                       onChanged: (val) {
@@ -993,9 +997,40 @@ class _StudentFeeCollectionScreenState
         SizedBox(width: 16.w),
         Container(width: 1, height: 36.h, color: AppColors.border),
         SizedBox(width: 16.w),
-        Expanded(child: _detailRow('teacher', 'Class', className)),
+        Expanded(child: _detailRow('teacher', 'Section', className)),
+        SizedBox(width: 12.w),
+        OutlinedButton.icon(
+          onPressed: _openFeeDefinition,
+          icon: const Icon(Icons.fact_check_outlined, size: 16),
+          label: const Text('Fee Definition'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.primary,
+            side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+          ),
+        ),
       ],
     );
+  }
+
+  Future<void> _openFeeDefinition() async {
+    final s = _student;
+    if (s == null) return;
+    final auth = context.read<AuthProvider>();
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => StudentFeeDefinitionDialog(
+        insId: auth.insId ?? 1,
+        stuAdmno: s['stuadmno']?.toString() ?? '',
+        stuName: s['stuname']?.toString() ?? '',
+      ),
+    );
+    if (saved == true && mounted) {
+      // Re-run the lookup so the grid picks up the new opt-in choices.
+      _admNoController.text = s['stuadmno']?.toString() ?? '';
+      await _search();
+    }
   }
 
   // ── Term Filter ──

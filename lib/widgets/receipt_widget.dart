@@ -328,7 +328,7 @@ class ReceiptWidget extends StatelessWidget {
           Expanded(
             child: _infoCell([
               _kv('Name', data.studentName),
-              _kv('Reg. No', data.admissionNo),
+              _kv('Adm. No', data.admissionNo),
               _kv('Branch', data.className),
               _kv('Mode', data.paymentMethod.isEmpty ? '-' : data.paymentMethod),
             ]),
