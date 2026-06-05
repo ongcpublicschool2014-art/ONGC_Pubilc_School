@@ -159,7 +159,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                         pw.Expanded(
                           child: infoCell([
                             kv('Name', data.studentName),
-                            kv('Reg. No', data.admissionNo),
+                            kv('Adm. No', data.admissionNo),
                             kv('Branch', data.className),
                             kv('Mode', data.paymentMethod.isEmpty ? '-' : data.paymentMethod),
                           ]),
