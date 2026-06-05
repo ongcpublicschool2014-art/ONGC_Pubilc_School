@@ -3836,7 +3836,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                                       letterSpacing: 0.3))),
                                           Expanded(
                                               flex: 2,
-                                              child: Text('CLASS',
+                                              child: Text('SECTION',
                                                   style: TextStyle(
                                                       fontSize: 12.sp,
                                                       fontWeight: FontWeight.w700,

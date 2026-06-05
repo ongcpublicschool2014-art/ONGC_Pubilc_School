@@ -97,7 +97,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   static const Map<String, String> _importFieldLabels = {
     'demno': 'Demand No',
     'stuadmno': 'Admission No',
-    'stuclass': 'Class',
+    'stuclass': 'Section',
     'clagrpname': 'Standard',
     'demfeetype': 'Fee Type',
     'yr_id': 'Fee Year',
@@ -388,7 +388,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     const aliases = {
       'demno': 'demno', 'demandno': 'demno', 'demandnumber': 'demno', 'docno': 'demno',
       'admissionno': 'stuadmno', 'admno': 'stuadmno', 'stuadmno': 'stuadmno', 'admissionnumber': 'stuadmno', 'rollno': 'stuadmno', 'roll': 'stuadmno', 'rollnumber': 'stuadmno',
-      'class': 'stuclass', 'stuclass': 'stuclass',
+      'section': 'stuclass', 'class': 'stuclass', 'stuclass': 'stuclass',
       'standard': 'clagrpname', 'standard name': 'clagrpname',
       'course': 'clagrpname', 'clagrpname': 'clagrpname', 'coursename': 'clagrpname',
       'feetype': 'demfeetype', 'demfeetype': 'demfeetype', 'type': 'demfeetype',
@@ -1013,7 +1013,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     SizedBox(height: 16.h),
 
                     // Class
-                    _buildLabel('Class'),
+                    _buildLabel('Section'),
                     Builder(builder: (_) {
                       final seen = <String>{};
                       final items = <DropdownMenuItem<String>>[];
@@ -1402,13 +1402,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               color: AppColors.tableHeadBg,
               child: Row(
                 children: [
-                  Expanded(child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                  Expanded(child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                  Expanded(child: Text('STUDENTS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
-                  Expanded(child: Text('TOTAL DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('COLLECTED', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text('STANDARD', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                  Expanded(child: Text('SECTION', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                  Expanded(child: Text('STUDENTS', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
+                  Expanded(child: Text('TOTAL DEMAND', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text('COLLECTED', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text('FINE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text('PENDING', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                   SizedBox(width: 32.w),
                 ],
               ),

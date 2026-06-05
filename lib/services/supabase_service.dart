@@ -1307,8 +1307,8 @@ class SupabaseService {
       getCourseClassOrdering(int insId) async {
     try {
       final results = await Future.wait<dynamic>([
-        client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1),
-        client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+        client.from('clagrp').select('clagrpname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('clagrpname', ascending: true),
+        client.from('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('claname', ascending: true),
       ]);
       final courseOrd = <String, int>{};
       for (final r in (results[0] as List)) {

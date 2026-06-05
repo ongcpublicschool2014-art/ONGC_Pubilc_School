@@ -111,7 +111,7 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
             listenable: _tabCtrl,
             builder: (context, _) {
               final selected = _tabCtrl.index;
-              final tabLabels = ['Standard', 'Class', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand'];
+              final tabLabels = ['Standard', 'Section', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand'];
               final tabIcons = ['teacher', 'book-1', 'category-2', 'receipt-1', 'receipt-discount', 'note-2'];
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -902,7 +902,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Class ID *', 'Class Name *', 'Active Status', 'Standard ID', 'Order'];
+  static const _headers = ['Section ID *', 'Section Name *', 'Active Status', 'Standard ID', 'Order'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
   // Existing course IDs for this institution — _validate uses these to flag
@@ -926,8 +926,8 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
     setState(() => _isLoadingExisting = true);
     try {
       final results = await Future.wait([
-        SupabaseService.client.from('class').select('*').eq('ins_id', insId).order('cla_id', ascending: true),
-        SupabaseService.client.from('clagrp').select('cgrp_id, clagrpname, ordid').eq('ins_id', insId),
+        SupabaseService.client.from('class').select('*').eq('ins_id', insId).order('ordid', ascending: true).order('claname', ascending: true),
+        SupabaseService.client.from('clagrp').select('cgrp_id, clagrpname, ordid').eq('ins_id', insId).order('ordid', ascending: true).order('clagrpname', ascending: true),
       ]);
       final rows = results[0] as List;
       final courseRows = results[1] as List;
@@ -1011,13 +1011,13 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       final name    = _rows[i].length > 1   ? _rows[i][1]?.toString().trim() ?? '' : '';
       final actRaw  = _rows[i].length > 2   ? _rows[i][2]?.toString().trim() ?? '' : '';
       final courRaw = _rows[i].length > 3   ? _rows[i][3]?.toString().trim() ?? '' : '';
-      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Class ID'; continue; }
-      if (name.isEmpty) missing.add('Class Name');
+      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Section ID'; continue; }
+      if (name.isEmpty) missing.add('Section Name');
       if (courRaw.isNotEmpty && int.tryParse(courRaw) == null) missing.add('Standard ID must be integer');
       if (actRaw.isNotEmpty && int.tryParse(actRaw) == null) missing.add('Active Status must be 0 or 1');
       if (missing.isNotEmpty) { rowErrs[i] = 'Missing: ${missing.join(', ')}'; continue; }
       // Standard ID must match an existing course for this institution before
-      // a Class can be imported (FK on class.cgrp_id).
+      // a Section can be imported (FK on class.cgrp_id).
       if (courRaw.isNotEmpty && _cgrpIds.isNotEmpty) {
         final cid = int.tryParse(courRaw);
         if (cid != null && !_cgrpIds.contains(cid)) {
@@ -1046,7 +1046,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       if (row.isEmpty || row[1].toString().trim().isEmpty) { _skipped++; continue; }
       try {
         final claId = int.tryParse(row[0].toString().trim());
-        if (claId == null) { _skipped++; _errors.add('Row: invalid Class ID'); continue; }
+        if (claId == null) { _skipped++; _errors.add('Row: invalid Section ID'); continue; }
         final actRaw  = row.length > 2 ? row[2].toString().trim() : '';
         final courRaw = row.length > 3 ? row[3].toString().trim() : '';
         final ordRaw  = row.length > 4 ? row[4].toString().trim() : '';
@@ -1072,13 +1072,13 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
   Widget build(BuildContext context) {
     super.build(context);
     return _buildImportCard(
-      title: 'Import Classes',
+      title: 'Import Sections',
       headers: _headers,
       rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
       onBrowse: _browse,
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
-      onTemplate: () => _exportTemplate('Class', _headers),
-      onSampleDownload: () => _exportSampleData('Class', _headers, [
+      onTemplate: () => _exportTemplate('Section', _headers),
+      onSampleDownload: () => _exportSampleData('Section', _headers, [
         ['1', 'I Year',   '1', '1', '1'],
         ['2', 'II Year',  '1', '1', '2'],
         ['3', 'III Year', '1', '1', '3'],
@@ -1089,7 +1089,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Standard', 'Class Name'],
+      existingHeaders: const ['Standard', 'Section Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1622,7 +1622,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Class *', 'Term *', 'Fee Type *', 'Amount *', 'New/Old/Both', 'Boy/Girl/Both', 'Day Scholar/Hosteler/Both', 'Due Date *'];
+  static const _headers = ['Section *', 'Term *', 'Fee Type *', 'Amount *', 'New/Old/Both', 'Boy/Girl/Both', 'Day Scholar/Hosteler/Both', 'Due Date *'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
 
@@ -1643,8 +1643,8 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     try {
       final results = await Future.wait([
         SupabaseService.fromSchema('classfeedemand').select('*'),
-        SupabaseService.client.from('class').select('claname, cgrp_id').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.client.from('clagrp').select('cgrp_id, clagrpname').eq('ins_id', insId),
+        SupabaseService.client.from('class').select('claname, cgrp_id, ordid').eq('ins_id', insId).eq('activestatus', 1).order('ordid', ascending: true).order('claname', ascending: true),
+        SupabaseService.client.from('clagrp').select('cgrp_id, clagrpname, ordid').eq('ins_id', insId).order('ordid', ascending: true).order('clagrpname', ascending: true),
       ]);
       final rows = results[0] as List;
       final classRows = results[1] as List;
@@ -1714,8 +1714,8 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
 
   void _validate() {
     final rowErrs = <int, String>{};
-    // Mandatory columns by index: Class(0), Term(1), Fee Type(2), Amount(3), Due Date(7).
-    const mandatory = {0: 'Class', 1: 'Term', 2: 'Fee Type', 3: 'Amount', 7: 'Due Date'};
+    // Mandatory columns by index: Section(0), Term(1), Fee Type(2), Amount(3), Due Date(7).
+    const mandatory = {0: 'Section', 1: 'Term', 2: 'Fee Type', 3: 'Amount', 7: 'Due Date'};
     String cellAt(List<dynamic> r, int idx) => r.length > idx ? r[idx]?.toString() ?? '' : '';
     for (int i = 0; i < _rows.length; i++) {
       final missing = <String>[];
@@ -1798,7 +1798,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Standard', 'Class', 'Term', 'Fee Type', 'Amount', 'New/Old/Both', 'Boy/Girl/Both', 'Day Scholar/Hosteler/Both', 'Due Date'],
+      existingHeaders: const ['Standard', 'Section', 'Term', 'Fee Type', 'Amount', 'New/Old/Both', 'Boy/Girl/Both', 'Day Scholar/Hosteler/Both', 'Due Date'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,

@@ -85,7 +85,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Students',
           icon: 'profile-2user',
           tint: Color(0xFF6FB3FF),
-          previewLabels: ['Roll', 'Class', 'Year'],
+          previewLabels: ['Roll', 'Section', 'Year'],
         ),
         _ModuleCard(
           label: 'Fee Collection',
@@ -147,7 +147,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Pending',
           icon: 'clock',
           tint: Color(0xFFEC7D8E),
-          previewLabels: ['Standard', 'Class', 'Total'],
+          previewLabels: ['Standard', 'Section', 'Total'],
         ),
       ],
     ),
@@ -173,7 +173,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Pending',
           icon: 'clock',
           tint: Color(0xFFEC7D8E),
-          previewLabels: ['Class', 'Days', 'Owed'],
+          previewLabels: ['Section', 'Days', 'Owed'],
         ),
         _ModuleCard(
           label: 'Consolidated',
