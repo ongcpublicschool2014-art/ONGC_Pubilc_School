@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
       )
 
       // DLT-approved template — text must match BULKSMS_TEMPLATE_ID exactly.
-      const message = `Thanks for Choosing Krishnasamy Institution. OTP for Login User Account creation is: ${otp}.`
+      const message = `Thanks for Choosing EduCore360. OTP for Login User Account creation is: ${otp}.`
       const url = new URL('http://api.bulksmsgateway.in/sendmessage.php')
       url.searchParams.set('user', Deno.env.get('BULKSMS_USER') ?? '')
       url.searchParams.set('password', Deno.env.get('BULKSMS_PASSWORD') ?? '')

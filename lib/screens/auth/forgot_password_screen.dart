@@ -54,7 +54,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       );
       final data = resp.data;
       // Surface server-side detail when the function rejects the request
-      // â€” without it, "Could not send OTP" gives the user no clue whether
+      // — without it, “Could not send OTP” gives the user no clue whether
       // it's a missing function deploy, missing secret, or gateway issue.
       if (resp.status >= 400) {
         setState(() {

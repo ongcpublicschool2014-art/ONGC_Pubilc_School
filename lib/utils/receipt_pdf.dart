@@ -4,7 +4,14 @@ import 'package:printing/printing.dart';
 
 import '../widgets/receipt_widget.dart';
 
-/// Builds the B5 fee-receipt PDF — a 1:1 match of [ReceiptWidget] and the
+/// ISO A5 page format — 148 × 210 mm. Exported so every `Printing.layoutPdf`
+/// call site passes it as `format:`; otherwise the print dialog defaults to
+/// the printer's loaded paper (usually A4) and the printer's right-edge
+/// unprintable margin clips the amount column.
+const PdfPageFormat a5PageFormat =
+    PdfPageFormat(148 * PdfPageFormat.mm, 210 * PdfPageFormat.mm);
+
+/// Builds the A5 fee-receipt PDF — a 1:1 match of [ReceiptWidget] and the
 /// Figma "Receipt" design. Shared by every call site (Daily Collection,
 /// Student Fee Collection, Failed Transactions) so receipts stay identical.
 Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
@@ -32,10 +39,6 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
   }
 
   const black = PdfColors.black;
-  // ISO A5 — 148 × 210 mm. Receipts are printed on A5 paper; using B5 made
-  // the printer scale the page down, leaving a wide blank border and
-  // truncating the amount column.
-  final a5 = PdfPageFormat(148 * PdfPageFormat.mm, 210 * PdfPageFormat.mm);
   const divider = pw.BorderSide(color: black, width: 1);
   const amountColWidth = 120.0;
 
@@ -44,9 +47,9 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
 
   pw.Widget kv(String label, String value) => pw.RichText(
         text: pw.TextSpan(children: [
-          pw.TextSpan(text: '$label : ', style: st(10, semi)),
+          pw.TextSpan(text: '$label : ', style: st(9, semi)),
           pw.TextSpan(
-              text: value.trim().isEmpty ? '-' : value, style: st(10, reg)),
+              text: value.trim().isEmpty ? '-' : value, style: st(9, reg)),
         ]),
       );
 
@@ -69,7 +72,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
   final pdf = pw.Document();
   pdf.addPage(
     pw.Page(
-      pageFormat: a5,
+      pageFormat: a5PageFormat,
       margin: const pw.EdgeInsets.all(24),
       theme: pw.ThemeData.withFont(base: reg, bold: bold),
       build: (ctx) {
@@ -78,12 +81,11 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
           children: [
             // Header — centered college banner, or logo + text fallback.
             if (banner != null)
-              // Three-grid header: 25% logo | 50% banner | 25% empty.
+              // Two-grid header: 20% crest | 5% gap | 75% banner.
               pw.SizedBox(
                 height: 100,
                 child: pw.Row(
                   children: [
-                    // 16% logo | 4% gap | 60% banner | 4% gap | 16% empty.
                     pw.Expanded(
                       flex: 4,
                       child: pw.Center(
@@ -99,8 +101,6 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                         child: pw.Image(banner, fit: pw.BoxFit.contain),
                       ),
                     ),
-                    pw.Expanded(flex: 1, child: pw.SizedBox()),
-                    pw.Expanded(flex: 4, child: pw.SizedBox()),
                   ],
                 ),
               )
@@ -123,7 +123,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                       mainAxisSize: pw.MainAxisSize.min,
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text(data.schoolName, style: st(15, bold)),
+                        pw.Text(data.schoolName, style: st(9, bold)),
                         pw.SizedBox(height: 3),
                         pw.Text(data.schoolAddress,
                             maxLines: 2, style: st(9, med)),
@@ -134,11 +134,16 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
               ),
             ),
             pw.SizedBox(height: 10),
-            pw.Center(child: pw.Text('RECEIPT', style: st(13, bold))),
+            pw.Center(child: pw.Text('RECEIPT', style: st(9, bold))),
             pw.SizedBox(height: 8),
             // Bordered receipt table — content-sized (no Expanded), so the
-            // PDF layout engine renders every row reliably.
-            pw.Container(
+            // PDF layout engine renders every row reliably. Centered at a
+            // fixed 350pt so the table sits inside the 371pt content area
+            // with a small inset on each side.
+            pw.Center(
+              child: pw.SizedBox(
+                width: 350,
+                child: pw.Container(
               decoration: pw.BoxDecoration(
                 border: pw.Border.all(color: black, width: 1),
                 borderRadius: pw.BorderRadius.circular(4),
@@ -183,7 +188,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                             height: 30,
                             alignment: pw.Alignment.center,
                             child: pw.Text('PARTICULARS',
-                                style: st(11, bold)),
+                                style: st(9, bold)),
                           ),
                         ),
                         pw.Container(width: 1, height: 30, color: black),
@@ -194,7 +199,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                           padding:
                               const pw.EdgeInsets.symmetric(horizontal: 12),
                           child: pw.Text('AMOUNTS (Rs)',
-                              style: st(11, bold)),
+                              style: st(9, bold)),
                         ),
                       ],
                     ),
@@ -221,7 +226,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                                   if (i > 0) pw.SizedBox(height: 6),
                                   pw.Text(
                                       '${i + 1}. ${particulars[i].type}',
-                                      style: st(10.5, reg)),
+                                      style: st(9, reg)),
                                 ],
                               ],
                             ),
@@ -243,7 +248,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                                 pw.Text(
                                     formatReceiptAmount(
                                         particulars[i].amount),
-                                    style: st(10.5, reg)),
+                                    style: st(9, reg)),
                               ],
                             ],
                           ),
@@ -264,7 +269,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                             alignment: pw.Alignment.centerRight,
                             padding: const pw.EdgeInsets.symmetric(
                                 horizontal: 12),
-                            child: pw.Text('TOTAL', style: st(12, bold)),
+                            child: pw.Text('TOTAL', style: st(9, bold)),
                           ),
                         ),
                         pw.Container(width: 1, height: 32, color: black),
@@ -275,7 +280,7 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                           padding:
                               const pw.EdgeInsets.symmetric(horizontal: 12),
                           child: pw.Text(formatReceiptAmount(data.total),
-                              style: st(12, bold)),
+                              style: st(9, bold)),
                         ),
                       ],
                     ),
@@ -291,13 +296,13 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
                         pw.Text(amountInWords(data.total),
-                            style: st(11, med)),
+                            style: st(9, med)),
                         // Receipt is not a settled-cash equivalent until the
                         // institution reconciles the bank/UPI/cheque entry.
                         if (data.reconStatus != 'R') ...[
                           pw.SizedBox(height: 4),
                           pw.Text('* Subject to Realization',
-                              style: pw.TextStyle(font: med, fontSize: 10, color: PdfColor.fromInt(0xFFB85C00))),
+                              style: pw.TextStyle(font: med, fontSize: 9, color: PdfColor.fromInt(0xFFB85C00))),
                         ],
                         pw.Spacer(),
                         pw.Container(
@@ -305,12 +310,14 @@ Future<pw.Document> buildReceiptPdf(ReceiptData data) async {
                           padding: const pw.EdgeInsets.only(right: 34),
                           child: pw.Text('Cashier',
                               textAlign: pw.TextAlign.right,
-                              style: st(12, bold)),
+                              style: st(9, bold)),
                         ),
                       ],
                     ),
                   ),
                 ],
+              ),
+            ),
               ),
             ),
           ],

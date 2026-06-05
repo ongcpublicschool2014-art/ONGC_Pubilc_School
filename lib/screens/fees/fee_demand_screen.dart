@@ -13,6 +13,7 @@ import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/formatters.dart';
 
 class FeeDemandScreen extends StatefulWidget {
   const FeeDemandScreen({super.key});
@@ -1429,17 +1430,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   return InkWell(
                     onTap: () => _loadDrilldown(className, courseName: s['clagrpname']?.toString()),
                     child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                       color: i.isEven ? Colors.white : AppColors.surface,
                       child: Row(
                         children: [
                           Expanded(child: Text(s['clagrpname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                           Expanded(child: Text(className, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                           Expanded(child: Text('$studentCount', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.center)),
-                          Expanded(child: Text('₹${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
-                          Expanded(child: Text('₹${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right)),
-                          Expanded(child: Text(totalFine > 0 ? '₹${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right)),
-                          Expanded(child: Text('₹${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.warning), textAlign: TextAlign.right)),
+                          Expanded(child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
+                          Expanded(child: Text('${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right)),
+                          Expanded(child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right)),
+                          Expanded(child: Text('${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.warning), textAlign: TextAlign.right)),
                           SizedBox(width: 32.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary)),
                         ],
                       ),
@@ -1461,10 +1462,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   Expanded(child: Text('TOTAL', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                   const Expanded(child: SizedBox.shrink()),
                   Expanded(child: Text('${summaries.fold<int>(0, (sum, s) => sum + ((s['student_count'] as num?)?.toInt() ?? 0))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.center)),
-                  Expanded(child: Text('₹${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_demand'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
-                  Expanded(child: Text('₹${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_paid'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.success), textAlign: TextAlign.right)),
-                  Expanded(child: Text('₹${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_fine'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.orange), textAlign: TextAlign.right)),
-                  Expanded(child: Text('₹${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_pending'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.warning), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_demand'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_paid'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.success), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_fine'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.orange), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_pending'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.warning), textAlign: TextAlign.right)),
                   SizedBox(width: 32.w),
                 ],
               ),
@@ -1486,18 +1487,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     }
   }
 
-  String _formatAmount(double amount) {
-    if (amount == amount.roundToDouble()) {
-      return amount.toStringAsFixed(0).replaceAllMapped(
-        RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
-        (match) => '${match[1]},',
-      );
-    }
-    return amount.toStringAsFixed(2).replaceAllMapped(
-      RegExp(r'(\d)(?=(\d{3})+\.)'),
-      (match) => '${match[1]},',
-    );
-  }
+  String _formatAmount(double amount) => formatIndianNumber(amount);
 
   /// Level 2: Student-wise summary for selected class
   Widget _buildDrilldownView() {
@@ -1537,14 +1527,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text('ADMISSION NO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('STANDARD', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('PAID', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('FINE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('PENDING', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('STATUS', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
+                    Expanded(flex: 1, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 1, child: Text('STANDARD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('PAID', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('STATUS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
                     SizedBox(width: 28.w),
                   ],
                 ),
@@ -1573,7 +1563,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _searchController.clear();
                       }),
                       child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                         child: Row(
                           children: [
                             Expanded(
@@ -1594,19 +1584,19 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('₹${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('₹${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text(totalFine > 0 ? '₹${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right),
+                              child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('₹${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalPending > 0 ? AppColors.warning : AppColors.success), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalPending > 0 ? AppColors.warning : AppColors.success), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
@@ -1704,7 +1694,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
           ];
           final hStyle = TextStyle(
-              fontSize: 13.sp,
+              fontSize: 12.sp,
               fontWeight: FontWeight.w700,
               color: AppColors.textPrimary,
               letterSpacing: 0.3);
@@ -1767,22 +1757,22 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     return Container(
                       color: i.isEven ? Colors.white : AppColors.surface,
                       padding: EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 11.h),
+                          horizontal: 20, vertical: 6.h),
                       child: Row(children: [
                         cell(0, Text('${i + 1}', style: cStyle)),
                         cell(1, Text(term, style: cStyle)),
                         cell(2, Text(feeType, style: cStyle)),
                         cell(3,
-                            Text('₹${_formatAmount(amt)}', style: cStyle)),
+                            Text('${_formatAmount(amt)}', style: cStyle)),
                         cell(
                             4,
-                            Text('₹${_formatAmount(paid)}',
+                            Text('${_formatAmount(paid)}',
                                 style: cStyle)),
                         cell(
                             5,
                             Text(
                                 fineDisplay > 0
-                                    ? '₹${_formatAmount(fineDisplay)}'
+                                    ? '${_formatAmount(fineDisplay)}'
                                     : '-',
                                 style: fineDisplay > 0
                                     ? TextStyle(
@@ -1792,7 +1782,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                     : cStyle)),
                         cell(
                             6,
-                            Text('₹${_formatAmount(bal)}',
+                            Text('${_formatAmount(bal)}',
                                 style: cStyle)),
                         cell(7, Text(formattedDueDate, style: cStyle)),
                         cell(
@@ -1832,19 +1822,19 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   cell(0, const SizedBox()),
                   cell(1, const SizedBox()),
                   cell(2, Text('Total', style: tStyle)),
-                  cell(3, Text('₹${_formatAmount(totalAmt)}',
+                  cell(3, Text('${_formatAmount(totalAmt)}',
                       style: tStyle)),
                   cell(
                       4,
-                      Text('₹${_formatAmount(totalPaid)}',
+                      Text('${_formatAmount(totalPaid)}',
                           style: tStyle.copyWith(
                               color: AppColors.success))),
                   cell(
                       5,
-                      Text('₹${_formatAmount(totalFine)}',
+                      Text('${_formatAmount(totalFine)}',
                           style: tStyle.copyWith(
                               color: AppColors.warning))),
-                  cell(6, Text('₹${_formatAmount(totalBal)}',
+                  cell(6, Text('${_formatAmount(totalBal)}',
                       style: tStyle)),
                   cell(7, const SizedBox()),
                   cell(8, const SizedBox()),
@@ -2052,7 +2042,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                 );
                               }
                               return Container(
-                                padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                                padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 6.h),
                                 color: isEven ? Colors.white : AppColors.surface,
                                 child: Row(
                                   children: [
@@ -2152,7 +2142,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.visible,
-        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3.w),
+        style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3.w),
       ),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
@@ -2164,7 +2154,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = false}) {
     final child = Container(
-      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
       decoration: BoxDecoration(
         border: Border(right: BorderSide(color: AppColors.border.withValues(alpha: 0.3))),
