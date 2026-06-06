@@ -24,6 +24,15 @@ class AdmissionScreen extends StatefulWidget {
 class _AdmissionScreenState extends State<AdmissionScreen> {
   final _searchController = TextEditingController();
 
+  // ── multi-step wizard state ──────────────────────────────────────
+  int _currentStep = 0;
+  static const _wizardSteps = [
+    {'icon': 'document-text', 'label': 'Admission'},
+    {'icon': 'user', 'label': 'Applicant'},
+    {'icon': 'book-1', 'label': 'Academic'},
+    {'icon': 'people', 'label': 'Family'},
+  ];
+
   // ── form controllers ──────────────────────────────────────────────
   final _admnoController = TextEditingController();
   final _nameController = TextEditingController();
@@ -549,16 +558,13 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   // ── build ─────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(width: 340.w, child: _buildList()),
-          SizedBox(width: 16.w),
-          Expanded(child: _buildDetail()),
-        ],
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(width: 320.w, child: _buildList()),
+        SizedBox(width: 12.w),
+        Expanded(child: _buildDetail()),
+      ],
     );
   }
 
@@ -570,7 +576,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       child: Column(
         children: [
           Padding(
-            padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 8.h),
+            padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 12.h),
             child: Row(
               children: [
                 const AppIcon('profile-add', size: 18, color: AppColors.primary),
@@ -619,9 +625,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               ],
             ),
           ),
-          SizedBox(height: 8.h),
+          SizedBox(height: 14.h),
           _statusChips(counts),
-          Divider(height: 1.h, color: AppColors.border),
+          SizedBox(height: 12.h),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -760,14 +766,151 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         children: [
           _detailHeader(),
           Divider(height: 1.h, color: AppColors.border),
+          _buildStepperHeader(),
           Expanded(
             child: SingleChildScrollView(
-              padding: EdgeInsets.all(18.w),
+              padding: EdgeInsets.fromLTRB(18.w, 0, 18.w, 18.h),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (_readonly) _allocatedBanner(),
-                  _section('Admission', [
+                  if (_currentStep == 0) ..._stepAdmissionBlocks(),
+                  if (_currentStep == 1) ..._stepApplicantBlocks(),
+                  if (_currentStep == 2) ..._stepAcademicBlocks(),
+                  if (_currentStep == 3) ..._stepFamilyBlocks(),
+                  _buildWizardNav(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepperHeader() {
+    return Container(
+      padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 14.h),
+      color: Colors.white,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: List.generate(_wizardSteps.length * 2 - 1, (index) {
+          if (index.isOdd) {
+            final stepBefore = index ~/ 2;
+            final isDone = stepBefore < _currentStep;
+            return Expanded(
+              child: Container(
+                height: 3,
+                margin: EdgeInsets.symmetric(horizontal: 6.w),
+                decoration: BoxDecoration(
+                  color: isDone ? AppColors.success : AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            );
+          }
+          final stepIndex = index ~/ 2;
+          final step = _wizardSteps[stepIndex];
+          final isActive = stepIndex == _currentStep;
+          final isDone = stepIndex < _currentStep;
+          final color = isDone
+              ? AppColors.success
+              : isActive
+                  ? AppColors.primary
+                  : AppColors.textSecondary.withValues(alpha: 0.4);
+          return GestureDetector(
+            onTap: () => setState(() => _currentStep = stepIndex),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36.w,
+                  height: 36.w,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isDone || isActive ? color : Colors.white,
+                    border: Border.all(color: color, width: 2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: isDone
+                      ? const Icon(Icons.check, color: Colors.white, size: 18)
+                      : AppIcon(step['icon'] as String, size: 16,
+                          color: isActive ? Colors.white : color),
+                ),
+                SizedBox(height: 6.h),
+                Text(step['label'] as String,
+                    style: TextStyle(
+                        fontSize: 12.sp,
+                        fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                        color: color)),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _buildWizardNav() {
+    return Padding(
+      padding: EdgeInsets.only(top: 8.h),
+      child: Row(
+        children: [
+          if (_currentStep > 0)
+            OutlinedButton.icon(
+              onPressed: () => setState(() => _currentStep -= 1),
+              icon: const Icon(Icons.arrow_back, size: 16),
+              label: const Text('Back'),
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 12.h),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
+              ),
+            ),
+          const Spacer(),
+          if (_currentStep < _wizardSteps.length - 1)
+            ElevatedButton.icon(
+              onPressed: () => setState(() => _currentStep += 1),
+              icon: const Icon(Icons.arrow_forward, size: 16),
+              label: const Text('Next'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 12.h),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
+              ),
+            )
+          else
+            _wizardSaveButton(),
+        ],
+      ),
+    );
+  }
+
+  /// Final step's "Save Admission" CTA — reuses the existing _actionBar's
+  /// save handler so the wizard saves through the same path.
+  Widget _wizardSaveButton() {
+    // The existing _actionBar wraps the save button with disable/saving state
+    // logic; we mirror that here so the wizard's last step behaves the same.
+    return ElevatedButton.icon(
+      onPressed: _saving || _readonly ? null : _save,
+      icon: _saving
+          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : const Icon(Icons.save, size: 16),
+      label: const Text('Save Admission'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppColors.accent,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 12.h),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
+      ),
+    );
+  }
+
+  List<Widget> _stepAdmissionBlocks() {
+    return [
+      _section('Admission', [
                     _row([
                       _dropdown('Admission No Mode', _regMode, _regModes, (v) => setState(() {
                             _regMode = v ?? 'Manual';
@@ -782,7 +925,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                       _dropdown('Source', _source, _sources, (v) => setState(() => _source = v)),
                     ]),
                   ]),
-                  _section('Applicant', [
+    ];
+  }
+
+  List<Widget> _stepApplicantBlocks() {
+    return [
+      _section('Applicant', [
                     _row([
                       _text('Full Name *', _nameController),
                       _dropdown('Gender *', _gender, _genders, (v) => setState(() => _gender = v)),
@@ -809,7 +957,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                       const Spacer(),
                     ]),
                   ]),
-                  _section('Applied For', [
+    ];
+  }
+
+  List<Widget> _stepAcademicBlocks() {
+    return [
+      _section('Applied For', [
                     _row([
                       _dropdown('Admitted Standard', _selectedAdmittedStandard, _standardNames,
                           (v) => setState(() => _selectedAdmittedStandard = v)),
@@ -857,7 +1010,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                       const Spacer(),
                     ]),
                   ]),
-                  _section('Parent / Guardian', [
+    ];
+  }
+
+  List<Widget> _stepFamilyBlocks() {
+    return [
+      _section('Parent / Guardian', [
                     _row([
                       _text('Father Name', _fatherNameController),
                       _text('Father Mobile', _fatherMobileController, keyboard: TextInputType.phone),
@@ -890,15 +1048,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                   _section('Remarks', [
                     _text('Notes', _remarksController, maxLines: 2),
                   ]),
-                ],
-              ),
-            ),
-          ),
-          Divider(height: 1.h, color: AppColors.border),
-          _actionBar(),
-        ],
-      ),
-    );
+    ];
   }
 
   Widget _allocatedBanner() {
@@ -978,7 +1128,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               icon: const Icon(Icons.assignment_ind, size: 16),
               label: const Text('Allocate Section'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
+                backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
               ),
             ),
@@ -1002,23 +1152,50 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
 
   // ── form helpers ──────────────────────────────────────────────────
   Widget _section(String title, List<Widget> children) {
+    const sectionIcons = {
+      'Admission': 'document-text',
+      'Applicant': 'user',
+      'Applied For': 'book-1',
+      'Additional Details': 'info-circle',
+      'Previous School': 'teacher',
+      'Parent / Guardian': 'people',
+      'Remarks': 'note',
+    };
+    final icon = sectionIcons[title] ?? 'document-text';
     return Container(
       width: double.infinity,
       margin: EdgeInsets.only(bottom: 14.h),
-      padding: EdgeInsets.all(14.w),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title.toUpperCase(),
-              style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5, color: AppColors.accentDark)),
-          SizedBox(height: 10.h),
-          ...children,
+          Container(
+            padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 12.h),
+            decoration: BoxDecoration(
+              color: AppColors.accent.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(10.r)),
+              border: const Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(
+              children: [
+                AppIcon(icon, size: 18, color: AppColors.accent),
+                SizedBox(width: 10.w),
+                Text(title,
+                    style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 16.h),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: children,
+            ),
+          ),
         ],
       ),
     );
@@ -1040,21 +1217,28 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   }
 
   Widget _label(String text) => Padding(
-        padding: EdgeInsets.only(bottom: 5.h, left: 2.w),
+        padding: EdgeInsets.only(bottom: 6.h),
         child: Text(text,
-            style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+            style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
       );
 
-  InputDecoration _dec() => InputDecoration(
-        isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-        filled: true,
-        fillColor: _readonly ? AppColors.surface : Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8.r),
-            borderSide: const BorderSide(color: AppColors.border)),
-      );
+  InputDecoration _dec({String? hint}) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      filled: true,
+      fillColor: _readonly ? AppColors.surface : Colors.white,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+    );
+  }
 
   Widget _text(String label, TextEditingController c,
       {bool enabled = true, TextInputType? keyboard, int maxLines = 1}) {
@@ -1082,6 +1266,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         DropdownButtonFormField<String>(
           initialValue: items.contains(value) ? value : null,
           isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
           style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
           decoration: _dec(),
           items: items
@@ -1103,6 +1290,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         DropdownButtonFormField<String>(
           initialValue: values.contains(value) ? value : null,
           isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
           style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
           decoration: _dec(),
           items: items
@@ -1126,6 +1316,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         DropdownButtonFormField<String>(
           initialValue: values.contains(_selectedRegSeqId) ? _selectedRegSeqId : null,
           isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
           style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
           decoration: _dec(),
           hint: Text('Auto Admission No', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
@@ -1158,6 +1351,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         DropdownButtonFormField<String>(
           initialValue: _selectedYrId,
           isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
           style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
           decoration: _dec(),
           items: _years

@@ -346,7 +346,7 @@ class _StaffDesignationTabState extends State<_StaffDesignationTab> with Automat
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
+                              backgroundColor: AppColors.accent,
                               foregroundColor: Colors.white,
                               elevation: 0,
                             ),
@@ -381,9 +381,9 @@ class _StaffDesignationTabState extends State<_StaffDesignationTab> with Automat
                         color: idx.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [
-                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                            Expanded(flex: 3, child: Text(des['desname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                            Expanded(flex: 3, child: Text(_getDesignationName(des['desrepto'] as int?), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            Expanded(flex: 3, child: Text(des['desname']?.toString() ?? '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            Expanded(flex: 3, child: Text(_getDesignationName(des['desrepto'] as int?), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             SizedBox(
                               width: 80.w,
                               child: Row(
@@ -650,7 +650,7 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
+                              backgroundColor: AppColors.accent,
                               foregroundColor: Colors.white,
                               elevation: 0,
                             ),
@@ -685,9 +685,9 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
                         color: idx.isEven ? Colors.white : AppColors.surface,
                         child: Row(
                           children: [
-                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                            Expanded(flex: 3, child: Text(role['urname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                            Expanded(flex: 2, child: Text(role['inscode']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            Expanded(flex: 3, child: Text(role['urname']?.toString() ?? '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            Expanded(flex: 2, child: Text(role['inscode']?.toString() ?? '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             SizedBox(
                               width: 80.w,
                               child: Row(
@@ -916,7 +916,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
                 dividerThickness: 1,
                 headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
                 headingTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary, letterSpacing: 0.3),
-                dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                 columnSpacing: 24,
                 horizontalMargin: 20,
                 headingRowHeight: 44.h,
@@ -1376,7 +1376,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
+                              backgroundColor: AppColors.accent,
                               foregroundColor: Colors.white,
                               elevation: 0,
                             ),

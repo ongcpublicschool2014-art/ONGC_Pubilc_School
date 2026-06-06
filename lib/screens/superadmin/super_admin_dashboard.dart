@@ -3686,7 +3686,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                         icon: AppIcon('refresh', size: 16, color: Colors.white),
                         label: const Text('Refresh'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
+                          backgroundColor: AppColors.accent,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -4910,9 +4910,9 @@ class _AggregateDrilldownPage extends StatelessWidget {
                                           padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 6.h),
                                           child: Row(
                                             children: [
-                                              SizedBox(width: 28, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              SizedBox(width: 28, child: Text('${i + 1}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                               Expanded(
                                                 flex: 4,
                                                 child: mode == 'active'

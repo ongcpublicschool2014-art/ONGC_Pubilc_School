@@ -186,7 +186,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
                   icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                   label: const Text('Refresh'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
+                    backgroundColor: AppColors.accent,
                     foregroundColor: Colors.white,
                     elevation: 0,
                   ),

@@ -590,7 +590,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(fg['fgdesc']?.toString() ?? '',
-                                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                                 if (fg['yrlabel'] != null)
                                   Text(fg['yrlabel'].toString(),
                                       style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
@@ -674,7 +674,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                     icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                     label: const Text('Refresh'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
+                      backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       elevation: 0,
                     ),
@@ -731,14 +731,14 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                             SizedBox(
                               width: 50.w,
                               child: Text('${i + 1}',
-                                  style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                                  style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                             ),
                             SizedBox(width: 16.w),
                             Expanded(
                               flex: 3,
                               child: Text(
                                 b['banname']?.toString() ?? '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                                style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -746,7 +746,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               flex: 2,
                               child: Text(
                                 b['banbranch']?.toString() ?? '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                                style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -848,7 +848,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                 Expanded(
                   child: Text(
                     b['banname']?.toString() ?? '-',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),

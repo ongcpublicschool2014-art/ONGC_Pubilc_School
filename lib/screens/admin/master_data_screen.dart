@@ -7,69 +7,107 @@ import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/master_crud_panel.dart';
+import '../../widgets/pill_tab.dart';
 import '../admission/admission_master_screen.dart' show TermPanel;
 import 'master_import_screen.dart';
 
-/// Master Data — two tabs: Standard, Section.
-/// Each tab offers inline add/edit/list plus a Import CSV/Excel toggle that
+/// Master Data — three tabs: Standard, Section, Term Period.
+/// Each tab offers inline add/edit/list plus an "Import CSV/Excel" toggle that
 /// switches to the bulk import flow (reuses MasterImportScreen).
-class MasterDataScreen extends StatelessWidget {
+class MasterDataScreen extends StatefulWidget {
   const MasterDataScreen({super.key});
 
   @override
+  State<MasterDataScreen> createState() => _MasterDataScreenState();
+}
+
+class _MasterDataScreenState extends State<MasterDataScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  static const _tabLabels = ['Standard', 'Section', 'Term Period'];
+  static const _tabIcons = ['book-1', 'category', 'calendar-1'];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabLabels.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Padding(
-        padding: EdgeInsets.all(16.w),
-        child: Container(
-          decoration: AppCard.decoration(),
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 6.h),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Pill-style tabs matching Fee Master / Reports / Dashboard.
+        ListenableBuilder(
+          listenable: _tabController,
+          builder: (context, _) {
+            final selected = _tabController.index;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    const AppIcon('document-upload', size: 20, color: AppColors.primary),
-                    SizedBox(width: 10.w),
-                    Text('Master Data',
-                        style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                    for (var i = 0; i < _tabLabels.length; i++) ...[
+                      PillTab(
+                        icon: _tabIcons[i],
+                        label: _tabLabels[i],
+                        selected: selected == i,
+                        onTap: () => _tabController.animateTo(i),
+                      ),
+                      if (i < _tabLabels.length - 1)
+                        SizedBox(width: PillTab.gap(context)),
+                    ],
                   ],
                 ),
               ),
-              TabBar(
-                isScrollable: true,
-                labelColor: AppColors.primary,
-                unselectedLabelColor: AppColors.textSecondary,
-                indicatorColor: AppColors.accent,
-                labelStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(text: 'Standard'),
-                  Tab(text: 'Section'),
-                  Tab(text: 'Term Period'),
-                ],
-              ),
-              Divider(height: 1.h, color: AppColors.border),
-              const Expanded(
-                child: TabBarView(
-                  children: [
-                    _PanelWithImport(importTabIndex: 0, title: 'Standard', child: MasterCrudPanel(table: 'clagrp', idCol: 'cgrp_id', nameCol: 'clagrpname', title: 'Standard', ordidCol: 'ordid')),
-                    _PanelWithImport(importTabIndex: 1, title: 'Section', child: _SectionCrudPanel()),
-                    TermPanel(),
-                  ],
+            );
+          },
+        ),
+        SizedBox(height: 6.h),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _PanelWithImport(
+                importTabIndex: 0,
+                title: 'Standard',
+                childBuilder: (onImport) => MasterCrudPanel(
+                  table: 'clagrp',
+                  idCol: 'cgrp_id',
+                  nameCol: 'clagrpname',
+                  title: 'Standard',
+                  icon: 'book-1',
+                  ordidCol: 'ordid',
+                  onImport: onImport,
                 ),
               ),
+              _PanelWithImport(
+                importTabIndex: 1,
+                title: 'Section',
+                childBuilder: (onImport) => _SectionCrudPanel(onImport: onImport),
+              ),
+              const TermPanel(),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 }
 
 /// Section CRUD — name plus parent Standard (public.class.cgrp_id).
 class _SectionCrudPanel extends StatefulWidget {
-  const _SectionCrudPanel();
+  final VoidCallback? onImport;
+  const _SectionCrudPanel({this.onImport});
   @override
   State<_SectionCrudPanel> createState() => _SectionCrudPanelState();
 }
@@ -209,42 +247,61 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
   }
 
-  InputDecoration _dec(String label) => InputDecoration(
-        labelText: label,
-        isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-      );
+  /// Filled input decoration matching the User Creation form style — bold
+  /// label rendered above (handled separately), placeholder hint inside.
+  InputDecoration _filledFieldDec(String hint) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
 
-  TextStyle _h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-  TextStyle _c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+  TextStyle _h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+  TextStyle _c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
           SizedBox(
             width: 320.w,
             child: Container(
-              padding: EdgeInsets.all(16.w),
+              padding: EdgeInsets.all(20.w),
               decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10.r),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_editId != null ? 'Edit Section' : 'Add Section',
-                      style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 12.h),
-                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Section Name *')),
-                  SizedBox(height: 10.h),
+                  Row(children: [
+                    const AppIcon('category', size: 18, color: AppColors.accent),
+                    SizedBox(width: 8.w),
+                    Text(_editId != null ? 'Edit Section' : 'Add Section',
+                        style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+                  ]),
+                  SizedBox(height: 20.h),
+                  Text('Section Name *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('Enter section name')),
+                  SizedBox(height: 16.h),
+                  Text('Standard *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+                  SizedBox(height: 6.h),
                   Builder(builder: (_) {
                     final seen = <String>{};
                     final unique = <Map<String, dynamic>>[];
@@ -257,13 +314,16 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
                     return DropdownButtonFormField<String>(
                       initialValue: selected,
                       isExpanded: true,
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      elevation: 6,
                       style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                      decoration: _dec('Standard *'),
+                      decoration: _filledFieldDec('Select standard'),
                       items: unique.map((s) => DropdownMenuItem(value: s['cgrp_id'].toString(), child: Text(s['clagrpname']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
                       onChanged: (v) => setState(() => _cgrpId = v),
                     );
                   }),
-                  SizedBox(height: 14.h),
+                  SizedBox(height: 18.h),
                   Row(children: [
                     Expanded(
                       child: ElevatedButton.icon(
@@ -285,18 +345,48 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
           SizedBox(width: 16.w),
           Expanded(
             child: Container(
+              padding: EdgeInsets.all(16.w),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+                borderRadius: BorderRadius.circular(10.r),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 children: [
+                  Padding(
+                    padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+                    child: Row(children: [
+                      const AppIcon('category', size: 18, color: AppColors.accent),
+                      SizedBox(width: 8.w),
+                      Text('Sections',
+                          style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+                      SizedBox(width: 8.w),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8.r),
+                        ),
+                        child: Text('${_rows.length} sections',
+                            style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                      ),
+                      const Spacer(),
+                      if (widget.onImport != null) _importButton(widget.onImport!),
+                    ]),
+                  ),
+                  Expanded(
+                    child: Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8.r),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Column(children: [
                   Container(
                     color: AppColors.tableHeadBg,
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     child: Row(children: [
-                      SizedBox(width: 50.w, child: Text('S.No', style: _h())),
+                      SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
                       Expanded(flex: 2, child: Text('SECTION', style: _h())),
                       Expanded(flex: 2, child: Text('STANDARD', style: _h())),
                       SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
@@ -315,10 +405,10 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
                                   final id = r['cla_id'] is int ? r['cla_id'] as int : int.tryParse(r['cla_id'].toString()) ?? 0;
                                   final stdName = _stdName[r['cgrp_id']] ?? '';
                                   return Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                                     child: Row(children: [
                                       SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                                      Expanded(flex: 2, child: Text(r['claname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                      Expanded(flex: 2, child: Text(r['claname']?.toString() ?? '', style: _c())),
                                       Expanded(flex: 2, child: Text(stdName, style: _c())),
                                       SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                         InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
@@ -330,11 +420,38 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
                                 },
                               ),
                   ),
+                ]),
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
         ],
+    );
+  }
+
+  Widget _importButton(VoidCallback onTap) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final iconSize = compact ? 12.0 : 16.0;
+    final hPad = compact ? 10.0 : 18.0;
+    final radius = compact ? 6.0 : 10.0;
+    final textSize = compact ? 11.0 : 13.0;
+    return SizedBox(
+      height: btnHeight,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
+        label: const Text('Import CSV/Excel'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: EdgeInsets.symmetric(horizontal: hPad),
+          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+        ),
       ),
     );
   }
@@ -342,11 +459,15 @@ class _SectionCrudPanelState extends State<_SectionCrudPanel> with AutomaticKeep
 
 /// Local copy of the Fee-Master pattern: wraps a CRUD panel with an Import
 /// CSV/Excel toggle. importTabIndex selects which Master Data tab to load.
+/// Wraps a CRUD panel with an "Import CSV/Excel" toggle. The toggle button is
+/// rendered INSIDE the child panel's table-card header (via the [onImport]
+/// callback passed to [childBuilder]) — matching the Fee Master layout. When
+/// imports are active, the body is replaced by the Master Data import view.
 class _PanelWithImport extends StatefulWidget {
-  final Widget child;
+  final Widget Function(VoidCallback onImport) childBuilder;
   final int importTabIndex;
   final String title;
-  const _PanelWithImport({required this.importTabIndex, required this.title, required this.child});
+  const _PanelWithImport({required this.importTabIndex, required this.title, required this.childBuilder});
   @override
   State<_PanelWithImport> createState() => _PanelWithImportState();
 }
@@ -356,13 +477,13 @@ class _PanelWithImportState extends State<_PanelWithImport> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 0),
-          child: Row(
-            children: [
-              if (_importing) ...[
+    if (_importing) {
+      return Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(0, 4.h, 0, 0),
+            child: Row(
+              children: [
                 OutlinedButton.icon(
                   onPressed: () => setState(() => _importing = false),
                   icon: const Icon(Icons.arrow_back, size: 16),
@@ -372,26 +493,12 @@ class _PanelWithImportState extends State<_PanelWithImport> {
                 Text('Import ${widget.title}',
                     style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
               ],
-              const Spacer(),
-              if (!_importing)
-                ElevatedButton.icon(
-                  onPressed: () => setState(() => _importing = true),
-                  icon: const Icon(Icons.upload_file, size: 16),
-                  label: const Text('Import CSV/Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-            ],
+            ),
           ),
-        ),
-        Expanded(
-          child: _importing
-              ? MasterImportScreen(initialTabIndex: widget.importTabIndex, showInternalTabs: false)
-              : widget.child,
-        ),
-      ],
-    );
+          Expanded(child: MasterImportScreen(initialTabIndex: widget.importTabIndex, showInternalTabs: false)),
+        ],
+      );
+    }
+    return widget.childBuilder(() => setState(() => _importing = true));
   }
 }
