@@ -209,30 +209,57 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Container(
-        decoration: AppCard.decoration(),
-        child: Column(
-          children: [
-            _header(),
-            Divider(height: 1.h, color: AppColors.border),
-            _controls(),
-            Divider(height: 1.h, color: AppColors.border),
-            _tableHeader(),
-            Expanded(child: _body()),
-            Divider(height: 1.h, color: AppColors.border),
-            _actionBar(),
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              children: [
+                _header(),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 8.h),
+                    child: Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8.r),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Column(
+                        children: [
+                          _tableHeader(),
+                          Expanded(child: _body()),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                _actionBar(),
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
   Widget _header() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final btnIcon = compact ? 12.0 : 16.0;
+    final btnHPad = compact ? 10.0 : 18.0;
+    final btnRadius = compact ? 6.0 : 10.0;
+    final btnText = compact ? 11.0 : 13.0;
     return Padding(
-      padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 14.h),
+      padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const AppIcon('book-1', size: 20, color: AppColors.primary),
           SizedBox(width: 10.w),
@@ -242,8 +269,31 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
           Text('Admitted — pending allocation',
               style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
           const Spacer(),
+          SizedBox(width: 180.w, child: _standardDropdown()),
+          SizedBox(width: 10.w),
+          SizedBox(width: 160.w, child: _orderDropdown()),
+          SizedBox(width: 10.w),
+          SizedBox(
+            height: btnHeight,
+            child: ElevatedButton.icon(
+              onPressed: _selectedStandard == null ? null : _autoFill,
+              icon: Icon(Icons.auto_fix_high, size: btnIcon, color: Colors.white),
+              label: const Text('Auto Fill'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: AppColors.border,
+                disabledForegroundColor: AppColors.textSecondary,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: btnHPad),
+                textStyle: TextStyle(fontSize: btnText, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(btnRadius)),
+              ),
+            ),
+          ),
+          SizedBox(width: 12.w),
           Container(
-            padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 3.h),
+            padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
             decoration: BoxDecoration(
               color: AppColors.warning.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12.r),
@@ -256,38 +306,18 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     );
   }
 
-  Widget _controls() {
-    return Padding(
-      padding: EdgeInsets.all(14.w),
-      child: Row(
-        children: [
-          _miniLabel('Standard'),
-          SizedBox(width: 8.w),
-          SizedBox(width: 240.w, child: _standardDropdown()),
-          SizedBox(width: 20.w),
-          _miniLabel('Order By'),
-          SizedBox(width: 8.w),
-          SizedBox(width: 200.w, child: _orderDropdown()),
-          const Spacer(),
-          OutlinedButton.icon(
-            onPressed: _selectedStandard == null ? null : _autoFill,
-            icon: const Icon(Icons.auto_fix_high, size: 16),
-            label: const Text('Auto Fill'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _miniLabel(String t) => Text(t,
-      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary));
+      style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary));
 
   Widget _standardDropdown() {
     return DropdownButtonFormField<String>(
       initialValue: _selectedStandard,
       isExpanded: true,
-      decoration: _dec(),
-      hint: Text('Select standard', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 6,
+      style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+      decoration: _dec(hint: 'Select Standard'),
       items: _standardNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: (v) => setState(() {
         _selectedStandard = v;
@@ -300,24 +330,28 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     return DropdownButtonFormField<String>(
       initialValue: _orderBy,
       isExpanded: true,
-      decoration: _dec(),
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 6,
+      style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+      decoration: _dec(hint: 'Order By'),
       items: _orderOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
       onChanged: (v) => setState(() => _orderBy = v ?? 'Admission No'),
     );
   }
 
   Widget _tableHeader() {
-    TextStyle s() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+    TextStyle s() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
     return Container(
       color: AppColors.tableHeadBg,
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
       child: Row(
         children: [
-          SizedBox(width: 140.w, child: Text('Admission No', style: s())),
-          Expanded(flex: 3, child: Text('Student Name', style: s())),
-          SizedBox(width: 80.w, child: Text('Sex', style: s())),
-          Expanded(flex: 2, child: Text('Standard', style: s())),
-          SizedBox(width: 220.w, child: Text('Section', style: s())),
+          SizedBox(width: 140.w, child: Text('ADMISSION NO', style: s())),
+          Expanded(flex: 3, child: Text('STUDENT NAME', style: s())),
+          SizedBox(width: 80.w, child: Text('SEX', style: s())),
+          Expanded(flex: 2, child: Text('STANDARD', style: s())),
+          SizedBox(width: 220.w, child: Text('SECTION', style: s())),
         ],
       ),
     );
@@ -348,7 +382,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
 
   Widget _row(AdmissionModel a, List<String> options) {
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
       child: Row(
         children: [
           SizedBox(width: 140.w, child: Text(a.admno, style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary))),
@@ -388,21 +422,28 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.save, size: 16),
             label: Text(_saving ? 'Allocating…' : 'Save Allocation'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
           ),
         ],
       ),
     );
   }
 
-  InputDecoration _dec() => InputDecoration(
-        isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8.r),
-            borderSide: const BorderSide(color: AppColors.border)),
-      );
+  InputDecoration _dec({String? hint}) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      filled: true,
+      fillColor: Colors.white,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+    );
+  }
 }

@@ -66,7 +66,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   String _insPhone = '';
   String _insEmail = '';
 
-  // PowerCollege tab state — independent date range so it doesn't override
+  // PowerSchool tab state — independent date range so it doesn't override
   // the Daily Collection range when the user navigates between tabs.
   DateTime? _pcFrom;
   DateTime? _pcTo;
@@ -149,10 +149,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     return datePart;
   }
 
-  /// Quick-range / custom-range filter dialog for the PowerCollege tab.
+  /// Quick-range / custom-range filter dialog for the PowerSchool tab.
   /// Mirrors the Daily Collection dialog so the two reports feel
   /// consistent, but trims the payment-mode and user pickers since the
-  /// PowerCollege export is mode-agnostic.
+  /// PowerSchool export is mode-agnostic.
   Future<void> _openPcDateDialog() async {
     await showDialog<void>(
       context: context,
@@ -299,7 +299,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                       _pcFrom = from;
                       _pcTo = to;
                     });
-                    _loadPowerCollege();
+                    _loadPowerSchool();
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -627,8 +627,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     _dailyTo = DateTime(now.year, now.month, now.day);
     _pcFrom = DateTime(now.year, now.month, 1);
     _pcTo = DateTime(now.year, now.month, now.day);
-    // Pre-load the PowerCollege list so the tab isn't blank on first view.
-    _loadPowerCollege();
+    // Pre-load the PowerSchool list so the tab isn't blank on first view.
+    _loadPowerSchool();
     _loadData();
     _loadDailyCollection();
   }
@@ -872,7 +872,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           listenable: _tabController,
           builder: (context, _) {
             final selected = _tabController.index;
-            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'PowerCollege'];
+            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'PowerSchool'];
             final tabIcons = ['calendar-1', 'book-1', 'clock', 'chart-2', 'document-download'];
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -922,7 +922,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                           _buildStudentLedger(),
                           _buildPendingPayment(),
                           _buildConsolidatedStatus(),
-                          _buildPowerCollege(),
+                          _buildPowerSchool(),
                         ],
                       ),
           ),
@@ -1230,7 +1230,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                 label: const Text('Refresh'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF10B981),
+                  backgroundColor: AppColors.accent,
                   foregroundColor: Colors.white,
                   elevation: 0,
                 ),
@@ -1287,8 +1287,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       byClass.putIfAbsent('${r['course']}|${r['class']}', () => []).add(r);
     }
 
-    final headerStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
+    final headerStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final cellStyle = TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
     return Column(
       // tab-body-open
@@ -1610,8 +1610,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       grandConcess += (r['concession'] as double);
     }
 
-    final headerStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
+    final headerStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final cellStyle = TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
     return Column(
       // tab-body-open
@@ -1907,7 +1907,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _buildStudentLedger() {
     final students = _studentsForLedger();
     final headerStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-    final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
+    final cellStyle = TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
     // Build rows grouped by term (YEARLY / V SEM / VI SEM / Misc)
     final grouped = <String, List<Map<String, dynamic>>>{};
@@ -2366,7 +2366,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ),
         );
 
-    final headerStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+    final headerStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
     final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textPrimary);
 
     final visibleRows = _dailyRows.where((r) {
@@ -2903,7 +2903,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           final val = (row[t] as double?) ?? 0;
           if (val > 0) classTotals[t] = (classTotals[t] ?? 0) + val;
         }
-        final cs = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+        final cs = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
         rowWidgets.add(Container(
           color: zebra ? AppColors.surface : Colors.white,
           padding: EdgeInsets.symmetric(vertical: 6.h),
@@ -3529,7 +3529,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
-  /// PowerCollege export — one row per (payment, fee demand) for every
+  /// PowerSchool export — one row per (payment, fee demand) for every
   /// reconciled payment in the selected date range. Joins payment +
   /// paymentdetails + feedemand + students + bank server-side via the
   /// get_powercollege_export RPC. Only paystatus='C' AND recon_status='R'
@@ -3538,7 +3538,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   /// into _pcRows. Called on tab init and when the user changes a date.
   /// Same RPC the export uses; we just keep the result in memory so the
   /// tab can show a preview and the export button doesn't have to re-fetch.
-  Future<void> _loadPowerCollege() async {
+  Future<void> _loadPowerSchool() async {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
     final schema = SupabaseService.currentSchema;
@@ -3564,16 +3564,16 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         });
       }
     } catch (e) {
-      debugPrint('PowerCollege load error: $e');
+      debugPrint('PowerSchool load error: $e');
       if (mounted) setState(() => _pcLoading = false);
     }
   }
 
-  Future<void> _exportPowerCollege() async {
+  Future<void> _exportPowerSchool() async {
     if (_pcFrom == null || _pcTo == null) return;
     if (_pcRows.isEmpty && !_pcLoading) {
       // Last-second refresh in case the list was cleared.
-      await _loadPowerCollege();
+      await _loadPowerSchool();
     }
     if (_pcRows.isEmpty) {
       if (mounted) {
@@ -3588,7 +3588,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     try {
       final rows = _pcRows;
       final excel = xl.Excel.createExcel();
-      final sheet = excel['PowerCollege'];
+      final sheet = excel['PowerSchool'];
       excel.delete('Sheet1');
 
       final headerStyle = xl.CellStyle(
@@ -3675,11 +3675,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.setColumnWidth(12, 18);
       sheet.setColumnWidth(13, 16);
 
-      await _saveExcel(excel, 'PowerCollege_${_formatDateCompact(_pcFrom!)}_${_formatDateCompact(_pcTo!)}');
+      await _saveExcel(excel, 'PowerSchool_${_formatDateCompact(_pcFrom!)}_${_formatDateCompact(_pcTo!)}');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PowerCollege export error. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('PowerSchool export error. ${friendlyError(e)}'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -3687,11 +3687,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
-  /// PowerCollege tab — date range pickers, Excel export button, and a
+  /// PowerSchool tab — date range pickers, Excel export button, and a
   /// preview table of every reconciled per-line-item row that the export
   /// would emit. Same shape as Daily Collection so users can see what
   /// they'll get before downloading.
-  Widget _buildPowerCollege() {
+  Widget _buildPowerSchool() {
     String fmt(dynamic raw) {
       if (raw == null) return '';
       final dt = DateTime.tryParse(raw.toString());
@@ -3707,7 +3707,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             children: [
               const AppIcon('document-download', size: 18, color: AppColors.accent),
               SizedBox(width: 8.w),
-              Text('PowerCollege Export',
+              Text('PowerSchool Export',
                   style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
               SizedBox(width: 8.w),
               if (_pcLoading)
@@ -3732,7 +3732,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               ),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
-                onPressed: (_pcRows.isEmpty || _pcExporting) ? () {} : _exportPowerCollege,
+                onPressed: (_pcRows.isEmpty || _pcExporting) ? () {} : _exportPowerSchool,
                 icon: Icons.download_rounded,
                 label: _pcExporting ? 'Exporting…' : 'Excel',
                 color: const Color(0xFF10B981),
@@ -3752,7 +3752,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: AppColors.border),
                   ),
-                  child: _PowerCollegeTable(rows: _pcRows, fmt: fmt),
+                  child: _PowerSchoolTable(rows: _pcRows, fmt: fmt),
                 ),
         ),
       ],
@@ -4029,7 +4029,7 @@ class _StickyTableState extends State<_StickyTable> {
       fontWeight: FontWeight.w700,
       color: AppColors.textPrimary,
     );
-    final cellStyle = TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
+    final cellStyle = TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
 
     Widget rowWidget(List<String> values, List<double> widths, {Color? bg, TextStyle? style, double? vPad}) {
       return Container(
@@ -4156,20 +4156,20 @@ class _StickyTableState extends State<_StickyTable> {
   }
 }
 
-/// Custom table for the PowerCollege report. Sticky header, scrollable body,
+/// Custom table for the PowerSchool report. Sticky header, scrollable body,
 /// and the project's standard Windows-style horizontal scrollbar pinned to
 /// the bottom (matches the table style used on Fee Collection / Students /
 /// Failed Transactions).
-class _PowerCollegeTable extends StatefulWidget {
-  const _PowerCollegeTable({required this.rows, required this.fmt});
+class _PowerSchoolTable extends StatefulWidget {
+  const _PowerSchoolTable({required this.rows, required this.fmt});
   final List<Map<String, dynamic>> rows;
   final String Function(dynamic) fmt;
 
   @override
-  State<_PowerCollegeTable> createState() => _PowerCollegeTableState();
+  State<_PowerSchoolTable> createState() => _PowerSchoolTableState();
 }
 
-class _PowerCollegeTableState extends State<_PowerCollegeTable> {
+class _PowerSchoolTableState extends State<_PowerSchoolTable> {
   final _hCtrl = ScrollController();
   final _vCtrl = ScrollController();
 

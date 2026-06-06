@@ -414,7 +414,7 @@ Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = fa
     decoration: BoxDecoration(
       border: Border(right: BorderSide(color: AppColors.border.withValues(alpha: 0.3))),
     ),
-    child: Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis),
+    child: Text(text, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis),
   );
   return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
 }
@@ -645,7 +645,7 @@ Widget _buildImportCard({
                                                   color: const Color(0xFFFCE4E4),
                                                   border: Border(right: BorderSide(color: AppColors.border.withValues(alpha: 0.3))),
                                                 ),
-                                                child: Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis),
+                                                child: Text(text, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis),
                                               ),
                                             ),
                                           );

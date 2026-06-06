@@ -1108,7 +1108,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     child: Builder(builder: (context) {
                       const flexes = <int>[1, 3, 2, 2, 2];
                       const headers = <String>[
-                        'S No.', 'PAYMENT METHOD', 'TRANSACTIONS',
+                        'S NO.', 'PAYMENT METHOD', 'TRANSACTIONS',
                         'STUDENTS', 'AMOUNT',
                       ];
                       final hStyle = TextStyle(
@@ -1274,7 +1274,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       child: Builder(builder: (context) {
                         const flexes = <int>[1, 2, 3, 2, 2, 2, 2, 2];
                         const headers = <String>[
-                          'S No.', 'PAY NO', 'STUDENT', 'STANDARD',
+                          'S NO.', 'PAY NO', 'STUDENT', 'STANDARD',
                           'SECTION', 'DATE', 'MODE', 'AMOUNT',
                         ];
                         final hStyle = TextStyle(
@@ -1822,7 +1822,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
           child: Builder(builder: (context) {
             const flexes = <int>[1, 3, 2, 2, 2, 2, 2, 2];
             const headers = <String>[
-              'S No.', 'FEE GROUP', 'STUDENTS', 'TOTAL DEMAND',
+              'S NO.', 'FEE GROUP', 'STUDENTS', 'TOTAL DEMAND',
               'PAID', 'FINE', 'BALANCE', 'ACTION',
             ];
             final hStyle = TextStyle(
@@ -2109,10 +2109,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
               headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-              dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+              dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
               columns: const [
-                DataColumn(label: Text('S No.')),
+                DataColumn(label: Text('S NO.')),
                 DataColumn(label: Text('TERM')),
                 DataColumn(label: Text('FEE TYPE')),
                 DataColumn(label: Text('FEE AMOUNT'), numeric: true),
@@ -2287,10 +2287,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
               headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-              dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+              dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
               columns: const [
-                DataColumn(label: Text('S No.')),
+                DataColumn(label: Text('S NO.')),
                 DataColumn(label: Text('STANDARD')),
                 DataColumn(label: Text('SECTION')),
                 DataColumn(label: Text('STUDENTS'), numeric: true),
@@ -2590,10 +2590,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
               headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-              dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+              dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
               columns: const [
-                DataColumn(label: Text('S No.')),
+                DataColumn(label: Text('S NO.')),
                 DataColumn(label: Text('ADMISSION NO')),
                 DataColumn(label: Text('STUDENT NAME')),
                 DataColumn(label: Text('STANDARD')),
@@ -2999,7 +2999,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                     label: const Text('Refresh'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
+                      backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       elevation: 0,
                     ),
@@ -3059,14 +3059,14 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           showCheckboxColumn: false,
                           headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
                           headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-                          dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                          dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                           columnSpacing: 24,
                           horizontalMargin: 20,
                           dataRowMinHeight: 36.h,
                           dataRowMaxHeight: 36.h,
                           headingRowHeight: 44.h,
                           columns: const [
-                            DataColumn(label: Text('S No.')),
+                            DataColumn(label: Text('S NO.')),
                             DataColumn(label: Text('DATE')),
                             DataColumn(label: Text('TRANSACTIONS'), numeric: true),
                             DataColumn(label: Text('COLLECTION'), numeric: true),
@@ -3344,10 +3344,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         showCheckboxColumn: false,
                         headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
                         headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-                        dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                        dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                         columnSpacing: 8, horizontalMargin: 10, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
                         columns: const [
-                          DataColumn(label: Text('S No.')),
+                          DataColumn(label: Text('S NO.')),
                           DataColumn(label: Text('PAY NO')),
                           DataColumn(label: Text('TIME')),
                           DataColumn(label: Text('ADMISSION NO')),
@@ -3795,10 +3795,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                               showCheckboxColumn: false,
                               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
                               headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-                              dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                              dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                               columnSpacing: 8, horizontalMargin: 10, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
                               columns: const [
-                                DataColumn(label: Text('S No.')),
+                                DataColumn(label: Text('S NO.')),
                                 DataColumn(label: Text('PAY NO')),
                                 DataColumn(label: Text('TIME')),
                                 DataColumn(label: Text('ADMISSION NO')),
@@ -3988,10 +3988,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       showCheckboxColumn: false,
                       headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
                       headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
-                      dataTextStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                      dataTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                       columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 36.h, dataRowMaxHeight: 36.h, headingRowHeight: 44.h,
                       columns: const [
-                        DataColumn(label: Text('S No.')), DataColumn(label: Text('TERM')), DataColumn(label: Text('FEE TYPE')),
+                        DataColumn(label: Text('S NO.')), DataColumn(label: Text('TERM')), DataColumn(label: Text('FEE TYPE')),
                         DataColumn(label: Text('AMOUNT'), numeric: true), DataColumn(label: Text('PAID'), numeric: true),
                         DataColumn(label: Text('FINE'), numeric: true),
                         DataColumn(label: Text('BALANCE'), numeric: true), DataColumn(label: Text('STATUS')),
@@ -5107,7 +5107,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                           maxLines: 1,
                           softWrap: false,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: fontWeight, color: color),
+                          style: TextStyle(fontSize: fontSize ?? 12.sp, fontWeight: fontWeight, color: color),
                         ),
                       ),
                     );
@@ -5132,17 +5132,17 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   // --- HEADER ---
                   final classHeaderRow = cBuildRow(
                     [
-                      cBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('STANDARD', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('SECTION', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('STUDENTS', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('FEE TYPES', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('TOTAL DEMAND', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('PAID', 6, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('FINE', 7, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('% COLLECTED', 8, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('PENDING', 9, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('ACTION', 10, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                      cBuildCell('S NO.', 0, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('STANDARD', 1, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('SECTION', 2, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('STUDENTS', 3, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('FEE TYPES', 4, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('TOTAL DEMAND', 5, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('PAID', 6, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('FINE', 7, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('% COLLECTED', 8, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('PENDING', 9, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                      cBuildCell('ACTION', 10, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
                     ],
                     bgColor: AppColors.tableHeadBg,
                     height: 44.h,
@@ -5200,13 +5200,13 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SizedBox(width: cAdj[0], child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                              SizedBox(width: cAdj[0], child: Text('${i + 1}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               const SizedBox(width: cColSpacing),
                               SizedBox(width: cAdj[1], child: Text(g.courseName ?? '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.primary))),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[2], child: Text(g.className, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                              SizedBox(width: cAdj[2], child: Text(g.className, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[3], child: Text('${g.studentCount}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                              SizedBox(width: cAdj[3], child: Text('${g.studentCount}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                               const SizedBox(width: cColSpacing),
                               SizedBox(
                                 width: cAdj[4],
@@ -5222,11 +5222,11 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                                 ),
                               ),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[5], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalDemand), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                              SizedBox(width: cAdj[5], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalDemand), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPaid), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                              SizedBox(width: cAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPaid), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[7], child: Align(alignment: Alignment.centerRight, child: Text(g.totalFine > 0 ? _formatCurrency(g.totalFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: g.totalFine > 0 ? Colors.orange : AppColors.textSecondary)))),
+                              SizedBox(width: cAdj[7], child: Align(alignment: Alignment.centerRight, child: Text(g.totalFine > 0 ? _formatCurrency(g.totalFine) : '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: g.totalFine > 0 ? Colors.orange : AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
                               SizedBox(width: cAdj[8], child: Container(
                                 padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
@@ -5237,7 +5237,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                                 child: Text('${pct.toStringAsFixed(0)}%', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: pct >= 100 ? AppColors.success : pct >= 50 ? Colors.orange : AppColors.warning)),
                               )),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[9], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPending), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                              SizedBox(width: cAdj[9], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPending), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
                               SizedBox(width: cAdj[10], child: Align(
                                 alignment: Alignment.centerRight,
@@ -5474,7 +5474,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   softWrap: false,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: fontSize ?? 13.sp,
+                    fontSize: fontSize ?? 12.sp,
                     fontWeight: fontWeight ?? FontWeight.w600,
                     color: color ?? AppColors.textSecondary,
                   ),
@@ -5500,7 +5500,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
           }
 
           final headerRow = dRow([
-            dCellText('S No.', 0, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+            dCellText('S NO.', 0, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('TERM', 1, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('FEE TYPE', 2, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('AMOUNT', 3, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
@@ -5816,7 +5816,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                     width: sAdj[colIndex],
                     child: child ?? Align(
                       alignment: colIndex >= 3 && colIndex <= 6 ? Alignment.centerRight : colIndex == 8 ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Text(text, style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: effectiveWeight, color: effectiveColor)),
+                      child: Text(text, style: TextStyle(fontSize: fontSize ?? 12.sp, fontWeight: effectiveWeight, color: effectiveColor)),
                     ),
                   );
                 }
@@ -5840,15 +5840,15 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                 // --- HEADER ---
                 final stuHeaderRow = sBuildRow(
                   [
-                    sBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('ADMISSION NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('STUDENT NAME', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('FEE AMOUNT', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('PAID', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('FINE', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('BALANCE', 6, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('STATUS', 7, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('ACTION', 8, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                    sBuildCell('S NO.', 0, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('ADMISSION NO', 1, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('STUDENT NAME', 2, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('FEE AMOUNT', 3, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('PAID', 4, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('FINE', 5, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('BALANCE', 6, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('STATUS', 7, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                    sBuildCell('ACTION', 8, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
                   ],
                   bgColor: AppColors.tableHeadBg,
                   height: 44.h,
@@ -5900,19 +5900,19 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         constraints: BoxConstraints(minHeight: 40),
                         child: Row(
                           children: [
-                            SizedBox(width: sAdj[0], child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            SizedBox(width: sAdj[0], child: Text('${idx + 1}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[1], child: Text(admNo, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            SizedBox(width: sAdj[1], child: Text(admNo, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[2], child: Text(stuName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                            SizedBox(width: sAdj[2], child: Text(stuName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[3], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sDemand), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                            SizedBox(width: sAdj[3], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sDemand), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[4], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sPaid), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                            SizedBox(width: sAdj[4], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sPaid), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[5], child: Align(alignment: Alignment.centerRight, child: Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: sFine > 0 ? Colors.orange : AppColors.textSecondary)))),
+                            SizedBox(width: sAdj[5], child: Align(alignment: Alignment.centerRight, child: Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: sFine > 0 ? Colors.orange : AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sBalance), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                            SizedBox(width: sAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sBalance), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
                             SizedBox(width: sAdj[7], child: Align(
                               alignment: Alignment.centerLeft,
@@ -6816,7 +6816,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
+                              backgroundColor: AppColors.accent,
                               foregroundColor: Colors.white,
                               elevation: 0,
                             ),
@@ -6899,9 +6899,9 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                               final effectiveColor = color ?? AppColors.textSecondary;
                               final child = truncate
                                   ? Text(text, overflow: TextOverflow.ellipsis, maxLines: 1,
-                                      style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: effectiveWeight, color: effectiveColor))
+                                      style: TextStyle(fontSize: fontSize ?? 12.sp, fontWeight: effectiveWeight, color: effectiveColor))
                                   : Text(text, textAlign: textAlign,
-                                      style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: effectiveWeight, color: effectiveColor));
+                                      style: TextStyle(fontSize: fontSize ?? 12.sp, fontWeight: effectiveWeight, color: effectiveColor));
                               return SizedBox(
                                 width: adjustedWidths[colIndex],
                                 child: truncate ? child : Align(
@@ -6930,16 +6930,16 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             // --- HEADER ---
                             final headerRow = buildRowContainer(
                               [
-                                buildCell('SNO', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('RECPT.NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('ADMISSION NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('STANDARD', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('SECTION', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('SNO', 0, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('RECPT.NO', 1, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('ADMISSION NO', 2, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('STANDARD', 4, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('SECTION', 5, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
                                 for (int i = 0; i < feeCount; i++)
-                                  buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 6 + i, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('FINE', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('TOTAL', 7 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                  buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 6 + i, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('FINE', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
+                                buildCell('TOTAL', 7 + feeCount, fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary),
                               ],
                               bgColor: headerBg,
                               height: 44.h,

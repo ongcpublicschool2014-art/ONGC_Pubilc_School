@@ -281,90 +281,142 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Container(
-        decoration: AppCard.decoration(),
-        child: Column(
-          children: [
-            _header(),
-            Divider(height: 1.h, color: AppColors.border),
-            _toolbar(),
-            Divider(height: 1.h, color: AppColors.border),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : LayoutBuilder(
-                      builder: (ctx, c) {
-                        final scale = c.maxWidth > _wTotal ? c.maxWidth / _wTotal : 1.0;
-                        return SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: SizedBox(
-                            width: _wTotal * scale,
-                            child: Column(
-                              children: [
-                                _tableHeader(scale),
-                                Expanded(
-                                  child: ListView.builder(
-                                    itemCount: _rows.length,
-                                    itemBuilder: (_, i) => _rowWidget(i, scale),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.border),
             ),
-            Divider(height: 1.h, color: AppColors.border),
-            _actionBar(),
-          ],
+            child: Column(
+              children: [
+                _header(),
+                _toolbar(),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 8.h),
+                    child: Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8.r),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: _loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : LayoutBuilder(
+                              builder: (ctx, c) {
+                                final scale = c.maxWidth > _wTotal ? c.maxWidth / _wTotal : 1.0;
+                                return SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: SizedBox(
+                                    width: _wTotal * scale,
+                                    child: Column(
+                                      children: [
+                                        _tableHeader(scale),
+                                        Expanded(
+                                          child: ListView.builder(
+                                            itemCount: _rows.length,
+                                            itemBuilder: (_, i) => _rowWidget(i, scale),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ),
+                ),
+                _actionBar(),
+              ],
+            ),
+          ),
         ),
+      ],
+    );
+  }
+
+  Widget _header() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final btnIcon = compact ? 12.0 : 16.0;
+    final btnHPad = compact ? 10.0 : 18.0;
+    final btnRadius = compact ? 6.0 : 10.0;
+    final btnText = compact ? 11.0 : 13.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const AppIcon('profile-add', size: 20, color: AppColors.primary),
+          SizedBox(width: 10.w),
+          Text('Fast Admission',
+              style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          SizedBox(width: 10.w),
+          Text('bulk entry — allocate sections later',
+              style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+          const Spacer(),
+          SizedBox(width: 200.w, child: _regSeqDropdown()),
+          SizedBox(width: 10.w),
+          _lastRegNoChip(),
+          SizedBox(width: 10.w),
+          SizedBox(
+            height: btnHeight,
+            child: ElevatedButton.icon(
+              onPressed: _autoNumber,
+              icon: AppIcon('document-text', size: btnIcon, color: Colors.white),
+              label: const Text('Fill Admission Nos'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: btnHPad),
+                textStyle: TextStyle(fontSize: btnText, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(btnRadius)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _header() => Padding(
-        padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 14.h),
-        child: Row(
-          children: [
-            const AppIcon('profile-add', size: 20, color: AppColors.primary),
-            SizedBox(width: 10.w),
-            Text('Fast Admission', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-            SizedBox(width: 10.w),
-            Text('bulk entry — allocate sections later', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
-          ],
-        ),
-      );
+  /// Toolbar merged into the header above. Kept as an empty stub so the
+  /// existing build call remains valid.
+  Widget _toolbar() => const SizedBox.shrink();
 
-  Widget _toolbar() {
-    return Padding(
-      padding: EdgeInsets.all(12.w),
-      child: Row(
-        children: [
-          Text('Admission Sequence', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-          SizedBox(width: 8.w),
-          SizedBox(width: 180.w, child: _regSeqDropdown()),
-          SizedBox(width: 10.w),
-          _lastRegNoChip(),
-          SizedBox(width: 8.w),
-          OutlinedButton.icon(
-            onPressed: _autoNumber,
-            icon: const Icon(Icons.format_list_numbered, size: 16),
-            label: const Text('Fill Admission Nos'),
-          ),
-          const Spacer(),
-        ],
-      ),
+  /// Filled input decoration matching the Master Data / Fee Concession form
+  /// style — placeholder hint inside, white fill, accent focus border.
+  InputDecoration _filledFieldDec(String hint) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
     );
   }
 
   Widget _regSeqDropdown() => DropdownButtonFormField<String>(
         initialValue: _selectedRegSeqId,
         isExpanded: true,
-        decoration: _cellDec(),
-        hint: Text('Sequence', style: TextStyle(fontSize: 12.sp, color: AppColors.textLight)),
+        dropdownColor: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        elevation: 6,
+        style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+        decoration: _filledFieldDec('Select Sequence'),
         items: _regSeqs.map((s) => DropdownMenuItem(value: s['rns_id'].toString(), child: Text(s['rnsname']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
         onChanged: (v) => setState(() => _selectedRegSeqId = v),
       );
@@ -393,16 +445,16 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       );
 
   Widget _tableHeader(double scale) {
-    TextStyle s() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+    TextStyle s() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
     Widget c(String t, double w) => SizedBox(width: w * scale, child: Padding(padding: EdgeInsets.symmetric(horizontal: 6.w), child: Text(t, style: s())));
     return Container(
       color: AppColors.tableHeadBg,
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
       child: Row(
         children: [
-          c('Admission No', _wReg), c('Student Name', _wName), c('Sex', _wSex),
-          c('Admitted Std', _wAdmStd), c('Standard', _wStd), c('Section', _wSec), c('Medium', _wMed),
-          c('Birth Date', _wDob), c('Join Date', _wAdm), c('Adm Year', _wYear),
+          c('ADMISSION NO', _wReg), c('STUDENT NAME', _wName), c('SEX', _wSex),
+          c('ADMITTED STD', _wAdmStd), c('STANDARD', _wStd), c('SECTION', _wSec), c('MEDIUM', _wMed),
+          c('BIRTH DATE', _wDob), c('JOIN DATE', _wAdm), c('ADM YEAR', _wYear),
           c('', _wDel),
         ],
       ),
@@ -416,7 +468,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         color: i.isEven ? Colors.white : AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.4))),
       ),
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h),
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
       child: Row(
         children: [
           _cell(_wReg * scale, _textCell(r.regNo)),
@@ -448,13 +500,26 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
 
   Widget _cell(double w, Widget child) => SizedBox(width: w, child: Padding(padding: EdgeInsets.symmetric(horizontal: 3.w), child: child));
 
+  /// Cell decoration — compact bordered cells matching the project's other
+  /// inline-edit tables. Thin border, small radius, tight padding for a
+  /// dense bulk-entry feel.
   InputDecoration _cellDec() => InputDecoration(
         isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 8.h),
+        contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
         filled: true,
         fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r), borderSide: const BorderSide(color: AppColors.border)),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(5.r),
+          borderSide: BorderSide(color: AppColors.border.withValues(alpha: 0.6)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(5.r),
+          borderSide: BorderSide(color: AppColors.border.withValues(alpha: 0.6)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(5.r),
+          borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
+        ),
       );
 
   Widget _textCell(TextEditingController c) => TextField(
@@ -468,6 +533,9 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     return DropdownButtonFormField<String>(
       initialValue: values.contains(value) ? value : null,
       isExpanded: true,
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 6,
       style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary),
       decoration: _cellDec(),
       items: items.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp)))).toList(),
@@ -507,7 +575,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.save, size: 16),
             label: Text(_saving ? 'Saving…' : 'Save All'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
           ),
         ],
       ),

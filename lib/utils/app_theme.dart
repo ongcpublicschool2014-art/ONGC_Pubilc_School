@@ -129,6 +129,11 @@ class AppTheme {
         error: AppColors.error,
       ),
       scaffoldBackgroundColor: AppColors.surface,
+      // Default popup/menu background for legacy DropdownButton, ContextMenu,
+      // etc. Setting this white globally ensures `DropdownButtonFormField`
+      // popups (the most-used pattern in this app) inherit the white,
+      // rounded popup look from the Fee Group Assignments dropdown.
+      canvasColor: Colors.white,
       textTheme: GoogleFonts.plusJakartaSansTextTheme().copyWith(
         displayLarge: GoogleFonts.plusJakartaSans(
           fontSize: 34.sp,

@@ -7,61 +7,89 @@ import '../../utils/friendly_error.dart';
 import '../../services/admission_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/master_crud_panel.dart';
+import '../../widgets/pill_tab.dart';
 import '../admin/master_import_screen.dart';
 
 /// Admission Master — manage the admission lookups (Community + Reg No)
 /// used by the admission form. Both tables live in `public` (single-institution
 /// app, consistent with the other moved masters).
-class AdmissionMasterScreen extends StatelessWidget {
+class AdmissionMasterScreen extends StatefulWidget {
   const AdmissionMasterScreen({super.key});
 
   @override
+  State<AdmissionMasterScreen> createState() => _AdmissionMasterScreenState();
+}
+
+class _AdmissionMasterScreenState extends State<AdmissionMasterScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  static const _tabLabels = ['Community', 'Admission No', 'Concession'];
+  static const _tabIcons = ['people', 'tag', 'discount-shape'];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabLabels.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Padding(
-        padding: EdgeInsets.all(16.w),
-        child: Container(
-          decoration: AppCard.decoration(),
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 6.h),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Pill-style tabs matching Fee Master / Master Data / Reports.
+        ListenableBuilder(
+          listenable: _tabController,
+          builder: (context, _) {
+            final selected = _tabController.index;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    const AppIcon('category-2', size: 20, color: AppColors.primary),
-                    SizedBox(width: 10.w),
-                    Text('Admission Master',
-                        style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                    for (var i = 0; i < _tabLabels.length; i++) ...[
+                      PillTab(
+                        icon: _tabIcons[i],
+                        label: _tabLabels[i],
+                        selected: selected == i,
+                        onTap: () => _tabController.animateTo(i),
+                      ),
+                      if (i < _tabLabels.length - 1)
+                        SizedBox(width: PillTab.gap(context)),
+                    ],
                   ],
                 ),
               ),
-              TabBar(
-                isScrollable: true,
-                labelColor: AppColors.primary,
-                unselectedLabelColor: AppColors.textSecondary,
-                indicatorColor: AppColors.accent,
-                labelStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(text: 'Community'),
-                  Tab(text: 'Admission No'),
-                  Tab(text: 'Concession'),
-                ],
+            );
+          },
+        ),
+        SizedBox(height: 6.h),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: const [
+              MasterCrudPanel(
+                table: 'community',
+                idCol: 'com_id',
+                nameCol: 'comname',
+                title: 'Community',
+                icon: 'people',
+                countLabel: 'communities',
               ),
-              Divider(height: 1.h, color: AppColors.border),
-              const Expanded(
-                child: TabBarView(
-                  children: [
-                    MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community'),
-                    _RegNoPanel(),
-                    _ConcessionPanelWithImport(),
-                  ],
-                ),
-              ),
+              _RegNoPanel(),
+              _ConcessionPanelWithImport(),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -219,15 +247,37 @@ class TermPanelState extends State<TermPanel> with AutomaticKeepAliveClientMixin
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
       );
 
+  /// Filled input decoration matching the User Creation form style — bold
+  /// label rendered above (handled separately), placeholder hint inside.
+  InputDecoration _filledFieldDec(String hint) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
+
   Widget _dateButton(String label, DateTime? value, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       child: InputDecorator(
-        decoration: _dec(label),
-        child: Text(_fmt(value),
+        decoration: _filledFieldDec(label),
+        child: Text(value == null ? label : _fmt(value),
             style: TextStyle(
                 fontSize: 13.sp,
-                color: value == null ? AppColors.textLight : AppColors.textPrimary)),
+                color: value == null
+                    ? AppColors.textPrimary.withValues(alpha: 0.6)
+                    : AppColors.textPrimary)),
       ),
     );
   }
@@ -235,40 +285,68 @@ class TermPanelState extends State<TermPanel> with AutomaticKeepAliveClientMixin
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 340.w, child: _form()),
-          SizedBox(width: 16.w),
-          Expanded(child: _list()),
-        ],
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 340.w, child: _form()),
+        SizedBox(width: 16.w),
+        Expanded(child: _list()),
+      ],
     );
   }
 
   Widget _form() {
     return Container(
-      padding: EdgeInsets.all(16.w),
+      padding: EdgeInsets.all(20.w),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('${_editingId != null ? 'Edit' : 'Add'} Term Period',
-              style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-          SizedBox(height: 12.h),
-          TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Term Name *')),
-          SizedBox(height: 10.h),
-          _dateButton('From Date', _from, () => _pickDate(true)),
-          SizedBox(height: 10.h),
-          _dateButton('To Date', _to, () => _pickDate(false)),
-          SizedBox(height: 14.h),
+          Row(children: [
+            const AppIcon('calendar-1', size: 18, color: AppColors.accent),
+            SizedBox(width: 8.w),
+            Text('${_editingId != null ? 'Edit' : 'Add'} Term Period',
+                style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          ]),
+          SizedBox(height: 20.h),
+          Text('Term Name *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+          SizedBox(height: 6.h),
+          TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('Enter term name')),
+          SizedBox(height: 16.h),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('From Date *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+                    SizedBox(height: 6.h),
+                    _dateButton('Select from date', _from, () => _pickDate(true)),
+                  ],
+                ),
+              ),
+              SizedBox(width: 10.w),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('To Date *', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+                    SizedBox(height: 6.h),
+                    _dateButton('Select to date', _to, () => _pickDate(false)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 18.h),
           Row(
             children: [
               Expanded(
@@ -293,18 +371,18 @@ class TermPanelState extends State<TermPanel> with AutomaticKeepAliveClientMixin
   }
 
   Widget _list() {
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    return Container(
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final innerTable = Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(8.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
           Container(
             color: AppColors.tableHeadBg,
-            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
             child: Row(
               children: [
                 Expanded(flex: 3, child: Text('TERM', style: h())),
@@ -328,12 +406,12 @@ class TermPanelState extends State<TermPanel> with AutomaticKeepAliveClientMixin
                           final name = r['termname']?.toString() ?? '';
                           final from = r['fromdate'] != null ? DateTime.tryParse(r['fromdate'].toString()) : null;
                           final to = r['todate'] != null ? DateTime.tryParse(r['todate'].toString()) : null;
-                          TextStyle c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+                          TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
                           return Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 9.h),
+                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                             child: Row(
                               children: [
-                                Expanded(flex: 3, child: Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(flex: 3, child: Text(name, style: c())),
                                 SizedBox(width: 110.w, child: Text(_fmt(from), style: c())),
                                 SizedBox(width: 110.w, child: Text(_fmt(to), style: c())),
                                 SizedBox(
@@ -361,6 +439,40 @@ class TermPanelState extends State<TermPanel> with AutomaticKeepAliveClientMixin
                         },
                       ),
           ),
+        ],
+      ),
+    );
+
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            child: Row(children: [
+              const AppIcon('calendar-1', size: 18, color: AppColors.accent),
+              SizedBox(width: 8.w),
+              Text('Term Periods',
+                  style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+              SizedBox(width: 8.w),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8.r),
+                ),
+                child: Text('${_rows.length} terms',
+                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+              ),
+              const Spacer(),
+            ]),
+          ),
+          Expanded(child: innerTable),
         ],
       ),
     );
@@ -483,70 +595,115 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
   }
 
-  InputDecoration _dec(String label) => InputDecoration(
-        labelText: label,
-        isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-      );
+  /// Filled input decoration matching the User Creation form style — bold
+  /// label rendered above (handled separately), placeholder hint inside.
+  InputDecoration _filledFieldDec(String hint) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
+
+  Widget _lbl(String text) => Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 340.w, child: _form()),
-          SizedBox(width: 16.w),
-          Expanded(child: _list()),
-        ],
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 340.w, child: _form()),
+        SizedBox(width: 16.w),
+        Expanded(child: _list()),
+      ],
     );
   }
 
   Widget _form() {
     return Container(
-      padding: EdgeInsets.all(16.w),
+      padding: EdgeInsets.all(20.w),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('Admission Number Sequencing',
-              style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-          SizedBox(height: 12.h),
-          TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Name *')),
-          SizedBox(height: 10.h),
+          Row(children: [
+            const AppIcon('tag', size: 18, color: AppColors.accent),
+            SizedBox(width: 8.w),
+            Text('Admission Number Sequencing',
+                style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          ]),
+          SizedBox(height: 20.h),
+          _lbl('Name *'),
+          SizedBox(height: 6.h),
+          TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('Enter name')),
+          SizedBox(height: 16.h),
+          _lbl('Mode'),
+          SizedBox(height: 6.h),
           DropdownButtonFormField<String>(
             initialValue: _mode,
-            decoration: _dec('Mode'),
+            dropdownColor: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            elevation: 6,
+            decoration: _filledFieldDec('Select mode'),
             items: const [
               DropdownMenuItem(value: 'Prefix', child: Text('Prefix')),
               DropdownMenuItem(value: 'Suffix', child: Text('Suffix')),
             ],
             onChanged: (v) => setState(() => _mode = v ?? 'Prefix'),
           ),
-          SizedBox(height: 10.h),
-          TextField(controller: _affix, style: TextStyle(fontSize: 13.sp), decoration: _dec('Prefix / Suffix value')),
-          SizedBox(height: 10.h),
+          SizedBox(height: 16.h),
+          _lbl('Prefix / Suffix value'),
+          SizedBox(height: 6.h),
+          TextField(controller: _affix, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('e.g. ADM/')),
+          SizedBox(height: 16.h),
           Row(
             children: [
-              Expanded(child: TextField(controller: _start, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _dec('Start No'))),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _lbl('Start No'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _start, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('1')),
+                ]),
+              ),
               SizedBox(width: 8.w),
-              Expanded(child: TextField(controller: _end, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _dec('End No'))),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _lbl('End No'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _end, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('—')),
+                ]),
+              ),
               SizedBox(width: 8.w),
-              Expanded(child: TextField(controller: _width, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _dec('Width'))),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _lbl('Width'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _width, keyboardType: TextInputType.number, style: TextStyle(fontSize: 13.sp), decoration: _filledFieldDec('4')),
+                ]),
+              ),
             ],
           ),
-          SizedBox(height: 10.h),
-          TextField(controller: _division, style: TextStyle(fontSize: 13.sp), maxLines: 2, decoration: _dec('Division')),
-          SizedBox(height: 14.h),
+          SizedBox(height: 16.h),
+          _lbl('Division'),
+          SizedBox(height: 6.h),
+          TextField(controller: _division, style: TextStyle(fontSize: 13.sp), maxLines: 2, decoration: _filledFieldDec('Division description')),
+          SizedBox(height: 18.h),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -564,18 +721,18 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   }
 
   Widget _list() {
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    return Container(
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    final innerTable = Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(8.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
           Container(
             color: AppColors.tableHeadBg,
-            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
             child: Row(
               children: [
                 Expanded(flex: 3, child: Text('NAME', style: h())),
@@ -601,12 +758,12 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                           final id = r['rns_id'] is int ? r['rns_id'] as int : int.tryParse(r['rns_id'].toString()) ?? 0;
                           final name = r['rnsname']?.toString() ?? '';
                           final mode = (r['rnsmode']?.toString() ?? 'P') == 'P' ? 'Prefix' : 'Suffix';
-                          TextStyle c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+                          TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
                           return Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 9.h),
+                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                             child: Row(
                               children: [
-                                Expanded(flex: 3, child: Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(flex: 3, child: Text(name, style: c())),
                                 SizedBox(width: 64.w, child: Text(mode, style: c())),
                                 SizedBox(width: 64.w, child: Text(r['rnsaffix']?.toString() ?? '-', style: c())),
                                 SizedBox(width: 56.w, child: Text(r['rnsstart']?.toString() ?? '-', style: c())),
@@ -631,6 +788,40 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
         ],
       ),
     );
+
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            child: Row(children: [
+              const AppIcon('tag', size: 18, color: AppColors.accent),
+              SizedBox(width: 8.w),
+              Text('Register Sequences',
+                  style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+              SizedBox(width: 8.w),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8.r),
+                ),
+                child: Text('${_rows.length} sequences',
+                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+              ),
+              const Spacer(),
+            ]),
+          ),
+          Expanded(child: innerTable),
+        ],
+      ),
+    );
   }
 }
 
@@ -647,13 +838,13 @@ class _ConcessionPanelWithImportState extends State<_ConcessionPanelWithImport> 
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 0),
-          child: Row(
-            children: [
-              if (_importing) ...[
+    if (_importing) {
+      return Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(0, 4.h, 0, 0),
+            child: Row(
+              children: [
                 OutlinedButton.icon(
                   onPressed: () => setState(() => _importing = false),
                   icon: const Icon(Icons.arrow_back, size: 16),
@@ -663,33 +854,23 @@ class _ConcessionPanelWithImportState extends State<_ConcessionPanelWithImport> 
                 Text('Import Concession',
                     style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
               ],
-              const Spacer(),
-              if (!_importing)
-                ElevatedButton.icon(
-                  onPressed: () => setState(() => _importing = true),
-                  icon: const Icon(Icons.upload_file, size: 16),
-                  label: const Text('Import CSV/Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-            ],
+            ),
           ),
-        ),
-        Expanded(
-          child: _importing
-              ? const MasterImportScreen(initialTabIndex: 4, showInternalTabs: false)
-              : const MasterCrudPanel(
-                  table: 'concessioncategory',
-                  idCol: 'con_id',
-                  nameCol: 'condesc',
-                  title: 'Concession',
-                  inSchema: true,
-                  ordidCol: 'ordid',
-                ),
-        ),
-      ],
+          const Expanded(child: MasterImportScreen(initialTabIndex: 4, showInternalTabs: false)),
+        ],
+      );
+    }
+    return MasterCrudPanel(
+      table: 'concessioncategory',
+      idCol: 'con_id',
+      nameCol: 'condesc',
+      title: 'Concession',
+      icon: 'discount-shape',
+      countLabel: 'concessions',
+      inSchema: true,
+      ordidCol: 'ordid',
+      onImport: () => setState(() => _importing = true),
     );
   }
 }
+
