@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/formatters.dart';
 import '../../services/supabase_service.dart';
 
 /// Student Fee Definition — lists every fee defined for a student (Regular +
@@ -203,31 +204,62 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
 
   Widget _termList() {
     final terms = _terms;
-    return ListView(
-      children: [
-        for (final t in terms)
-          Material(
-            color: _term == t ? AppColors.accent.withValues(alpha: 0.12) : Colors.transparent,
-            child: InkWell(
-              onTap: () => setState(() => _term = t),
-              child: Container(
-                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
-                decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5))),
-                child: Text(t,
-                    style: TextStyle(
-                        fontSize: 13.sp,
-                        fontWeight: _term == t ? FontWeight.w700 : FontWeight.w500,
-                        color: _term == t ? AppColors.accentDark : AppColors.textPrimary)),
-              ),
+    return Container(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 8.h),
+            child: Text('TERMS',
+                style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.6)),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: terms.length,
+              itemBuilder: (_, i) {
+                final t = terms[i];
+                final selected = _term == t;
+                return Material(
+                  color: selected ? AppColors.accent.withValues(alpha: 0.10) : Colors.transparent,
+                  child: InkWell(
+                    onTap: () => setState(() => _term = t),
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          left: BorderSide(color: selected ? AppColors.accent : Colors.transparent, width: 3),
+                          bottom: const BorderSide(color: AppColors.border, width: 0.5),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.calendar_today_outlined, size: 14,
+                              color: selected ? AppColors.accent : AppColors.textSecondary),
+                          SizedBox(width: 10.w),
+                          Expanded(
+                            child: Text(t,
+                                style: TextStyle(
+                                    fontSize: 13.sp,
+                                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                                    color: selected ? AppColors.accentDark : AppColors.textPrimary)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 
   Widget _table() {
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    TextStyle c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
     final rows = _visible;
     return Column(
       children: [
@@ -251,8 +283,9 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
             separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.5)),
             itemBuilder: (_, i) {
               final r = rows[i];
-              return Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 2.h),
+              return Container(
+                color: i.isEven ? Colors.white : AppColors.surface,
+                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h),
                 child: Row(children: [
                   SizedBox(
                     width: 56.w,
@@ -263,8 +296,8 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                     ),
                   ),
                   Expanded(flex: 2, child: Text(r.section, style: c())),
-                  Expanded(flex: 3, child: Text(r.feeType, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
-                  SizedBox(width: 70.w, child: Text(r.optional ? 'Optional' : 'Regular', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600, color: r.optional ? AppColors.warning : AppColors.success))),
+                  Expanded(flex: 3, child: Text(r.feeType, style: c())),
+                  SizedBox(width: 70.w, child: Text(r.optional ? 'Optional' : 'Regular', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: r.optional ? AppColors.warning : AppColors.success))),
                   SizedBox(
                     width: 100.w,
                     child: TextField(
@@ -285,8 +318,8 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                     ),
                   ),
                   SizedBox(width: 12.w),
-                  SizedBox(width: 90.w, child: Text(r.balance.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
-                  SizedBox(width: 90.w, child: Text(r.concession.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
+                  SizedBox(width: 90.w, child: Text(formatIndianNumber(r.balance), textAlign: TextAlign.right, style: c())),
+                  SizedBox(width: 90.w, child: Text(formatIndianNumber(r.concession), textAlign: TextAlign.right, style: c())),
                 ]),
               );
             },
@@ -297,22 +330,58 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
   }
 
   Widget _footer() {
-    return Padding(
-      padding: EdgeInsets.all(14.w),
+    return Container(
+      color: Colors.white,
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
       child: Row(
         children: [
-          Text('Fees to be Received: ', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-          Text('₹ ${_toReceive.toStringAsFixed(2)}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8.r),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text('Fees to be Received: ',
+                  style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              Text(formatIndianNumber(_toReceive),
+                  style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
+            ]),
+          ),
           const Spacer(),
-          OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          SizedBox(
+            height: 36,
+            child: OutlinedButton(
+              onPressed: () => Navigator.pop(context, false),
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(horizontal: 18.w),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
+                side: const BorderSide(color: AppColors.border),
+                foregroundColor: AppColors.textPrimary,
+                textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
+              ),
+              child: const Text('Cancel'),
+            ),
+          ),
           SizedBox(width: 10.w),
-          ElevatedButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.save, size: 16),
-            label: const Text('Save'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+          SizedBox(
+            height: 36,
+            child: ElevatedButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.save, size: 16),
+              label: const Text('Save'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 18.w),
+                textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
+              ),
+            ),
           ),
         ],
       ),

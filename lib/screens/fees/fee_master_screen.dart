@@ -7,79 +7,170 @@ import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/pill_tab.dart';
 import '../admin/settings_screen.dart' show PaymentSequenceTab, FineRulesTab;
 import '../admin/master_import_screen.dart';
 
 /// Fee Master — clean CRUD (Admission-Master style) for the fee lookups:
 /// Fee Group, Fee Type, Concession. Left "Add" form + right table.
 /// Class Fee Demand uses the existing import screen (Master Data tab).
-class FeeMasterScreen extends StatelessWidget {
+class FeeMasterScreen extends StatefulWidget {
   const FeeMasterScreen({super.key});
 
   @override
+  State<FeeMasterScreen> createState() => _FeeMasterScreenState();
+}
+
+class _FeeMasterScreenState extends State<FeeMasterScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  static const _tabLabels = [
+    'Fee Group',
+    'Fee Type',
+    'Term',
+    'Class Fee Demand',
+    'Payment Sequence',
+    'Fine Rules',
+  ];
+  static const _tabIcons = [
+    'receipt-discount',
+    'tag',
+    'calendar-1',
+    'category',
+    'sort',
+    'warning-2',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabLabels.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 6,
-      child: Padding(
-        padding: EdgeInsets.all(16.w),
-        child: Container(
-          decoration: AppCard.decoration(),
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 6.h),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Pill-style tabs (matching Reports / Fee Collection / Dashboard).
+        ListenableBuilder(
+          listenable: _tabController,
+          builder: (context, _) {
+            final selected = _tabController.index;
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    const AppIcon('receipt-discount', size: 20, color: AppColors.primary),
-                    SizedBox(width: 10.w),
-                    Text('Fee Master',
-                        style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                    for (var i = 0; i < _tabLabels.length; i++) ...[
+                      PillTab(
+                        icon: _tabIcons[i],
+                        label: _tabLabels[i],
+                        selected: selected == i,
+                        onTap: () => _tabController.animateTo(i),
+                      ),
+                      if (i < _tabLabels.length - 1)
+                        SizedBox(width: PillTab.gap(context)),
+                    ],
                   ],
                 ),
               ),
-              TabBar(
-                isScrollable: true,
-                labelColor: AppColors.primary,
-                unselectedLabelColor: AppColors.textSecondary,
-                indicatorColor: AppColors.accent,
-                labelStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(text: 'Fee Group'),
-                  Tab(text: 'Fee Type'),
-                  Tab(text: 'Term'),
-                  Tab(text: 'Class Fee Demand'),
-                  Tab(text: 'Payment Sequence'),
-                  Tab(text: 'Fine Rules'),
-                ],
+            );
+          },
+        ),
+        SizedBox(height: 6.h),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _PanelWithImport(
+                childBuilder: (onImport) => _FeeGroupPanel(onImport: onImport),
+                importTabIndex: 2,
+                title: 'Fee Group',
               ),
-              Divider(height: 1.h, color: AppColors.border),
-              const Expanded(
-                child: TabBarView(
-                  children: [
-                    _PanelWithImport(child: _FeeGroupPanel(), importTabIndex: 2, title: 'Fee Group'),
-                    _PanelWithImport(child: _FeeTypePanel(), importTabIndex: 3, title: 'Fee Type'),
-                    _FeeTermPanel(),
-                    _PanelWithImport(child: _ClassFeeDemandPanel(), importTabIndex: 5, title: 'Class Fee Demand'),
-                    PaymentSequenceTab(),
-                    FineRulesTab(),
-                  ],
-                ),
+              _PanelWithImport(
+                childBuilder: (onImport) => _FeeTypePanel(onImport: onImport),
+                importTabIndex: 3,
+                title: 'Fee Type',
               ),
+              const _FeeTermPanel(),
+              _PanelWithImport(
+                childBuilder: (onImport) => _ClassFeeDemandPanel(onImport: onImport),
+                importTabIndex: 5,
+                title: 'Class Fee Demand',
+              ),
+              const PaymentSequenceTab(),
+              const FineRulesTab(),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 }
 
 // ── shared bits ───────────────────────────────────────────────────────────
+/// LEGACY: floating-label decoration. New forms use [_field] + [_lbl] instead.
 InputDecoration _dec(String label) => InputDecoration(
       labelText: label,
       isDense: true,
       contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
     );
+
+/// Bold field label rendered ABOVE the input (matches Create New User form).
+Widget _lbl(String text) =>
+    Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
+
+/// Input decoration with hint text only (no floating label) — matches the
+/// Create New User form style.
+InputDecoration _fieldDec(BuildContext context, String hint) {
+  final compact = MediaQuery.of(context).size.width <= 1366;
+  final textSize = compact ? 11.0 : 14.0;
+  final hPad = compact ? 8.0 : 14.0;
+  final vPad = compact ? 5.0 : 14.0;
+  final radius = compact ? 5.0 : 8.0;
+  return InputDecoration(
+    hintText: hint,
+    hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+    contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(radius),
+      borderSide: const BorderSide(color: AppColors.border),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(radius),
+      borderSide: const BorderSide(color: AppColors.border),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(radius),
+      borderSide: const BorderSide(color: AppColors.accent),
+    ),
+    filled: true,
+    fillColor: Colors.white,
+  );
+}
+
+TextStyle _fieldTextStyle(BuildContext context) {
+  final compact = MediaQuery.of(context).size.width <= 1366;
+  return TextStyle(
+    fontWeight: FontWeight.w500,
+    fontSize: compact ? 11 : 14,
+    color: const Color(0xFF555555),
+  );
+}
+
+/// Zebra-striped row background: starts with white on the first row (i=0),
+/// then alternates to `surface` (cream).
+Color _zebra(int i) => i.isEven ? Colors.white : AppColors.surface;
 
 void _snack(BuildContext ctx, String msg, Color color) {
   ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
@@ -94,28 +185,109 @@ Future<int> _nextId(String table, String idCol, {bool inSchema = false}) async {
   return n + 1;
 }
 
-Widget _tableShell({required List<Widget> headerCells, required Widget body}) {
-  return Container(
+/// Outer white card (like User Creation "Existing Users") wrapping a list/table.
+/// Provides a title bar (icon + title + count badge + optional actions) over an
+/// INNER bordered table container.
+Widget _tableShell({
+  required List<Widget> headerCells,
+  required Widget body,
+  String? title,
+  String? icon,
+  int? count,
+  String countLabel = 'items',
+  List<Widget> actions = const [],
+}) {
+  final innerTable = Container(
+    clipBehavior: Clip.antiAlias,
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12.r),
-      border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+      borderRadius: BorderRadius.circular(8.r),
+      border: Border.all(color: AppColors.border),
     ),
     child: Column(
       children: [
         Container(
           color: AppColors.tableHeadBg,
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
           child: Row(children: headerCells),
         ),
         Expanded(child: body),
       ],
     ),
   );
+
+  if (title == null) {
+    // Legacy: no title bar — just the inner bordered table.
+    return innerTable;
+  }
+
+  return Container(
+    padding: EdgeInsets.all(16.w),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10.r),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      children: [
+        Padding(
+          padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+          child: Row(
+            children: [
+              if (icon != null) ...[
+                AppIcon(icon, size: 18, color: AppColors.accent),
+                SizedBox(width: 8.w),
+              ],
+              Text(title, style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+              if (count != null) ...[
+                SizedBox(width: 8.w),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8.r),
+                  ),
+                  child: Text('$count $countLabel',
+                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                ),
+              ],
+              const Spacer(),
+              ...actions,
+            ],
+          ),
+        ),
+        Expanded(child: innerTable),
+      ],
+    ),
+  );
 }
 
-TextStyle _h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-TextStyle _c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+/// Outer white card (like User Creation "Create New User") wrapping an Add/Edit form.
+Widget _addCard({required String icon, required String title, required Widget child}) {
+  return Container(
+    padding: EdgeInsets.all(20.w),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10.r),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(children: [
+          AppIcon(icon, size: 18, color: AppColors.accent),
+          SizedBox(width: 8.w),
+          Text(title, style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+        ]),
+        SizedBox(height: 20.h),
+        child,
+      ],
+    ),
+  );
+}
+
+TextStyle _h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+TextStyle _c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
 
 Future<bool> _confirmDelete(BuildContext ctx, String what) async {
   final ok = await showDialog<bool>(
@@ -136,7 +308,8 @@ Future<bool> _confirmDelete(BuildContext ctx, String what) async {
 // FEE GROUP  (public)
 // ══════════════════════════════════════════════════════════════════════════
 class _FeeGroupPanel extends StatefulWidget {
-  const _FeeGroupPanel();
+  final VoidCallback? onImport;
+  const _FeeGroupPanel({this.onImport});
   @override
   State<_FeeGroupPanel> createState() => _FeeGroupPanelState();
 }
@@ -241,28 +414,22 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
+    return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 320.w,
-            child: Container(
-              padding: EdgeInsets.all(16.w),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
-              ),
+            child: _addCard(
+              icon: 'receipt-discount',
+              title: _editId != null ? 'Edit Fee Group' : 'Add Fee Group',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_editId != null ? 'Edit Fee Group' : 'Add Fee Group', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 12.h),
-                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Group Name *'), onSubmitted: (_) => _add()),
-                  SizedBox(height: 14.h),
+                  _lbl('Group Name *'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _name, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Enter group name'), onSubmitted: (_) => _add()),
+                  SizedBox(height: 16.h),
                   Row(children: [
                     Expanded(
                       child: ElevatedButton.icon(
@@ -284,8 +451,15 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
           SizedBox(width: 16.w),
           Expanded(
             child: _tableShell(
+              title: 'Fee Groups',
+              icon: 'receipt-discount',
+              count: _rows.length,
+              countLabel: 'groups',
+              actions: [
+                if (widget.onImport != null) _importButton(widget.onImport!),
+              ],
               headerCells: [
-                SizedBox(width: 50.w, child: Text('S.No', style: _h())),
+                SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
                 Expanded(child: Text('GROUP NAME', style: _h())),
                 SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
               ],
@@ -299,11 +473,12 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                           itemBuilder: (_, i) {
                             final r = _rows[i];
                             final id = r['fg_id'] is int ? r['fg_id'] as int : int.tryParse(r['fg_id'].toString()) ?? 0;
-                            return Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                            return Container(
+                              color: _zebra(i),
+                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                               child: Row(children: [
                                 SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                                Expanded(child: Text(r['fgdesc']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(child: Text(r['fgdesc']?.toString() ?? '', style: _c())),
                                 SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                   InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
                                   SizedBox(width: 8.w),
@@ -316,8 +491,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 }
 
@@ -325,7 +499,8 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
 // FEE TYPE  (public)
 // ══════════════════════════════════════════════════════════════════════════
 class _FeeTypePanel extends StatefulWidget {
-  const _FeeTypePanel();
+  final VoidCallback? onImport;
+  const _FeeTypePanel({this.onImport});
   @override
   State<_FeeTypePanel> createState() => _FeeTypePanelState();
 }
@@ -461,57 +636,68 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
+    return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 320.w,
-            child: Container(
-              padding: EdgeInsets.all(16.w),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
-              ),
+            child: _addCard(
+              icon: 'tag',
+              title: _editId != null ? 'Edit Fee Type' : 'Add Fee Type',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_editId != null ? 'Edit Fee Type' : 'Add Fee Type', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 12.h),
-                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Fee Name *')),
-                  SizedBox(height: 10.h),
-                  TextField(controller: _short, style: TextStyle(fontSize: 13.sp), decoration: _dec('Short Name')),
-                  SizedBox(height: 10.h),
+                  _lbl('Fee Name *'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _name, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Enter fee name')),
+                  SizedBox(height: 16.h),
+                  _lbl('Short Name'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _short, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Short name')),
+                  SizedBox(height: 16.h),
+                  _lbl('Fee Group *'),
+                  SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     initialValue: _fgId,
                     isExpanded: true,
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                    decoration: _dec('Fee Group *'),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'Select fee group'),
                     items: _feeGroups.map((g) => DropdownMenuItem(value: g['fg_id'].toString(), child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
                     onChanged: (v) => setState(() => _fgId = v),
                   ),
-                  SizedBox(height: 10.h),
+                  SizedBox(height: 16.h),
+                  _lbl('Fine Applicable'),
+                  SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     initialValue: _fine,
                     isExpanded: true,
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                    decoration: _dec('Fine Applicable'),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'No'),
                     items: const [DropdownMenuItem(value: 'No', child: Text('No')), DropdownMenuItem(value: 'Yes', child: Text('Yes'))],
                     onChanged: (v) => setState(() => _fine = v ?? 'No'),
                   ),
-                  SizedBox(height: 10.h),
+                  SizedBox(height: 16.h),
+                  _lbl('Type'),
+                  SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     initialValue: _kind,
                     isExpanded: true,
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                    decoration: _dec('Type'),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'Regular'),
                     items: const [DropdownMenuItem(value: 'Regular', child: Text('Regular')), DropdownMenuItem(value: 'Optional', child: Text('Optional'))],
                     onChanged: (v) => setState(() => _kind = v ?? 'Regular'),
                   ),
-                  SizedBox(height: 14.h),
+                  SizedBox(height: 18.h),
                   Row(children: [
                     Expanded(
                       child: ElevatedButton.icon(
@@ -533,8 +719,15 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
           SizedBox(width: 16.w),
           Expanded(
             child: _tableShell(
+              title: 'Fee Types',
+              icon: 'tag',
+              count: _rows.length,
+              countLabel: 'types',
+              actions: [
+                if (widget.onImport != null) _importButton(widget.onImport!),
+              ],
               headerCells: [
-                SizedBox(width: 50.w, child: Text('S.No', style: _h())),
+                SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
                 Expanded(flex: 3, child: Text('FEE NAME', style: _h())),
                 SizedBox(width: 80.w, child: Text('SHORT', style: _h())),
                 Expanded(flex: 2, child: Text('FEE GROUP', style: _h())),
@@ -554,11 +747,12 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                             final id = r['fee_id'] is int ? r['fee_id'] as int : int.tryParse(r['fee_id'].toString()) ?? 0;
                             final fine = '${r['feefineapplicable'] ?? 0}' == '1' ? 'Yes' : 'No';
                             final kind = '${r['feeoptional'] ?? 0}' == '1' ? 'Optional' : 'Regular';
-                            return Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                            return Container(
+                              color: _zebra(i),
+                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                               child: Row(children: [
                                 SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                                Expanded(flex: 3, child: Text(r['feedesc']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(flex: 3, child: Text(r['feedesc']?.toString() ?? '', style: _c())),
                                 SizedBox(width: 80.w, child: Text(r['feeshort']?.toString() ?? '', style: _c())),
                                 Expanded(flex: 2, child: Text(_fgName[r['fg_id']] ?? '', style: _c())),
                                 SizedBox(width: 60.w, child: Text(fine, style: _c())),
@@ -575,8 +769,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 }
 
@@ -685,28 +878,22 @@ class _ConcessionPanelState extends State<_ConcessionPanel> with AutomaticKeepAl
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
+    return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 320.w,
-            child: Container(
-              padding: EdgeInsets.all(16.w),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
-              ),
+            child: _addCard(
+              icon: 'discount-shape',
+              title: _editId != null ? 'Edit Concession' : 'Add Concession',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_editId != null ? 'Edit Concession' : 'Add Concession', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 12.h),
-                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Concession Name *'), onSubmitted: (_) => _add()),
-                  SizedBox(height: 14.h),
+                  _lbl('Concession Name *'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _name, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Enter concession name'), onSubmitted: (_) => _add()),
+                  SizedBox(height: 16.h),
                   Row(children: [
                     Expanded(
                       child: ElevatedButton.icon(
@@ -728,8 +915,12 @@ class _ConcessionPanelState extends State<_ConcessionPanel> with AutomaticKeepAl
           SizedBox(width: 16.w),
           Expanded(
             child: _tableShell(
+              title: 'Concessions',
+              icon: 'discount-shape',
+              count: _rows.length,
+              countLabel: 'items',
               headerCells: [
-                SizedBox(width: 50.w, child: Text('S.No', style: _h())),
+                SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
                 Expanded(child: Text('CONCESSION NAME', style: _h())),
                 SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
               ],
@@ -743,11 +934,12 @@ class _ConcessionPanelState extends State<_ConcessionPanel> with AutomaticKeepAl
                           itemBuilder: (_, i) {
                             final r = _rows[i];
                             final id = r['con_id'] is int ? r['con_id'] as int : int.tryParse(r['con_id'].toString()) ?? 0;
-                            return Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                            return Container(
+                              color: _zebra(i),
+                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                               child: Row(children: [
                                 SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                                Expanded(child: Text(r['condesc']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(child: Text(r['condesc']?.toString() ?? '', style: _c())),
                                 SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                   InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
                                   SizedBox(width: 8.w),
@@ -760,8 +952,7 @@ class _ConcessionPanelState extends State<_ConcessionPanel> with AutomaticKeepAl
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 }
 
@@ -781,7 +972,8 @@ class _FeeLine {
 }
 
 class _ClassFeeDemandPanel extends StatefulWidget {
-  const _ClassFeeDemandPanel();
+  final VoidCallback? onImport;
+  const _ClassFeeDemandPanel({this.onImport});
   @override
   State<_ClassFeeDemandPanel> createState() => _ClassFeeDemandPanelState();
 }
@@ -841,8 +1033,6 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             ((e as Map)['feedesc']?.toString().trim() ?? ''): ((e['feeoptional'] as num?)?.toInt() ?? 0)
         }..removeWhere((k, _) => k.isEmpty);
         _termNames = (results[3] as List).map((e) => e['termname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
-        _section ??= _sectionNames.isNotEmpty ? _sectionNames.first : null;
-        if (_section != null) _reloadGrid();
         _loading = false;
       });
     } catch (e) {
@@ -1164,7 +1354,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
               ElevatedButton(
                 onPressed: picked.isEmpty ? null : () => Navigator.pop(ctx, picked.toList()),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
                 child: Text('Copy to ${picked.length}'),
               ),
             ],
@@ -1190,16 +1380,13 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) return const Center(child: CircularProgressIndicator());
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(flex: 3, child: _creation()),
-          SizedBox(width: 16.w),
-          Expanded(flex: 2, child: _existing()),
-        ],
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(flex: 3, child: _creation()),
+        SizedBox(width: 16.w),
+        Expanded(flex: 2, child: _existing()),
+      ],
     );
   }
 
@@ -1243,83 +1430,118 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: EdgeInsets.only(bottom: 10.h),
-          child: Row(children: [
-            _modeButton('New', Icons.add, !_editMode, () => setState(() {
-              _editMode = false;
-              _reloadGrid();
-            })),
-            SizedBox(width: 10.w),
-            _modeButton('Edit', Icons.edit, _editMode, () => setState(() {
-              _editMode = true;
-              _reloadGrid();
-            })),
-            SizedBox(width: 10.w),
-            OutlinedButton.icon(
-              onPressed: _saving ? null : _copyFee,
-              icon: const Icon(Icons.copy_all, size: 15),
-              label: const Text('Copy Fee'),
-            ),
-            SizedBox(width: 12.w),
-            Text(_editMode ? 'Editing saved demand for this selection' : 'Creating a new demand',
-                style: TextStyle(fontSize: 11.sp, color: AppColors.textLight)),
-          ]),
-        ),
-        Container(
-          padding: EdgeInsets.all(12.w),
-          decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12.r), border: Border.all(color: AppColors.border.withValues(alpha: 0.6))),
-          child: Wrap(spacing: 12.w, runSpacing: 10.h, children: [
-            SizedBox(width: 190.w, child: DropdownButtonFormField<String>(initialValue: _section, isExpanded: true, style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), decoration: _dec('Section *'), items: _sectionNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(), onChanged: (v) => setState(() {
-              _section = v;
-              _reloadGrid();
-            }))),
-            SizedBox(width: 190.w, child: DropdownButtonFormField<String>(initialValue: _term, isExpanded: true, style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), decoration: _dec('Term *'), items: _termNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(), onChanged: (v) => setState(() {
-              _term = v;
-              _reloadGrid();
-            }))),
-            SizedBox(width: 200.w, child: InkWell(onTap: () async {
-              final now = DateTime.now();
-              final p = await showDatePicker(context: context, initialDate: _due ?? now, firstDate: DateTime(now.year - 1), lastDate: DateTime(now.year + 5));
-              if (p != null) setState(() => _due = p);
-            }, child: InputDecorator(decoration: _dec('Pay On or Before *'), child: Text(_due == null ? 'Select' : _fmt(_due!), style: TextStyle(fontSize: 13.sp, color: _due == null ? AppColors.textLight : AppColors.textPrimary))))),
-          ]),
-        ),
-        SizedBox(height: 12.h),
         Expanded(
           child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12.r), border: Border.all(color: AppColors.border.withValues(alpha: 0.6))),
-            child: Column(children: [
-              Container(color: AppColors.tableHeadBg, padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h), child: Row(children: [
-                Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
-                SizedBox(width: 120.w, child: Text('AMOUNT', style: _h())),
-                SizedBox(width: 100.w, child: Text('NEW/OLD', style: _h())),
-                SizedBox(width: 100.w, child: Text('BOY/GIRL', style: _h())),
-                SizedBox(width: 110.w, child: Text('DAY/HOSTEL', style: _h())),
-              ])),
-              Expanded(child: ListView.separated(itemCount: _lines.length, separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.4)), itemBuilder: (_, i) {
-                final l = _lines[i];
-                return Padding(padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h), child: Row(children: [
-                  Expanded(flex: 3, child: Padding(padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h), child: Text(l.feeType ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary)))),
-                  SizedBox(width: 8.w),
-                  SizedBox(width: 112.w, child: TextField(controller: l.amount, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), decoration: _dec(''), onChanged: (_) => setState(() {}))),
-                  SizedBox(width: 8.w),
-                  SizedBox(width: 92.w, child: _flagDropdown(l.cfnob, const {1: 'New', 2: 'Old', 3: 'Both'}, (v) => setState(() => l.cfnob = v))),
-                  SizedBox(width: 8.w),
-                  SizedBox(width: 92.w, child: _flagDropdown(l.cfbgb, const {1: 'Boy', 2: 'Girl', 3: 'Both'}, (v) => setState(() => l.cfbgb = v))),
-                  SizedBox(width: 8.w),
-                  SizedBox(width: 102.w, child: _flagDropdown(l.cfdhb, const {1: 'Day', 2: 'Hostel', 3: 'Both'}, (v) => setState(() => l.cfdhb = v))),
-                ]));
-              })),
-              Divider(height: 1.h, color: AppColors.border),
-              Padding(padding: EdgeInsets.all(12.w), child: Row(children: [
+            padding: EdgeInsets.all(16.w),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                SizedBox(
+                  width: 140.w,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _section,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'Select Section *'),
+                    items: _sectionNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+                    onChanged: (v) => setState(() {
+                      _section = v;
+                      _reloadGrid();
+                    }),
+                  ),
+                ),
+                SizedBox(width: 10.w),
+                SizedBox(
+                  width: 140.w,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _term,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'Select Term *'),
+                    items: _termNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
+                    onChanged: (v) => setState(() {
+                      _term = v;
+                      _reloadGrid();
+                    }),
+                  ),
+                ),
+                SizedBox(width: 10.w),
+                SizedBox(
+                  width: 150.w,
+                  child: InkWell(
+                    onTap: () async {
+                      final now = DateTime.now();
+                      final p = await showDatePicker(context: context, initialDate: _due ?? now, firstDate: DateTime(now.year - 1), lastDate: DateTime(now.year + 5));
+                      if (p != null) setState(() => _due = p);
+                    },
+                    child: InputDecorator(
+                      decoration: _fieldDec(context, 'Select Date *'),
+                      child: Text(_due == null ? 'Select Date *' : _fmt(_due!), style: _fieldTextStyle(context).copyWith(color: _due == null ? AppColors.textPrimary.withValues(alpha: 0.6) : const Color(0xFF555555))),
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                _modeButton('New', Icons.add, !_editMode, () => setState(() {
+                  _editMode = false;
+                  _reloadGrid();
+                })),
+                SizedBox(width: 8.w),
+                _modeButton('Edit', Icons.edit, _editMode, () => setState(() {
+                  _editMode = true;
+                  _reloadGrid();
+                })),
+                SizedBox(width: 8.w),
+                OutlinedButton.icon(
+                  onPressed: _saving ? null : _copyFee,
+                  icon: const Icon(Icons.copy_all, size: 15),
+                  label: const Text('Copy Fee'),
+                ),
+              ]),
+              SizedBox(height: 14.h),
+              Expanded(
+                child: Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.border)),
+                  child: Column(children: [
+                    Container(color: AppColors.tableHeadBg, padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h), child: Row(children: [
+                      Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
+                      SizedBox(width: 120.w, child: Text('AMOUNT', style: _h())),
+                      SizedBox(width: 100.w, child: Text('NEW/OLD', style: _h())),
+                      SizedBox(width: 100.w, child: Text('BOY/GIRL', style: _h())),
+                      SizedBox(width: 110.w, child: Text('DAY/HOSTEL', style: _h())),
+                    ])),
+                    Expanded(child: ListView.separated(itemCount: _lines.length, separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.4)), itemBuilder: (_, i) {
+                      final l = _lines[i];
+                      return Container(color: _zebra(i), padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h), child: Row(children: [
+                        Expanded(flex: 3, child: Padding(padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h), child: Text(l.feeType ?? '', overflow: TextOverflow.ellipsis, style: _c()))),
+                        SizedBox(width: 8.w),
+                        SizedBox(width: 112.w, child: TextField(controller: l.amount, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), decoration: _dec(''), onChanged: (_) => setState(() {}))),
+                        SizedBox(width: 8.w),
+                        SizedBox(width: 92.w, child: _flagDropdown(l.cfnob, const {1: 'New', 2: 'Old', 3: 'Both'}, (v) => setState(() => l.cfnob = v))),
+                        SizedBox(width: 8.w),
+                        SizedBox(width: 92.w, child: _flagDropdown(l.cfbgb, const {1: 'Boy', 2: 'Girl', 3: 'Both'}, (v) => setState(() => l.cfbgb = v))),
+                        SizedBox(width: 8.w),
+                        SizedBox(width: 102.w, child: _flagDropdown(l.cfdhb, const {1: 'Day', 2: 'Hostel', 3: 'Both'}, (v) => setState(() => l.cfdhb = v))),
+                      ]));
+                    })),
+                  ]),
+                ),
+              ),
+              SizedBox(height: 12.h),
+              Row(children: [
                 Text(_editMode ? 'Edit pushes amounts into existing unpaid demands' : 'New stages tempfeedemand for approval', style: TextStyle(fontSize: 11.sp, color: AppColors.textLight)),
                 const Spacer(),
-                Text('Total  ', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                Text('Total  ', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                 Text(_total.toStringAsFixed(2), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
                 SizedBox(width: 16.w),
-                ElevatedButton.icon(onPressed: _saving ? null : _save, icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save, size: 16), label: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white)),
-              ])),
+                ElevatedButton.icon(onPressed: _saving ? null : _save, icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save, size: 16), label: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white)),
+              ]),
             ]),
           ),
         ),
@@ -1330,6 +1552,13 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Widget _existing() {
     final filtered = _section == null ? _rows : _rows.where((r) => (r['cfclass']?.toString() ?? '') == _section).toList();
     return _tableShell(
+      title: 'Saved Demands',
+      icon: 'category',
+      count: filtered.length,
+      countLabel: 'items',
+      actions: [
+        if (widget.onImport != null) _importButton(widget.onImport!),
+      ],
       headerCells: [
         SizedBox(width: 70.w, child: Text('TERM', style: _h())),
         Expanded(flex: 2, child: Text('FEE TYPE', style: _h())),
@@ -1341,7 +1570,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.5)), itemBuilder: (_, i) {
               final r = filtered[i];
               final id = r['cf_id'] is int ? r['cf_id'] as int : int.tryParse(r['cf_id'].toString()) ?? 0;
-              return Padding(padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h), child: Row(children: [
+              return Container(color: _zebra(i), padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h), child: Row(children: [
                 SizedBox(width: 70.w, child: Text(r['cfterm']?.toString() ?? '', style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary))),
                 Expanded(flex: 2, child: Text(r['cffeetype']?.toString() ?? '', style: _c())),
                 SizedBox(width: 70.w, child: Text(r['cfamount']?.toString() ?? '', style: _c())),
@@ -1472,42 +1701,43 @@ class _FeeTermPanelState extends State<_FeeTermPanel> with AutomaticKeepAliveCli
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
+    return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 320.w,
-            child: Container(
-              padding: EdgeInsets.all(16.w),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
-              ),
+            child: _addCard(
+              icon: 'calendar-1',
+              title: _editId != null ? 'Edit Term' : 'Add Term',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(_editId != null ? 'Edit Term' : 'Add Term', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 12.h),
-                  TextField(controller: _name, style: TextStyle(fontSize: 13.sp), decoration: _dec('Term Name *')),
-                  SizedBox(height: 10.h),
-                  TextField(controller: _short, style: TextStyle(fontSize: 13.sp), decoration: _dec('Short Name')),
-                  SizedBox(height: 10.h),
+                  _lbl('Term Name *'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _name, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Enter term name')),
+                  SizedBox(height: 16.h),
+                  _lbl('Short Name'),
+                  SizedBox(height: 6.h),
+                  TextField(controller: _short, style: _fieldTextStyle(context), decoration: _fieldDec(context, 'Short name')),
+                  SizedBox(height: 16.h),
+                  _lbl('Term / Month'),
+                  SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     initialValue: _type,
                     isExpanded: true,
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                    decoration: _dec('Term / Month'),
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    decoration: _fieldDec(context, 'Select type'),
                     items: const [
                       DropdownMenuItem(value: 'T', child: Text('Term')),
                       DropdownMenuItem(value: 'M', child: Text('Month')),
                     ],
                     onChanged: (v) => setState(() => _type = v ?? 'T'),
                   ),
-                  SizedBox(height: 14.h),
+                  SizedBox(height: 18.h),
                   Row(children: [
                     Expanded(
                       child: ElevatedButton.icon(
@@ -1529,8 +1759,12 @@ class _FeeTermPanelState extends State<_FeeTermPanel> with AutomaticKeepAliveCli
           SizedBox(width: 16.w),
           Expanded(
             child: _tableShell(
+              title: 'Terms',
+              icon: 'calendar-1',
+              count: _rows.length,
+              countLabel: 'terms',
               headerCells: [
-                SizedBox(width: 50.w, child: Text('S.No', style: _h())),
+                SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
                 Expanded(flex: 3, child: Text('TERM', style: _h())),
                 SizedBox(width: 100.w, child: Text('SHORT', style: _h())),
                 SizedBox(width: 90.w, child: Text('TYPE', style: _h())),
@@ -1547,11 +1781,12 @@ class _FeeTermPanelState extends State<_FeeTermPanel> with AutomaticKeepAliveCli
                             final r = _rows[i];
                             final id = r['term_id'] is int ? r['term_id'] as int : int.tryParse(r['term_id'].toString()) ?? 0;
                             final type = (r['termtype']?.toString() ?? 'T') == 'M' ? 'Month' : 'Term';
-                            return Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                            return Container(
+                              color: _zebra(i),
+                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                               child: Row(children: [
                                 SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                                Expanded(flex: 3, child: Text(r['termname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                Expanded(flex: 3, child: Text(r['termname']?.toString() ?? '', style: _c())),
                                 SizedBox(width: 100.w, child: Text(r['termshort']?.toString() ?? '', style: _c())),
                                 SizedBox(width: 90.w, child: Text(type, style: _c())),
                                 SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -1566,20 +1801,19 @@ class _FeeTermPanelState extends State<_FeeTermPanel> with AutomaticKeepAliveCli
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 }
 
-/// Wraps a CRUD panel with an "Import CSV/Excel" toggle that swaps the body
-/// for the Master Data import view. Pass the Master Data tab index for the
-/// import target (0=Standard, 1=Section, 2=Fee Group, 3=Fee Type, 4=Concession,
-/// 5=Class Fee Demand).
+/// Wraps a CRUD panel with an "Import CSV/Excel" toggle. The toggle button is
+/// rendered INSIDE the child panel's table-card header (via the [onImport]
+/// callback passed to [childBuilder]). When imports are active the body is
+/// replaced by the Master Data import view.
 class _PanelWithImport extends StatefulWidget {
-  final Widget child;
+  final Widget Function(VoidCallback onImport) childBuilder;
   final int importTabIndex;
   final String title;
-  const _PanelWithImport({required this.child, required this.importTabIndex, required this.title});
+  const _PanelWithImport({required this.childBuilder, required this.importTabIndex, required this.title});
   @override
   State<_PanelWithImport> createState() => _PanelWithImportState();
 }
@@ -1589,13 +1823,13 @@ class _PanelWithImportState extends State<_PanelWithImport> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 0),
-          child: Row(
-            children: [
-              if (_importing) ...[
+    if (_importing) {
+      return Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(0, 4.h, 0, 0),
+            child: Row(
+              children: [
                 OutlinedButton.icon(
                   onPressed: () => setState(() => _importing = false),
                   icon: const Icon(Icons.arrow_back, size: 16),
@@ -1605,26 +1839,41 @@ class _PanelWithImportState extends State<_PanelWithImport> {
                 Text('Import ${widget.title}',
                     style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
               ],
-              const Spacer(),
-              if (!_importing)
-                ElevatedButton.icon(
-                  onPressed: () => setState(() => _importing = true),
-                  icon: const Icon(Icons.upload_file, size: 16),
-                  label: const Text('Import CSV/Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-            ],
+            ),
           ),
-        ),
-        Expanded(
-          child: _importing
-              ? MasterImportScreen(initialTabIndex: widget.importTabIndex, showInternalTabs: false)
-              : widget.child,
-        ),
-      ],
-    );
+          Expanded(child: MasterImportScreen(initialTabIndex: widget.importTabIndex, showInternalTabs: false)),
+        ],
+      );
+    }
+    return widget.childBuilder(() => setState(() => _importing = true));
   }
+}
+
+/// Standard "Import CSV/Excel" action button used in panel headers.
+/// Matches the Fee Demand page styling exactly.
+Widget _importButton(VoidCallback onTap) {
+  return Builder(builder: (context) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final iconSize = compact ? 12.0 : 16.0;
+    final hPad = compact ? 10.0 : 18.0;
+    final radius = compact ? 6.0 : 10.0;
+    final textSize = compact ? 11.0 : 13.0;
+    return SizedBox(
+      height: btnHeight,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
+        label: const Text('Import CSV/Excel'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: EdgeInsets.symmetric(horizontal: hPad),
+          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+        ),
+      ),
+    );
+  });
 }

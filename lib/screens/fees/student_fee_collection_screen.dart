@@ -21,7 +21,7 @@ import '../../widgets/receipt_widget.dart';
 import 'student_fee_definition_dialog.dart';
 
 import '../../widgets/app_icon.dart';
-const _classOrder = ['PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+const _classOrder = ['PREKG', 'PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
 
 int _classIndex(String c) {
   final idx = _classOrder.indexOf(c.toUpperCase());
@@ -296,30 +296,42 @@ class _StudentFeeCollectionScreenState
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
     if (insId == null) return;
-    // Get courses and classes from feedemand table
+    // Load all configured standards/sections from the master tables so every
+    // standard (including ones without fee demands yet) shows in the dropdown.
     try {
-      final demands = await SupabaseService.getFeeDemands(insId);
-      final courseSet = <String>{};
+      final results = await Future.wait<dynamic>([
+        SupabaseService.client.from('clagrp').select('cgrp_id, clagrpname').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.client.from('class').select('claname, cgrp_id').eq('ins_id', insId).eq('activestatus', 1),
+      ]);
+      final stds = List<Map<String, dynamic>>.from(results[0] as List);
+      final secs = List<Map<String, dynamic>>.from(results[1] as List);
+      final stdById = {for (final s in stds) s['cgrp_id']: (s['clagrpname']?.toString().trim() ?? '')};
       final mapping = <String, Set<String>>{};
-      for (final d in demands) {
-        final course = d['clagrpname']?.toString() ?? '';
-        final cls = d['stuclass']?.toString() ?? '';
-        if (course.isNotEmpty) courseSet.add(course);
-        if (course.isNotEmpty && cls.isNotEmpty) {
-          mapping.putIfAbsent(course, () => <String>{}).add(cls);
-        }
+      for (final c in secs) {
+        final name = stdById[c['cgrp_id']] ?? '';
+        final cls = c['claname']?.toString().trim() ?? '';
+        if (name.isEmpty) continue;
+        mapping.putIfAbsent(name, () => <String>{});
+        if (cls.isNotEmpty) mapping[name]!.add(cls);
       }
-      final allClasses = mapping.values.expand((s) => s).toSet().toList();
-      allClasses.sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
-      final courseClassMap = <String, List<String>>{ for (final e in mapping.entries) e.key: e.value.toList()..sort((a, b) => _classIndex(a).compareTo(_classIndex(b))) };
-      final courseList = courseSet.toList()..sort();
-      if (mounted) setState(() {
-        _courseList = courseList;
-        _courseClassMap = courseClassMap;
-        _allClasses = allClasses;
-        _classList = allClasses;
-      });
-    } catch (e) { debugPrint('Error loading course-class from feedemand: $e'); }
+      final courseSet = stdById.values.where((s) => s.isNotEmpty).toSet();
+      final allClasses = mapping.values.expand((s) => s).toSet().toList()
+        ..sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
+      final courseClassMap = <String, List<String>>{
+        for (final e in mapping.entries) e.key: e.value.toList()..sort((a, b) => _classIndex(a).compareTo(_classIndex(b)))
+      };
+      final courseList = courseSet.toList()..sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
+      if (mounted) {
+        setState(() {
+          _courseList = courseList;
+          _courseClassMap = courseClassMap;
+          _allClasses = allClasses;
+          _classList = allClasses;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading standards/sections from clagrp/class: $e');
+    }
   }
 
   Future<void> _searchByClass(String className) async {
@@ -756,8 +768,10 @@ class _StudentFeeCollectionScreenState
             ),
           ],
         ),
-        // Floating suggestions popup over the body (doesn't push content down)
-        if (_studentSuggestions.isNotEmpty || _classSuggestions.isNotEmpty)
+        // Floating suggestions popup — ONLY for typed search (admission / name).
+        // The class-filtered student list goes into the "Select Student"
+        // dropdown instead of this popup.
+        if (_studentSuggestions.isNotEmpty)
           Positioned(
             left: 260,
             width: 500,
@@ -797,122 +811,188 @@ class _StudentFeeCollectionScreenState
     );
   }
 
+  // Field decoration that matches Fee Concession's `_fieldDec` exactly —
+  // taller padding, no isDense, white fill, accent focus border.
+  InputDecoration _lookupFieldDec(String hint, {Widget? prefixIcon, Widget? suffixIcon}) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
+
+  TextStyle _lookupFieldTextStyle() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    return TextStyle(fontWeight: FontWeight.w500, fontSize: compact ? 11 : 14, color: const Color(0xFF555555));
+  }
+
   // ── Student Lookup ──
   Widget _buildStudentLookupContent() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final btnIcon = compact ? 12.0 : 16.0;
+    final btnHPad = compact ? 10.0 : 18.0;
+    final btnRadius = compact ? 6.0 : 10.0;
+    final btnText = compact ? 11.0 : 13.0;
+
     return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              AppIcon.linear('search-normal', size: 18, color: AppColors.accent),
-              SizedBox(width: 8.w),
-              Text('Student Lookup',
-                  style: TextStyle(
-                        fontSize: 14.sp,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      )),
-              const Spacer(),
+              const AppIcon('receipt-2', size: 20, color: AppColors.primary),
+              SizedBox(width: 10.w),
+              Text('Fee Collection',
+                  style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              SizedBox(width: 10.w),
+              Text("collect fees for the selected student",
+                  style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+              SizedBox(width: 16.w),
               SizedBox(
-                height: AppBtn.height(context),
-                child: ElevatedButton.icon(
-                  onPressed: _clear,
-                  icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                  label: const Text('Clear'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
+                width: 160.w,
+                child: DropdownButtonFormField<String>(
+                  value: _selectedCourse,
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  decoration: _lookupFieldDec('Select Standard'),
+                  style: _lookupFieldTextStyle(),
+                  items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)))).toList(),
+                  onChanged: (val) {
+                    setState(() {
+                      _selectedCourse = val;
+                      _selectedClass = null;
+                      _classSuggestions = [];
+                      if (val != null && _courseClassMap.containsKey(val)) {
+                        _classList = List<String>.from(_courseClassMap[val]!);
+                      } else if (val != null) {
+                        _classList = List<String>.from(_allClasses);
+                      } else {
+                        _classList = List<String>.from(_allClasses);
+                      }
+                      _classList.sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
+                      if (val != null && val.startsWith('M') && _classList.length > 2) {
+                        _classList = _classList.sublist(0, 2);
+                      }
+                    });
+                  },
                 ),
               ),
-            ],
-          ),
-          SizedBox(height: 14.h),
-          // Single-line filter row: Course | Class | Search by Roll/Name.
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: 34,
-                  child: DropdownButtonFormField<String>(
-                    value: _selectedCourse,
+              SizedBox(width: 8.w),
+              SizedBox(
+                width: 160.w,
+                child: Builder(builder: (_) {
+                  final seen = <String>{};
+                  final items = <DropdownMenuItem<String>>[];
+                  for (final c in _classList) {
+                    if (c.isEmpty || !seen.add(c)) continue;
+                    items.add(DropdownMenuItem(value: c, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600))));
+                  }
+                  final value = seen.contains(_selectedClass) ? _selectedClass : null;
+                  return DropdownButtonFormField<String>(
+                    key: ValueKey(_selectedCourse),
+                    value: value,
                     isExpanded: true,
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
-                    decoration: _inputDec('Standard'),
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                    items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)))).toList(),
+                    decoration: _lookupFieldDec('Select Section'),
+                    style: _lookupFieldTextStyle(),
+                    items: items,
                     onChanged: (val) {
                       setState(() {
-                        _selectedCourse = val;
-                        _selectedClass = null;
+                        _selectedClass = val;
+                        _classController.text = val ?? '';
                         _classSuggestions = [];
-                        if (val != null && _courseClassMap.containsKey(val)) {
-                          _classList = List<String>.from(_courseClassMap[val]!);
-                        } else if (val != null) {
-                          _classList = List<String>.from(_allClasses);
-                        } else {
-                          _classList = List<String>.from(_allClasses);
-                        }
-                        _classList.sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
-                        if (val != null && val.startsWith('M') && _classList.length > 2) {
-                          _classList = _classList.sublist(0, 2);
-                        }
                       });
+                      if (val != null) _searchByClass(val);
                     },
+                  );
+                }),
+              ),
+              SizedBox(width: 8.w),
+              SizedBox(
+                width: 220.w,
+                child: DropdownButtonFormField<String>(
+                  value: () {
+                    final id = _student?['stu_id']?.toString();
+                    return _classSuggestions.any((s) => s['stu_id']?.toString() == id) ? id : null;
+                  }(),
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  decoration: _lookupFieldDec('Select Student'),
+                  style: _lookupFieldTextStyle(),
+                  items: _classSuggestions
+                      .map((s) => DropdownMenuItem(
+                            value: s['stu_id']?.toString(),
+                            child: Text('${s['stuname']} • ${s['stuadmno']}', overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: _classSuggestions.isEmpty
+                      ? null
+                      : (v) {
+                          if (v == null) return;
+                          final picked = _classSuggestions.firstWhere((e) => e['stu_id']?.toString() == v, orElse: () => const {});
+                          if (picked.isNotEmpty) _selectSuggestion(picked);
+                        },
+                ),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: 260.w,
+                child: TextField(
+                  controller: _admNoController,
+                  onSubmitted: (_) => _search(),
+                  onChanged: _searchByAdmNoOrName,
+                  decoration: _lookupFieldDec(
+                    'Admission No or Student Name',
+                    prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
+                    suffixIcon: _admNoController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, size: 16, color: AppColors.textLight),
+                            splashRadius: 14,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () {
+                              _admNoController.clear();
+                              setState(() => _studentSuggestions = []);
+                            },
+                          ),
                   ),
+                  style: _lookupFieldTextStyle(),
                 ),
               ),
-              SizedBox(width: 10.w),
-              Expanded(
-                child: SizedBox(
-                  height: 34,
-                  child: Builder(builder: (_) {
-                    final seen = <String>{};
-                    final items = <DropdownMenuItem<String>>[];
-                    for (final c in _classList) {
-                      if (c.isEmpty || !seen.add(c)) continue;
-                      items.add(DropdownMenuItem(value: c, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600))));
-                    }
-                    final value = seen.contains(_selectedClass) ? _selectedClass : null;
-                    return DropdownButtonFormField<String>(
-                      key: ValueKey(_selectedCourse),
-                      value: value,
-                      isExpanded: true,
-                      dropdownColor: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      elevation: 6,
-                      decoration: _inputDec('Section'),
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                      items: items,
-                      onChanged: (val) {
-                        setState(() {
-                          _selectedClass = val;
-                          _classController.text = val ?? '';
-                          _classSuggestions = [];
-                        });
-                        if (val != null) _searchByClass(val);
-                      },
-                    );
-                  }),
-                ),
-              ),
-              SizedBox(width: 10.w),
-              Expanded(
-                child: SizedBox(
-                  height: 34,
-                  child: TextField(
-                    controller: _admNoController,
-                    onSubmitted: (_) => _search(),
-                    onChanged: _searchByAdmNoOrName,
-                    decoration: _inputDec('Search by Admission No or Name'),
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                    expands: true,
-                    maxLines: null,
-                    textAlignVertical: TextAlignVertical.center,
+              SizedBox(width: 8.w),
+              SizedBox(
+                height: btnHeight,
+                child: ElevatedButton.icon(
+                  onPressed: _clear,
+                  icon: AppIcon('refresh', size: btnIcon, color: Colors.white),
+                  label: const Text('Clear'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: EdgeInsets.symmetric(horizontal: btnHPad),
+                    textStyle: TextStyle(fontSize: btnText, fontWeight: FontWeight.w600),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(btnRadius)),
                   ),
                 ),
               ),
@@ -925,12 +1005,9 @@ class _StudentFeeCollectionScreenState
               decoration: BoxDecoration(
                 color: AppColors.error.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(
-                    color: AppColors.error.withValues(alpha: 0.3)),
+                border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
               ),
-              child: Text(_errorMsg!,
-                  style: TextStyle(
-                      fontSize: 13.sp, color: AppColors.error)),
+              child: Text(_errorMsg!, style: TextStyle(fontSize: 13.sp, color: AppColors.error)),
             ),
           ],
         ],
@@ -1000,16 +1077,30 @@ class _StudentFeeCollectionScreenState
         SizedBox(width: 16.w),
         Expanded(child: _detailRow('teacher', 'Section', className)),
         SizedBox(width: 12.w),
-        OutlinedButton.icon(
-          onPressed: _openFeeDefinition,
-          icon: const Icon(Icons.fact_check_outlined, size: 16),
-          label: const Text('Fee Definition'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: AppColors.primary,
-            side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
-            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-          ),
-        ),
+        Builder(builder: (context) {
+          final compact = MediaQuery.of(context).size.width <= 1366;
+          final btnHeight = compact ? 30.0 : 40.0;
+          final btnIcon = compact ? 12.0 : 16.0;
+          final btnHPad = compact ? 10.0 : 18.0;
+          final btnRadius = compact ? 6.0 : 10.0;
+          final btnText = compact ? 11.0 : 13.0;
+          return SizedBox(
+            height: btnHeight,
+            child: ElevatedButton.icon(
+              onPressed: _openFeeDefinition,
+              icon: Icon(Icons.fact_check_outlined, size: btnIcon, color: Colors.white),
+              label: const Text('Fee Definition'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: btnHPad),
+                textStyle: TextStyle(fontSize: btnText, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(btnRadius)),
+              ),
+            ),
+          );
+        }),
       ],
     );
   }
@@ -1112,7 +1203,7 @@ class _StudentFeeCollectionScreenState
                 ],
                 const Spacer(),
                 if (_student != null && _terms.isNotEmpty) ...[
-                  Text('Fee Type:', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                  Text('Fee Type:', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                   SizedBox(width: 8.w),
                   SizedBox(
                     width: 200.w,
@@ -1123,11 +1214,11 @@ class _StudentFeeCollectionScreenState
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       elevation: 6,
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
                       decoration: _headerDropdownDec(),
                       items: [
-                        DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700))),
-                        ..._terms.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis))),
+                        DropdownMenuItem<String?>(value: null, child: Text('All', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500))),
+                        ..._terms.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis))),
                       ],
                       onChanged: (v) => setState(() => _selectedTerm = v),
                     ),
@@ -1480,29 +1571,23 @@ class _StudentFeeCollectionScreenState
               const Spacer(),
               if (_selected.isNotEmpty) ...[
                 Container(
-                  height: 58,
-                  padding: EdgeInsets.symmetric(horizontal: 22.w),
+                  height: 40,
+                  padding: EdgeInsets.symmetric(horizontal: 14.w),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    // Stronger fill + border so the figure pops against the
-                    // surrounding white footer bar.
                     color: AppColors.accent.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(10.r),
-                    border: Border.all(color: AppColors.accent.withValues(alpha: 0.45), width: 1.2),
+                    borderRadius: BorderRadius.circular(8.r),
+                    border: Border.all(color: AppColors.accent.withValues(alpha: 0.45), width: 1),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text('NET AMOUNT: ',
                           style: TextStyle(
-                              fontSize: 19.sp,
-                              fontWeight: FontWeight.w800,
+                              fontSize: 12.sp,
+                              fontWeight: FontWeight.w600,
                               color: AppColors.textPrimary,
                               letterSpacing: 0.3)),
-                      // Live total — subscribes to every visible row's
-                      // col/fine controller so it ticks per keystroke
-                      // without rebuilding the TextField (which would steal
-                      // focus mid-typing).
                       ListenableBuilder(
                         listenable: Listenable.merge([
                           ..._conCtrl.values,
@@ -1510,44 +1595,34 @@ class _StudentFeeCollectionScreenState
                         ]),
                         builder: (_, __) => Text(
                           formatIndianNumber(_totalNetSelected),
-                          style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.accent),
+                          style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent),
                         ),
                       ),
                     ],
                   ),
                 ),
-                SizedBox(width: 14.w),
+                SizedBox(width: 10.w),
               ],
-              SizedBox(width: 6.w),
-              // Payment-mode dropdown — sits just before the Save / Proceed
-              // to Pay button so the cashier picks the mode and commits in
-              // one motion.
-              // Wrap a borderless DropdownButton in the same padded
-              // container shape as the NET AMOUNT pill so the two visually
-              // match in height + corner radius.
               Container(
-                width: 200.w,
-                height: 58,
-                padding: EdgeInsets.symmetric(horizontal: 16.w),
+                width: 150.w,
+                height: 40,
+                padding: EdgeInsets.symmetric(horizontal: 12.w),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  // Match the NET AMOUNT pill's accent-tinted fill so the
-                  // Mode field is visually clearly distinguished from the
-                  // plain footer background.
                   color: AppColors.accent.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(10.r),
-                  border: Border.all(color: AppColors.accent.withValues(alpha: 0.45), width: 1.2),
+                  borderRadius: BorderRadius.circular(8.r),
+                  border: Border.all(color: AppColors.accent.withValues(alpha: 0.45), width: 1),
                 ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
                     value: _paymentMode,
                     isExpanded: true,
-                    isDense: false,
-                    hint: Text('SELECT MODE', style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: 0.3)),
+                    isDense: true,
+                    hint: Text('SELECT MODE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary, letterSpacing: 0.3)),
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
-                    style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.accent, letterSpacing: 0.3),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent, letterSpacing: 0.3),
                     items: const [
                       DropdownMenuItem(value: 'Cash', child: Text('CASH')),
                       DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
@@ -1559,16 +1634,13 @@ class _StudentFeeCollectionScreenState
                 ),
               ),
               SizedBox(width: 10.w),
-              // Match the NET AMOUNT pill + Mode dropdown visually: same
-              // accent-tinted fill, same border, same height, same corner
-              // radius. Keeps the three footer elements as a unified triple.
               SizedBox(
-                height: 58,
+                height: 40,
                 child: ElevatedButton.icon(
                   onPressed: (_selected.isEmpty || _paymentMode == null)
                       ? null
                       : (_paymentMode == 'Cash' ? _saveCashPayment : _onCollectAndReceipt),
-                  icon: AppIcon(_paymentMode == 'Cash' ? 'save-2' : 'wallet-money', size: 20),
+                  icon: AppIcon(_paymentMode == 'Cash' ? 'save-2' : 'wallet-money', size: 16),
                   label: Text(_paymentMode == 'Cash' ? 'SAVE' : 'PROCEED TO PAY'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.accent.withValues(alpha: 0.18),
@@ -1577,12 +1649,12 @@ class _StudentFeeCollectionScreenState
                     disabledForegroundColor: AppColors.textSecondary,
                     elevation: 0,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r),
-                      side: BorderSide(color: AppColors.accent.withValues(alpha: 0.45), width: 1.2),
+                      borderRadius: BorderRadius.circular(8.r),
+                      side: BorderSide(color: AppColors.accent.withValues(alpha: 0.45), width: 1),
                     ),
-                    padding: EdgeInsets.symmetric(horizontal: 32.w),
+                    padding: EdgeInsets.symmetric(horizontal: 18.w),
                     textStyle: TextStyle(
-                        fontSize: 19.sp, fontWeight: FontWeight.w800, letterSpacing: 0.3),
+                        fontSize: 12.sp, fontWeight: FontWeight.w600, letterSpacing: 0.3),
                   ),
                 ),
               ),
@@ -2500,7 +2572,7 @@ class _StudentFeeCollectionScreenState
       // Build payment reference. _paymentMode is non-null here because the
       // bottom-bar button is disabled until the cashier picks a mode. We
       // store JUST the txn / cheque id (no narrative prefix) so the
-      // PowerCollege SETTLEMENT ID column shows the clean value.
+      // PowerSchool SETTLEMENT ID column shows the clean value.
       final mode = _paymentMode ?? 'Cash';
       String payReference = '';
       String payMethod = mode.toLowerCase();
@@ -3144,7 +3216,7 @@ class _StudentFeeCollectionScreenState
       }
 
       // Store just the gateway txn id (no narrative prefix) so the
-      // PowerCollege SETTLEMENT ID column shows it cleanly. Failed /
+      // PowerSchool SETTLEMENT ID column shows it cleanly. Failed /
       // cancelled flows still get a short tag so they're distinguishable.
       String payRef = status == 'C' ? rpRef : (result == 'F' ? 'FAILED:$rpRef' : 'CANCELLED');
 
@@ -3285,27 +3357,6 @@ class _StudentFeeCollectionScreenState
         letterSpacing: 0.4,
       );
 
-  InputDecoration _inputDec(String hint) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle:
-          TextStyle(fontSize: 13.sp, color: AppColors.textLight),
-      isDense: true,
-      contentPadding:
-          EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-      border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide: BorderSide(color: AppColors.border)),
-      enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide: BorderSide(color: AppColors.border)),
-      focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide:
-              const BorderSide(color: AppColors.accent, width: 1.5)),
-    );
-  }
-
   Widget _detailRow(String icon, String label, String value) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3431,7 +3482,7 @@ class _TDCell extends StatelessWidget {
       child: Text(text,
           textAlign: textAlign,
           style: style ??
-              TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+              TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
           overflow: TextOverflow.ellipsis),
     );
   }

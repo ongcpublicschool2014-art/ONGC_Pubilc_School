@@ -241,7 +241,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
+                              backgroundColor: AppColors.accent,
                               foregroundColor: Colors.white,
                               elevation: 0,
                             ),
@@ -256,10 +256,10 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                     color: const Color(0xFF6C8EEF),
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 3, child: Text('ROLE NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 2, child: Text('INS CODE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
+                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: 0.3))),
+                        Expanded(flex: 3, child: Text('ROLE NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('INS CODE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: 0.3))),
+                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: 0.3))),
                       ],
                     ),
                   ),

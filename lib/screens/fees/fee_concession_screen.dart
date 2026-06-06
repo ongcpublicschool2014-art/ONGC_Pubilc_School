@@ -54,7 +54,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   final _searchCtrl = TextEditingController();
   Map<String, dynamic>? _student;
   List<_ConRow> _rows = [];
-  List<Map<String, dynamic>> _suggestions = [];
+  List<Map<String, dynamic>> _suggestions = []; // floating popup from typing
+  List<Map<String, dynamic>> _filteredStudents = []; // dropdown list from standard/section filter
   List<Map<String, dynamic>> _conTypes = [];
   String? _conTypeId;
   bool _searching = false, _loading = false, _saving = false;
@@ -109,7 +110,10 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   /// Fetch students matching the Standard / Section filter into the
   /// suggestions list (same widget used by the name/admno search).
   Future<void> _loadFromFilter() async {
-    if (_selectedStandard == null && _selectedSection == null) return;
+    if (_selectedStandard == null && _selectedSection == null) {
+      if (mounted) setState(() => _filteredStudents = []);
+      return;
+    }
     try {
       var query = SupabaseService.fromSchema('students')
           .select('stu_id, stuname, stuadmno, stuclass, clagrpname')
@@ -121,8 +125,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       if (_selectedSection != null) {
         query = query.eq('stuclass', _selectedSection!);
       }
-      final rows = await query.order('stuname', ascending: true).limit(50);
-      if (mounted) setState(() => _suggestions = List<Map<String, dynamic>>.from(rows));
+      final rows = await query.order('stuname', ascending: true).limit(500);
+      if (mounted) setState(() => _filteredStudents = List<Map<String, dynamic>>.from(rows));
     } catch (_) {}
   }
 
@@ -160,7 +164,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
           .eq('ins_id', _insId)
           .eq('activestatus', 1)
           .or('stuadmno.ilike.$term%,stuname.ilike.%$term%')
-          .limit(10);
+          .order('stuname', ascending: true)
+          .limit(200);
       if (mounted) setState(() => _suggestions = List<Map<String, dynamic>>.from(rows));
     } catch (_) {}
   }
@@ -318,36 +323,92 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
   }
 
+  // ── Form field helpers — match Class Fee Demand / Create New User style ───
+  InputDecoration _fieldDec(String hint, {Widget? prefixIcon, Widget? suffixIcon}) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(radius),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(radius),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(radius),
+        borderSide: const BorderSide(color: AppColors.accent),
+      ),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
+
+  TextStyle _fieldTextStyle() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    return TextStyle(
+      fontWeight: FontWeight.w500,
+      fontSize: compact ? 11 : 14,
+      color: const Color(0xFF555555),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: AppCard.decoration(),
-      margin: EdgeInsets.all(8.w),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12.r),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Stack(
         children: [
-          _header(),
-          Divider(height: 1.h, color: AppColors.border),
-          _lookup(),
-          if (_student != null) ...[
-            Divider(height: 1.h, color: AppColors.border),
-            Expanded(child: _grid()),
-            Divider(height: 1.h, color: AppColors.border),
-            _footer(),
-          ] else
-            Expanded(
-              child: Center(
-                child: Text(_error ?? 'Search a student by Admission No or Name',
-                    style: TextStyle(fontSize: 13.sp, color: _error != null ? AppColors.error : AppColors.textSecondary)),
-              ),
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _header(),
+              _lookup(),
+              if (_student != null) ...[
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 8.h),
+                    child: Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8.r),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: _grid(),
+                    ),
+                  ),
+                ),
+                _footer(),
+              ] else
+                Expanded(
+                  child: Center(
+                    child: Text(_error ?? 'Search a student by Admission No or Name',
+                        style: TextStyle(fontSize: 13.sp, color: _error != null ? AppColors.error : AppColors.textSecondary)),
+                  ),
+                ),
+            ],
+          ),
+          if (_suggestions.isNotEmpty) _suggestionsOverlay(),
         ],
       ),
     );
   }
 
   Widget _header() => Padding(
-        padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 14.h),
+        padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 10.h),
         child: Row(children: [
           const AppIcon('receipt-discount', size: 20, color: AppColors.primary),
           SizedBox(width: 10.w),
@@ -355,86 +416,100 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
           SizedBox(width: 10.w),
           Text("apply concession against a student's fee demands",
               style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+          const Spacer(),
+          SizedBox(
+            width: 280.w,
+            child: TextField(
+              controller: _searchCtrl,
+              style: _fieldTextStyle(),
+              decoration: _fieldDec(
+                'Admission No or Student Name',
+                prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
+                suffixIcon: _searchCtrl.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, size: 16, color: AppColors.textLight),
+                        splashRadius: 14,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _suggestions = []);
+                        },
+                      ),
+              ),
+              onChanged: _suggest,
+              onSubmitted: (_) => _search(),
+            ),
+          ),
+          SizedBox(width: 10.w),
+          SizedBox(
+            width: 200.w,
+            child: DropdownButtonFormField<String>(
+              initialValue: _conTypeId,
+              isExpanded: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              elevation: 6,
+              style: _fieldTextStyle(),
+              decoration: _fieldDec('Select Concession'),
+              items: _conTypes
+                  .map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis)))
+                  .toList(),
+              onChanged: (v) => setState(() => _conTypeId = v),
+            ),
+          ),
+          SizedBox(width: 10.w),
+          Builder(builder: (context) {
+            final compact = MediaQuery.of(context).size.width <= 1366;
+            final btnHeight = compact ? 30.0 : 40.0;
+            final iconSize = compact ? 12.0 : 16.0;
+            final hPad = compact ? 10.0 : 18.0;
+            final radius = compact ? 6.0 : 10.0;
+            final textSize = compact ? 11.0 : 13.0;
+            return SizedBox(
+              height: btnHeight,
+              child: ElevatedButton.icon(
+                onPressed: _searching ? null : () {
+                  _clear();
+                  _loadFromFilter();
+                },
+                icon: AppIcon('refresh', size: iconSize, color: Colors.white),
+                label: const Text('Clear'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accent,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: EdgeInsets.symmetric(horizontal: hPad),
+                  textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+                ),
+              ),
+            );
+          }),
         ]),
       );
 
   Widget _lookup() {
     return Padding(
-      padding: EdgeInsets.all(12.w),
+      padding: EdgeInsets.fromLTRB(18.w, 0, 18.w, 12.h),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
             SizedBox(
-              width: 340.w,
-              child: TextField(
-                controller: _searchCtrl,
-                style: TextStyle(fontSize: 13.sp),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: 'Admission No or Student Name',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                ),
-                onChanged: _suggest,
-                onSubmitted: (_) => _search(),
-              ),
-            ),
-            SizedBox(width: 10.w),
-            ElevatedButton.icon(
-              onPressed: _searching ? null : _search,
-              icon: const Icon(Icons.search, size: 16),
-              label: const Text('Search'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
-            ),
-            SizedBox(width: 10.w),
-            OutlinedButton.icon(onPressed: _clear, icon: const Icon(Icons.clear, size: 16), label: const Text('Clear')),
-            SizedBox(width: 16.w),
-            Text('Concession Type', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-            SizedBox(width: 8.w),
-            SizedBox(
-              width: 200.w,
-              child: DropdownButtonFormField<String>(
-                initialValue: _conTypeId,
-                isExpanded: true,
-                style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                decoration: InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                ),
-                hint: Text('Select', style: TextStyle(fontSize: 12.sp, color: AppColors.textLight)),
-                items: [
-                  const DropdownMenuItem<String>(value: null, child: Text('None')),
-                  ..._conTypes.map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis))),
-                ],
-                onChanged: (v) => setState(() => _conTypeId = v),
-              ),
-            ),
-            const Spacer(),
-            if (_student != null) _studentChip(),
-          ]),
-          SizedBox(height: 10.h),
-          Row(children: [
-            Text('Standard', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-            SizedBox(width: 8.w),
-            SizedBox(
               width: 200.w,
               child: DropdownButtonFormField<String>(
                 initialValue: _standardNames.contains(_selectedStandard) ? _selectedStandard : null,
                 isExpanded: true,
-                style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                decoration: InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                ),
-                hint: Text('All', style: TextStyle(fontSize: 12.sp, color: AppColors.textLight)),
-                items: [
-                  const DropdownMenuItem<String>(value: null, child: Text('All')),
-                  ..._standardNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))),
-                ],
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                elevation: 6,
+                style: _fieldTextStyle(),
+                decoration: _fieldDec('Select Standard'),
+                items: _standardNames
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))
+                    .toList(),
                 onChanged: (v) => setState(() {
                   _selectedStandard = v;
                   if (_selectedSection != null && !_sectionNamesFor(v).contains(_selectedSection)) {
@@ -444,81 +519,137 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
                 }),
               ),
             ),
-            SizedBox(width: 16.w),
-            Text('Section', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-            SizedBox(width: 8.w),
+            SizedBox(width: 10.w),
             SizedBox(
               width: 180.w,
               child: DropdownButtonFormField<String>(
                 initialValue: _sectionNamesFor(_selectedStandard).contains(_selectedSection) ? _selectedSection : null,
                 isExpanded: true,
-                style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                decoration: InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                ),
-                hint: Text('All', style: TextStyle(fontSize: 12.sp, color: AppColors.textLight)),
-                items: [
-                  const DropdownMenuItem<String>(value: null, child: Text('All')),
-                  ..._sectionNamesFor(_selectedStandard).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))),
-                ],
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                elevation: 6,
+                style: _fieldTextStyle(),
+                decoration: _fieldDec('Select Section'),
+                items: _sectionNamesFor(_selectedStandard)
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))
+                    .toList(),
                 onChanged: (v) => setState(() {
                   _selectedSection = v;
                   _loadFromFilter();
                 }),
               ),
             ),
-            const Spacer(),
-          ]),
-          if (_suggestions.isNotEmpty)
-            Container(
-              margin: EdgeInsets.only(top: 6.h),
-              constraints: BoxConstraints(maxHeight: 220.h, maxWidth: 340.w),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
-                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8)],
-              ),
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  for (final s in _suggestions)
-                    InkWell(
-                      onTap: () => _pick(s),
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                        child: Row(children: [
-                          Expanded(child: Text('${s['stuname']} • ${s['stuadmno']}',
-                              overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary))),
-                          Text(s['stuclass']?.toString() ?? '', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
-                        ]),
-                      ),
-                    ),
-                ],
+            SizedBox(width: 10.w),
+            SizedBox(
+              width: 220.w,
+              child: DropdownButtonFormField<String>(
+                initialValue: () {
+                  final id = _student?['stu_id']?.toString();
+                  return _filteredStudents.any((s) => s['stu_id']?.toString() == id) ? id : null;
+                }(),
+                isExpanded: true,
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                elevation: 6,
+                style: _fieldTextStyle(),
+                decoration: _fieldDec('Select Student'),
+                items: _filteredStudents
+                    .map((s) => DropdownMenuItem(
+                          value: s['stu_id']?.toString(),
+                          child: Text('${s['stuname']} • ${s['stuadmno']}', overflow: TextOverflow.ellipsis),
+                        ))
+                    .toList(),
+                onChanged: _filteredStudents.isEmpty
+                    ? null
+                    : (v) {
+                        if (v == null) return;
+                        final picked = _filteredStudents.firstWhere((e) => e['stu_id']?.toString() == v, orElse: () => const {});
+                        if (picked.isNotEmpty) _pick(picked);
+                      },
               ),
             ),
+            const Spacer(),
+            if (_student != null) _studentChip(),
+          ]),
         ],
+      ),
+    );
+  }
+
+  /// Floating suggestion popup — positioned below the search field as an
+  /// overlay so it doesn't push the form rows or table down.
+  Widget _suggestionsOverlay() {
+    return Positioned(
+      top: 56.h,
+      right: 350.w,
+      width: 280.w,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(8.r),
+        child: Container(
+          constraints: BoxConstraints(maxHeight: 420.h),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8.r),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Scrollbar(
+            thumbVisibility: true,
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: _suggestions.length,
+              itemBuilder: (_, i) {
+                final s = _suggestions[i];
+                return InkWell(
+                  onTap: () => _pick(s),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+                    child: Row(children: [
+                      Expanded(child: Text('${s['stuname']} • ${s['stuadmno']}',
+                          overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary))),
+                      Text(s['stuclass']?.toString() ?? '', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
       ),
     );
   }
 
   Widget _studentChip() {
     final s = _student!;
+    final name = s['stuname']?.toString() ?? '';
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(8.r),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.person, size: 14, color: AppColors.primary),
-        SizedBox(width: 6.w),
-        Text('${s['stuname']}', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
-        SizedBox(width: 8.w),
-        Text('${s['stuadmno']}  •  ${s['stuclass'] ?? ''}', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+        Container(
+          width: 32.w,
+          height: 32.w,
+          decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(8.r)),
+          alignment: Alignment.center,
+          child: Text(initial, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.white)),
+        ),
+        SizedBox(width: 10.w),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+            SizedBox(height: 2.h),
+            Text('Adm No: ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}',
+                style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+          ],
+        ),
       ]),
     );
   }
@@ -529,13 +660,13 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       return Center(child: Text('No unpaid fee demands for this student',
           style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)));
     }
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-    TextStyle c() => TextStyle(fontSize: 12.sp, color: AppColors.textSecondary);
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
     return Column(
       children: [
         Container(
           color: AppColors.tableHeadBg,
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
           child: Row(children: [
             SizedBox(width: 80.w, child: Text('TERM', style: h())),
             Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
@@ -550,7 +681,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
             separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.5)),
             itemBuilder: (_, i) {
               final r = _rows[i];
-              return Padding(
+              return Container(
+                color: i.isEven ? Colors.white : AppColors.surface,
                 padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
                 child: Row(children: [
                   SizedBox(width: 80.w, child: Text(r.term, style: c())),
@@ -605,7 +737,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
               ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.save, size: 16),
           label: const Text('Save Concession'),
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
         ),
       ]),
     );

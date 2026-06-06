@@ -71,11 +71,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _NavItem('people', 'Student', section: 'STUDENTS', adminOnly: true),
     _NavItem('book-1', 'Student Ledger', section: 'STUDENTS'),
     _NavItem('receipt-discount', 'Fee Master', section: 'FEES', accountantOnly: true),
+    _NavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
     _NavItem('receipt-edit', 'Fee Demand', section: 'FEES'),
     _NavItem('tick-square', 'Fee Demand Approval', section: 'FEES', adminOnly: true),
     _NavItem('discount-shape', 'Fee Concession', section: 'FEES', accountantOnly: true),
     _NavItem('bank', 'Bank Reconciliation', section: 'FEES', adminOnly: true),
-    _NavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
     _NavItem('receipt-2', 'Transactions', section: 'FEES'),
     _NavItem('notification', 'Notices', section: 'GENERAL'),
     _NavItem('notification-bing', 'Notifications', section: 'GENERAL'),
@@ -840,7 +840,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           if (isDesktop)
             _softIconButton(
-              icon: _sidebarCollapsed ? 'menu-open' : 'menu-close',
+              icon: _sidebarCollapsed ? 'arrow-square-right' : 'arrow-square-left',
+              iconLinear: true,
               onTap: () => setState(() => _sidebarCollapsed = !_sidebarCollapsed),
             ),
           SizedBox(width: 14.w),

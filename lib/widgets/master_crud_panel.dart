@@ -14,6 +14,14 @@ class MasterCrudPanel extends StatefulWidget {
   final String idCol;
   final String nameCol;
   final String title;
+  /// Iconsax icon name shown next to the Add card title + list card title.
+  final String? icon;
+  /// Plural label for the count badge (e.g. "standards", "items"). Defaults
+  /// to the title lowercased + "s".
+  final String? countLabel;
+  /// When provided, an "Import CSV/Excel" button is rendered in the list-card
+  /// header (matching Fee Master).
+  final VoidCallback? onImport;
   /// If true, CRUD against the per-institution schema (fromSchema); else public.
   final bool inSchema;
   /// Column name for the order field (e.g. `ordid`). When non-null, the panel
@@ -27,6 +35,9 @@ class MasterCrudPanel extends StatefulWidget {
     required this.idCol,
     required this.nameCol,
     required this.title,
+    this.icon,
+    this.countLabel,
+    this.onImport,
     this.inSchema = false,
     this.ordidCol,
   });
@@ -164,47 +175,48 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-      padding: EdgeInsets.all(16.w),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 320.w, child: _addPanel()),
-          SizedBox(width: 16.w),
-          Expanded(child: _listPanel()),
-        ],
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 320.w, child: _addPanel()),
+        SizedBox(width: 16.w),
+        Expanded(child: _listPanel()),
+      ],
     );
   }
 
   Widget _addPanel() {
     return Container(
-      padding: EdgeInsets.all(16.w),
+      padding: EdgeInsets.all(20.w),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('${_editId != null ? 'Edit' : 'Add'} ${widget.title}',
-              style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-          SizedBox(height: 12.h),
+          Row(children: [
+            if (widget.icon != null) ...[
+              AppIcon(widget.icon!, size: 18, color: AppColors.accent),
+              SizedBox(width: 8.w),
+            ],
+            Text('${_editId != null ? 'Edit' : 'Add'} ${widget.title}',
+                style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          ]),
+          SizedBox(height: 20.h),
+          Text('${widget.title} Name *',
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black)),
+          SizedBox(height: 6.h),
           TextField(
             controller: _nameController,
             style: TextStyle(fontSize: 13.sp),
             textCapitalization: TextCapitalization.characters,
-            decoration: InputDecoration(
-              labelText: '${widget.title} Name',
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-            ),
+            decoration: _filledFieldDec('Enter ${widget.title.toLowerCase()} name'),
             onSubmitted: (_) => _add(),
           ),
-          SizedBox(height: 14.h),
+          SizedBox(height: 18.h),
           Row(
             children: [
               Expanded(
@@ -229,20 +241,20 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
   }
 
   Widget _listPanel() {
-    return Container(
+    final innerTable = Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(8.r),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         children: [
           Container(
             color: AppColors.tableHeadBg,
-            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
             child: Row(
               children: [
-                SizedBox(width: 50.w, child: Text('S.No', style: _hStyle())),
+                SizedBox(width: 50.w, child: Text('S NO.', style: _hStyle())),
                 Expanded(child: Text(widget.title.toUpperCase(), style: _hStyle())),
                 SizedBox(width: 96.w, child: Text('ACTION', textAlign: TextAlign.center, style: _hStyle())),
               ],
@@ -264,12 +276,13 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                               ? r[widget.idCol] as int
                               : int.tryParse(r[widget.idCol].toString()) ?? 0;
                           final name = r[widget.nameCol]?.toString() ?? '';
-                          return Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                          return Container(
+                            color: i.isEven ? Colors.white : AppColors.surface,
+                            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
                             child: Row(
                               children: [
-                                SizedBox(width: 50.w, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
-                                Expanded(child: Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
+                                SizedBox(width: 50.w, child: Text('${i + 1}', style: _cStyle())),
+                                Expanded(child: Text(name, style: _cStyle())),
                                 SizedBox(
                                   width: 96.w,
                                   child: Row(
@@ -304,7 +317,94 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
         ],
       ),
     );
+
+    final countLabel = widget.countLabel ?? '${widget.title.toLowerCase()}s';
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            child: Row(
+              children: [
+                if (widget.icon != null) ...[
+                  AppIcon(widget.icon!, size: 18, color: AppColors.accent),
+                  SizedBox(width: 8.w),
+                ],
+                Text('${widget.title}s',
+                    style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+                SizedBox(width: 8.w),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8.r),
+                  ),
+                  child: Text('${_rows.length} $countLabel',
+                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                ),
+                const Spacer(),
+                if (widget.onImport != null) _importButton(widget.onImport!),
+              ],
+            ),
+          ),
+          Expanded(child: innerTable),
+        ],
+      ),
+    );
   }
 
-  TextStyle _hStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+  Widget _importButton(VoidCallback onTap) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final iconSize = compact ? 12.0 : 16.0;
+    final hPad = compact ? 10.0 : 18.0;
+    final radius = compact ? 6.0 : 10.0;
+    final textSize = compact ? 11.0 : 13.0;
+    return SizedBox(
+      height: btnHeight,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
+        label: const Text('Import CSV/Excel'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: EdgeInsets.symmetric(horizontal: hPad),
+          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+        ),
+      ),
+    );
+  }
+
+  TextStyle _hStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+  TextStyle _cStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+
+  /// Filled input decoration matching the User Creation form style — bold
+  /// label rendered above (handled separately), placeholder hint inside,
+  /// white fill, subtle border with accent focus state.
+  InputDecoration _filledFieldDec(String hint) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
+      filled: true,
+      fillColor: Colors.white,
+    );
+  }
 }

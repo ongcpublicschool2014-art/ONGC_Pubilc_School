@@ -356,7 +356,7 @@ class _SuperAdminRegistrationScreenState
                   ElevatedButton(
                     onPressed: _submitting ? null : _register,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       padding: EdgeInsets.symmetric(vertical: 14.h),
                       shape: RoundedRectangleBorder(

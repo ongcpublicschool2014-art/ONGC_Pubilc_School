@@ -356,9 +356,9 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
             label: const Text('Refresh'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981),
+              backgroundColor: AppColors.accent,
               foregroundColor: Colors.white,
-              disabledBackgroundColor: const Color(0xFF10B981),
+              disabledBackgroundColor: AppColors.accent,
               disabledForegroundColor: Colors.white,
               elevation: 0,
             ),
@@ -566,7 +566,6 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                               _headerCell('Admission No', 3),
                               _headerCell('Student Name', 5),
                               _headerCell('Section', 3),
-                              _headerCell('Standard', 3, center: true),
                               _headerCell('Year', 3, center: true),
                               _headerCell('Term', 3, center: true),
                               _headerCell('Fee Type', 3),
@@ -855,29 +854,22 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                 flex: 5,
                 child: Text(name.isNotEmpty ? name : '-',
                     style: TextStyle(
-                        fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                        fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis),
               ),
               // Class
               Expanded(
                 flex: 3,
                 child: Text(cls,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.left,
                     overflow: TextOverflow.ellipsis),
-              ),
-              // Standard
-              Expanded(
-                flex: 3,
-                child: Text(d['clagrpname']?.toString() ?? '-',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-                    textAlign: TextAlign.center),
               ),
               // Year
               Expanded(
                 flex: 3,
                 child: Text(year,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -885,7 +877,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(term,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -893,14 +885,14 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(type,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis),
               ),
               // Fee Amount
               Expanded(
                 flex: 3,
                 child: Text('${_fmt(feeAmt)}',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.right),
               ),
               SizedBox(width: 16.w),
@@ -908,7 +900,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(concessionName,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -925,7 +917,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(createdBy,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis),
               ),
               // Status
