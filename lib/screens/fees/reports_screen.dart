@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
@@ -18,6 +17,7 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/formatters.dart';
+import '../../utils/class_sort.dart';
 
 const _termOrder = [
   'I SEMESTER', 'I TERM', 'II SEMESTER', 'II TERM', 'III SEMESTER', 'III TERM',
@@ -58,6 +58,24 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   List<String> _feeTypes = [];
   String? _selectedCourse;
   String? _selectedClass;
+  Set<String> _selectedAdmnTypes = <String>{}; // Pending Payment tab: filter by admission types (multi-select)
+  Set<String> _selectedQuotas = <String>{};    // Pending Payment tab: filter by quotas (multi-select)
+
+  // DCB Student Register (per-course Demand / Collection / Balance).
+  bool _dcbLoaded = false;
+  bool _dcbExporting = false;
+  Map<String, Map<String, dynamic>> _stuInfo = {};   // admno -> {batch, quoname, admname, stuname}
+  Map<int, String> _feeIdToType = {};                // fee_id -> feetype.type (COL/TRA/...)
+  Map<String, String> _feeTypeNameToType = {};       // fee type name (upper) -> feetype.type
+  Map<int, Map<String, dynamic>> _stuReceipt = {};   // stu_id -> {paynumber, paydate} (latest reconciled)
+  Map<String, int> _dcbClassOrdid = {};              // class ordid for ordering
+  List<String> _dcbTypeOptions = [];                  // distinct feetype.type values (DCB Type filter)
+  Set<String> _dcbTypes = <String>{};            // selected types (empty = all)
+  final GlobalKey _dcbFgKey = GlobalKey();
+  Set<String> _dcbAdmnTypes = <String>{};            // selected admission types (empty = all)
+  final GlobalKey _dcbAdmKey = GlobalKey();
+  final GlobalKey _admnTypeKey = GlobalKey();
+  final GlobalKey _quotaKey = GlobalKey();
   Set<String> _selectedFeeTypes = <String>{};
   final GlobalKey _feeTypeKey = GlobalKey();
 
@@ -74,6 +92,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   bool _pcExporting = false;
   bool _pcLoading = false;
   List<Map<String, dynamic>> _pcRows = [];
+  // Export tab collection-type filter: All / Regular / Arrear
+  String _pcType = 'All';
 
   // Daily collection tab state
   DateTime? _dailyFrom;
@@ -85,6 +105,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   final ScrollController _stickyHScroll = ScrollController();
   String? _selectedMode; // null = all, 'cash', 'bank'
   String? _selectedPrefix;
+  String? _selectedDailyType; // null = all, 'Regular', 'Arrear'
   String? _selectedUser; // null = all, else a specific createdby value
   // Lower-cased user names whose desname = 'Accountant' for this institution.
   // The USER chip list in the Filters dialog is narrowed to these names so
@@ -145,7 +166,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       datePart = 'Until ${_dailyFmt(_dailyTo)}';
     }
     if (hasMode) {
-      return '$datePart Â· ${_selectedMode!.toUpperCase()}';
+      return '$datePart • ${_selectedMode!.toUpperCase()}';
     }
     return datePart;
   }
@@ -626,7 +647,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     final now = DateTime.now();
     _dailyFrom = DateTime(now.year, now.month, 1);
     _dailyTo = DateTime(now.year, now.month, now.day);
@@ -720,10 +741,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (ft.isNotEmpty) feeTypeSet.add(ft);
       }
 
+      // Class-master ordid → order classes by the institution's preferred order.
+      final classOrdid = await SupabaseService.getClassOrder(insId);
+
       if (mounted) setState(() {
         _allDemands = demands;
         _courses = courseSet.toList()..sort();
-        _classes = classSet.toList()..sort();
+        _classes = classSet.toList()..sort(classOrdidComparator(classOrdid));
         _feeTypes = feeTypeSet.toList()..sort();
         _insName = insInfo.name ?? '';
         _insAddress = insInfo.address?.replaceAll('\n', ', ') ?? '';
@@ -749,13 +773,33 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     });
     try {
       String d(DateTime x) => '${x.year}-${x.month.toString().padLeft(2, '0')}-${x.day.toString().padLeft(2, '0')}';
-      final result = await SupabaseService.client.rpc('get_daily_collection_report', params: {
+      // One call via the json_agg wrapper returns ALL rows (a scalar JSON return
+      // isn't subject to PostgREST's 1000-row cap), so the aggregate runs once
+      // instead of being re-executed per 1000-row page. Falls back to paginating
+      // the SETOF RPC on older DBs without the wrapper.
+      final list = <Map<String, dynamic>>[];
+      final params = {
         'p_schema': schema,
         'p_ins_id': insId,
         'p_from': d(_dailyFrom!),
         'p_to': d(_dailyTo!),
-      });
-      final list = result is List ? List<Map<String, dynamic>>.from(result) : <Map<String, dynamic>>[];
+      };
+      try {
+        final agg = await SupabaseService.client.rpc('get_daily_collection_report_json', params: params);
+        if (agg is List) list.addAll(List<Map<String, dynamic>>.from(agg));
+      } catch (_) {
+        const pageSize = 1000;
+        int offset = 0;
+        while (true) {
+          final page = await SupabaseService.client
+              .rpc('get_daily_collection_report', params: params)
+              .range(offset, offset + pageSize - 1);
+          final batch = page is List ? List<Map<String, dynamic>>.from(page) : <Map<String, dynamic>>[];
+          list.addAll(batch);
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
 
       final feeTypeSet = <String>{};
       final rows = <Map<String, dynamic>>[];
@@ -776,6 +820,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           'stuname': r['stuname']?.toString() ?? '',
           'courname': r['courname']?.toString() ?? '',
           'stuclass': r['stuclass']?.toString() ?? '',
+          'type': r['type']?.toString().isNotEmpty == true ? r['type'].toString() : 'Regular',
           'total': (r['total'] as num?)?.toDouble() ?? 0,
           'fine': (r['fine'] as num?)?.toDouble() ?? 0,
           'paymethod': r['paymethod']?.toString() ?? '',
@@ -877,8 +922,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           listenable: _tabController,
           builder: (context, _) {
             final selected = _tabController.index;
-            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'PowerCollege'];
-            final tabIcons = ['calendar-1', 'book-1', 'clock', 'chart-2', 'document-download'];
+            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'Export', 'DCB Register'];
+            final tabIcons = ['calendar-1', 'book-1', 'clock', 'chart-2', 'document-download', 'grid-1'];
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: SingleChildScrollView(
@@ -928,6 +973,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                           _buildPendingPayment(),
                           _buildConsolidatedStatus(),
                           _buildPowerCollege(),
+                          _buildDcbRegister(),
                         ],
                       ),
           ),
@@ -1118,6 +1164,184 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
+  /// Generic checkbox multi-select trigger — same frame/height as the other
+  /// filter dropdowns. Used for the Pending Payment Admn Type / Quota filters.
+  Widget _checkMultiSelect({
+    required GlobalKey anchorKey,
+    required double width,
+    required String allLabel,
+    required String pluralNoun,
+    required Set<String> selected,
+    required VoidCallback onTap,
+  }) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    final textSize = compact ? 11.0 : 14.0;
+    final count = selected.length;
+    final filled = count > 0;
+    final label = count == 0
+        ? allLabel
+        : count == 1
+            ? selected.first
+            : '$count $pluralNoun';
+    final idle = filled ? AppColors.accent : AppColors.border;
+    return SizedBox(
+      key: anchorKey,
+      width: width,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(radius),
+        onTap: onTap,
+        child: InputDecorator(
+          isEmpty: false,
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(fontSize: textSize, fontWeight: filled ? FontWeight.w600 : FontWeight.w500, color: filled ? AppColors.accent : AppColors.textPrimary),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Popup checkbox list anchored under [anchorKey]; Select All / Clear /
+  /// Cancel / Apply. Returns the chosen set via [onApply].
+  Future<void> _openCheckPicker({
+    required GlobalKey anchorKey,
+    required String title,
+    required List<String> options,
+    required Set<String> current,
+    required void Function(Set<String>) onApply,
+  }) async {
+    final renderBox = anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final triggerPos = renderBox.localToGlobal(Offset.zero);
+    final triggerSize = renderBox.size;
+    final screen = MediaQuery.of(context).size;
+
+    const popupWidth = 280.0;
+    const popupMaxHeight = 360.0;
+    final left = triggerPos.dx.clamp(8.0, (screen.width - popupWidth - 8).clamp(8.0, screen.width));
+    final top = (triggerPos.dy + triggerSize.height + 4).clamp(8.0, (screen.height - 100).clamp(8.0, screen.height));
+
+    final tempSelected = Set<String>.from(current);
+    final result = await showDialog<Set<String>>(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (ctx) => Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ),
+          Positioned(
+            left: left,
+            top: top,
+            width: popupWidth,
+            child: StatefulBuilder(builder: (ctx, setLocalState) {
+              return Material(
+                elevation: 6,
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.white,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: popupMaxHeight),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                            ),
+                            InkWell(
+                              onTap: () => setLocalState(() => tempSelected
+                                ..clear()
+                                ..addAll(options)),
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                child: Text('Select All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () => setLocalState(tempSelected.clear),
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                child: Text('Clear', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Flexible(
+                        child: options.isEmpty
+                            ? const Padding(padding: EdgeInsets.all(16), child: Text('No options', style: TextStyle(fontSize: 12, color: Colors.grey)))
+                            : ListView(
+                                shrinkWrap: true,
+                                padding: EdgeInsets.zero,
+                                children: options
+                                    .map((o) => CheckboxListTile(
+                                          dense: true,
+                                          visualDensity: VisualDensity.compact,
+                                          controlAffinity: ListTileControlAffinity.leading,
+                                          value: tempSelected.contains(o),
+                                          title: Text(o, style: const TextStyle(fontSize: 12)),
+                                          onChanged: (v) => setLocalState(() {
+                                            if (v == true) {
+                                              tempSelected.add(o);
+                                            } else {
+                                              tempSelected.remove(o);
+                                            }
+                                          }),
+                                        ))
+                                    .toList(),
+                              ),
+                      ),
+                      const Divider(height: 1),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                            ElevatedButton(onPressed: () => Navigator.pop(ctx, tempSelected), child: const Text('Apply')),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+    if (result != null) onApply(result);
+  }
+
   Widget _filterDropdown<T>({
     required T value,
     required String hint,
@@ -1208,6 +1432,74 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ],
             onChanged: (v) => setState(() => _selectedClass = v),
           ),
+          if (_tabController.index == 2) ...[
+            SizedBox(width: 12.w),
+            // Admission Type filter (Pending Payment) — checkbox multi-select
+            _checkMultiSelect(
+              anchorKey: _admnTypeKey,
+              width: 190.w,
+              allLabel: 'All Admn Types',
+              pluralNoun: 'admn types',
+              selected: _selectedAdmnTypes,
+              onTap: () => _openCheckPicker(
+                anchorKey: _admnTypeKey,
+                title: 'Select Admission Types',
+                options: _pendingAdmnTypes(),
+                current: _selectedAdmnTypes,
+                onApply: (s) => setState(() => _selectedAdmnTypes = s),
+              ),
+            ),
+            SizedBox(width: 12.w),
+            // Quota filter (Pending Payment) — checkbox multi-select
+            _checkMultiSelect(
+              anchorKey: _quotaKey,
+              width: 160.w,
+              allLabel: 'All Quotas',
+              pluralNoun: 'quotas',
+              selected: _selectedQuotas,
+              onTap: () => _openCheckPicker(
+                anchorKey: _quotaKey,
+                title: 'Select Quotas',
+                options: _pendingQuotas(),
+                current: _selectedQuotas,
+                onApply: (s) => setState(() => _selectedQuotas = s),
+              ),
+            ),
+          ],
+          if (_tabController.index == 5) ...[
+            SizedBox(width: 12.w),
+            // Fee Type "Type" filter (DCB Register) — checkbox multi-select
+            _checkMultiSelect(
+              anchorKey: _dcbFgKey,
+              width: 200.w,
+              allLabel: 'All Types',
+              pluralNoun: 'types',
+              selected: _dcbTypes,
+              onTap: () => _openCheckPicker(
+                anchorKey: _dcbFgKey,
+                title: 'Select Types',
+                options: _dcbTypeOptions,
+                current: _dcbTypes,
+                onApply: (s) => setState(() => _dcbTypes = s),
+              ),
+            ),
+            SizedBox(width: 12.w),
+            // Admission Type filter (DCB Register) — checkbox multi-select
+            _checkMultiSelect(
+              anchorKey: _dcbAdmKey,
+              width: 190.w,
+              allLabel: 'All Admn Types',
+              pluralNoun: 'admn types',
+              selected: _dcbAdmnTypes,
+              onTap: () => _openCheckPicker(
+                anchorKey: _dcbAdmKey,
+                title: 'Select Admission Types',
+                options: _dcbAdmnOptions(),
+                current: _dcbAdmnTypes,
+                onApply: (s) => setState(() => _dcbAdmnTypes = s),
+              ),
+            ),
+          ],
           if (_tabController.index == 0) ...[
             SizedBox(width: 12.w),
             _feeTypeMultiSelect(width: 200.w),
@@ -1231,6 +1523,18 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 onChanged: (v) => setState(() => _selectedPrefix = v),
               );
             }),
+            SizedBox(width: 12.w),
+            _filterDropdown<String?>(
+              value: _selectedDailyType,
+              hint: 'All Types',
+              width: 150.w,
+              items: const [
+                DropdownMenuItem<String?>(value: null, child: Text('All Types')),
+                DropdownMenuItem<String?>(value: 'Regular', child: Text('Regular')),
+                DropdownMenuItem<String?>(value: 'Arrear', child: Text('Arrear')),
+              ],
+              onChanged: (v) => setState(() => _selectedDailyType = v),
+            ),
           ],
                   ],
                 ),
@@ -1246,6 +1550,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   _selectedClass = null;
                   _selectedFeeTypes = <String>{};
                   _selectedPrefix = null;
+                  _selectedDailyType = null;
+                  _selectedAdmnTypes = <String>{};
+                  _selectedQuotas = <String>{};
+                  _dcbTypes = <String>{};
+                  _dcbAdmnTypes = <String>{};
                 }),
                 icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                 label: const Text('Refresh'),
@@ -1520,7 +1829,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ),
         ],
       ));
-      await Printing.sharePdf(bytes: await pdf.save(), filename: 'Consolidated_Status_${_formatDateCompact(DateTime.now())}.pdf');
+      // layoutPdf (print preview → Microsoft Print to PDF) works on Windows;
+      // sharePdf is a mobile share-sheet concept and silently does nothing here.
+      await _savePdf(pdf, 'Consolidated_Status_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
     }
@@ -1608,8 +1919,30 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     return _pendingRowsCache.where((r) {
       if (_selectedCourse != null && r['course'] != _selectedCourse) return false;
       if (_selectedClass != null && r['class'] != _selectedClass) return false;
+      if (_selectedAdmnTypes.isNotEmpty && !_selectedAdmnTypes.contains(r['admname']?.toString())) return false;
+      if (_selectedQuotas.isNotEmpty && !_selectedQuotas.contains(r['quoname']?.toString())) return false;
       return true;
     }).toList();
+  }
+
+  /// Distinct, sorted admission types present in the pending data (for the filter).
+  List<String> _pendingAdmnTypes() {
+    final s = <String>{};
+    for (final r in _pendingRowsCache) {
+      final v = r['admname']?.toString() ?? '';
+      if (v.isNotEmpty) s.add(v);
+    }
+    return s.toList()..sort();
+  }
+
+  /// Distinct, sorted quotas present in the pending data (for the filter).
+  List<String> _pendingQuotas() {
+    final s = <String>{};
+    for (final r in _pendingRowsCache) {
+      final v = r['quoname']?.toString() ?? '';
+      if (v.isNotEmpty) s.add(v);
+    }
+    return s.toList()..sort();
   }
 
   Widget _buildPendingPayment() {
@@ -1853,7 +2186,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ),
         ],
       ));
-      await Printing.sharePdf(bytes: await pdf.save(), filename: 'Pending_Payment_${_formatDateCompact(DateTime.now())}.pdf');
+      await _savePdf(pdf, 'Pending_Payment_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
     }
@@ -2359,7 +2692,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ),
         ],
       ));
-      await Printing.sharePdf(bytes: await pdf.save(), filename: 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}.pdf');
+      await _savePdf(pdf, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
     }
@@ -2407,6 +2740,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final p = _prefixOf(r['paynumber']?.toString() ?? '');
         if (p != _selectedPrefix) return false;
       }
+      if (_selectedDailyType != null && (r['type']?.toString() ?? 'Regular') != _selectedDailyType) return false;
       if (_selectedUser != null && r['createdby']?.toString() != _selectedUser) return false;
       return true;
     }).toList();
@@ -2514,7 +2848,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     }
                   }
                   final headers = <String>[
-                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'COURSE', 'CLASS',
+                    'DATE', 'RECEIPT NO', 'REG NO', 'STUDENT NAME', 'COURSE', 'CLASS', 'TYPE',
                     ...visibleFeeTypes.map((t) => t.toUpperCase()),
                     'FINE', 'TOTAL',
                     if (showCash) 'CASH',
@@ -2523,7 +2857,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     'NET AMT',
                   ];
                   final widths = <double>[
-                    110, 130, 130, 200, 140, 150,
+                    110, 130, 130, 200, 140, 150, 110,
                     ...visibleFeeTypes.map((t) {
                       // Enough width for full uppercase label ("NEW ADMISSION FEES" etc.)
                       final len = t.length;
@@ -2535,10 +2869,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     if (showBank) 120,
                     130,
                   ];
-                  // Numeric (right-aligned) columns start after the 6 text
-                  // columns: DATE, RECEIPT NO, REG NO, NAME, COURSE, CLASS.
+                  // Numeric (right-aligned) columns start after the 7 text
+                  // columns: DATE, RECEIPT NO, REG NO, NAME, COURSE, CLASS, TYPE.
                   final numericCols = <int>{
-                    for (int i = 6; i < headers.length; i++) i,
+                    for (int i = 7; i < headers.length; i++) i,
                   };
                   return _stickyTable(
                     columnWidths: widths,
@@ -2558,6 +2892,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                             r['stuname']?.toString() ?? '',
                             r['courname']?.toString() ?? '',
                             r['stuclass']?.toString() ?? '',
+                            r['type']?.toString() ?? 'Regular',
                             ...visibleFeeTypes.map((ft) => (fees[ft] != null && fees[ft] != 0) ? _formatNumber(fees[ft]!) : ''),
                             fine != 0 ? _formatNumber(fine) : '',
                             _formatNumber(total),
@@ -2569,7 +2904,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                         }(),
                     ],
                     footer: <String>[
-                      'TOTAL', '', '', '', '', '',
+                      'TOTAL', '', '', '', '', '', '',
                       ...visibleFeeTypes.map((ft) => _formatNumber(ftTotals[ft] ?? 0)),
                       _formatNumber(totalFine),
                       _formatNumber(totalAmt),
@@ -3366,6 +3701,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           final p = _prefixOf(r['paynumber']?.toString() ?? '');
           if (p != _selectedPrefix) return false;
         }
+        if (_selectedDailyType != null && (r['type']?.toString() ?? 'Regular') != _selectedDailyType) return false;
         if (_selectedUser != null && r['createdby']?.toString() != _selectedUser) return false;
         return true;
       }).toList();
@@ -3574,13 +3910,32 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     });
     try {
       String d(DateTime x) => '${x.year}-${x.month.toString().padLeft(2, '0')}-${x.day.toString().padLeft(2, '0')}';
-      final result = await SupabaseService.client.rpc('get_powercollege_export', params: {
+      // One call via the json_agg wrapper returns the whole export (a scalar JSON
+      // return isn't capped at 1000 rows), so the aggregate runs once instead of
+      // being re-executed per page. Falls back to paginating on older DBs.
+      final rows = <Map<String, dynamic>>[];
+      final params = {
         'p_schema': schema,
         'p_ins_id': insId,
         'p_from': d(_pcFrom!),
         'p_to': d(_pcTo!),
-      });
-      final rows = result is List ? List<Map<String, dynamic>>.from(result) : <Map<String, dynamic>>[];
+      };
+      try {
+        final agg = await SupabaseService.client.rpc('get_powercollege_export_json', params: params);
+        if (agg is List) rows.addAll(List<Map<String, dynamic>>.from(agg));
+      } catch (_) {
+        const pageSize = 1000;
+        int offset = 0;
+        while (true) {
+          final page = await SupabaseService.client
+              .rpc('get_powercollege_export', params: params)
+              .range(offset, offset + pageSize - 1);
+          final batch = page is List ? List<Map<String, dynamic>>.from(page) : <Map<String, dynamic>>[];
+          rows.addAll(batch);
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
       if (mounted) {
         setState(() {
           _pcRows = rows;
@@ -3593,16 +3948,135 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
+  /// PowerCollege rows narrowed by the shared Course / Class filters.
+  List<Map<String, dynamic>> _pcFilteredRows() {
+    return _pcRows.where((r) {
+      if (_selectedCourse != null && r['courname']?.toString() != _selectedCourse) return false;
+      if (_selectedClass != null && r['stuclass']?.toString() != _selectedClass) return false;
+      if (_pcType != 'All') {
+        final isArrear = (r['demseqtype']?.toString().trim().toUpperCase() == 'ARREAR');
+        if (_pcType == 'Arrear' && !isArrear) return false;
+        if (_pcType == 'Regular' && isArrear) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Future<void> _exportPowerCollegePdf() async {
+    if (_pcFrom == null || _pcTo == null) return;
+    if (_pcRows.isEmpty && !_pcLoading) {
+      await _loadPowerCollege();
+    }
+    final rows = _pcFilteredRows();
+    if (rows.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No payments for the selected date range / course / class.'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+    setState(() => _pcExporting = true);
+    try {
+      String fmtDate(dynamic raw) {
+        if (raw == null) return '';
+        final s = raw.toString();
+        final dt = DateTime.tryParse(s);
+        return dt == null ? s : _formatDate(dt);
+      }
+      String money(double v) {
+        final s = v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2);
+        final neg = s.startsWith('-');
+        final digits = neg ? s.substring(1) : s;
+        final dot = digits.indexOf('.');
+        final intp = dot >= 0 ? digits.substring(0, dot) : digits;
+        final dec = dot >= 0 ? digits.substring(dot) : '';
+        final b = StringBuffer();
+        for (int i = 0; i < intp.length; i++) {
+          if (i > 0 && (intp.length - i) % 3 == 0) b.write(',');
+          b.write(intp[i]);
+        }
+        return '${neg ? '-' : ''}$b$dec';
+      }
+
+      String normType(dynamic t) => (t?.toString().trim().toUpperCase() == 'ARREAR') ? 'ARREAR' : 'REGULAR';
+      double grandTotal = 0;
+      final data = <List<String>>[];
+      for (final r in rows) {
+        final amt = (r['amount'] as num?)?.toDouble() ?? 0;
+        grandTotal += amt;
+        data.add([
+          r['stuadmno']?.toString() ?? '',
+          r['stuname']?.toString() ?? '',
+          r['stuclass']?.toString() ?? '',
+          r['docno']?.toString() ?? '',
+          normType(r['demseqtype']),
+          r['demfeeyear']?.toString() ?? '',
+          r['paynumber']?.toString() ?? '',
+          fmtDate(r['paydate']),
+          r['payreference']?.toString() ?? '',
+          r['paymethod']?.toString() ?? '',
+          r['demfeeterm']?.toString() ?? '',
+          r['demfeetype']?.toString() ?? '',
+          money(amt),
+        ]);
+      }
+      data.add(['', '', '', '', '', '', '', '', '', '', '', 'Grand Total', money(grandTotal)]);
+
+      final pdf = pw.Document();
+      pdf.addPage(pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(20),
+        header: (_) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(_insName, style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+            if (_insAddress.isNotEmpty) pw.Text(_insAddress, style: const pw.TextStyle(fontSize: 9)),
+            pw.SizedBox(height: 4),
+            pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+              pw.Text(
+                'PowerCollege Reconciled Collection'
+                '${_pcFrom != null && _pcTo != null ? ' (${_formatDate(_pcFrom!)} - ${_formatDate(_pcTo!)})' : ''}',
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              pw.Text('Date: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
+            ]),
+            pw.SizedBox(height: 6),
+          ],
+        ),
+        build: (ctx) => [
+          pw.Table.fromTextArray(
+            headers: const [
+              'Roll No', 'Name', 'Class', 'Demand No', 'Type', 'Year',
+              'Txn Rec.No', 'Txn Date', 'Transaction Id', 'Mode', 'Semester', 'Fee type', 'Amount',
+            ],
+            data: data,
+            headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
+            cellStyle: const pw.TextStyle(fontSize: 7),
+            cellAlignments: const {12: pw.Alignment.centerRight},
+            border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
+          ),
+        ],
+      ));
+      await _savePdf(pdf, 'PowerCollege_${_formatDateCompact(DateTime.now())}');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _pcExporting = false);
+    }
+  }
+
   Future<void> _exportPowerCollege() async {
     if (_pcFrom == null || _pcTo == null) return;
     if (_pcRows.isEmpty && !_pcLoading) {
       // Last-second refresh in case the list was cleared.
       await _loadPowerCollege();
     }
-    if (_pcRows.isEmpty) {
+    final rows = _pcFilteredRows();
+    if (rows.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No payments in this date range.'), backgroundColor: Colors.orange),
+          const SnackBar(content: Text('No payments for the selected date range / course / class.'), backgroundColor: Colors.orange),
         );
       }
       return;
@@ -3610,7 +4084,6 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
     setState(() => _pcExporting = true);
     try {
-      final rows = _pcRows;
       final excel = xl.Excel.createExcel();
       final sheet = excel['PowerCollege'];
       excel.delete('Sheet1');
@@ -3622,10 +4095,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       );
       final numStyle = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
 
+      // Collection-import format (Regular/Arrear). Matches the import template.
       const headers = [
-        'Roll No', 'Name', 'Course', 'Class',
-        'Transaction Date', 'Payment Mode', 'Doc No', 'Term', 'Fee Type',
-        'Amount', 'Fine', 'Bank Name', 'Settlement Date',
+        'Roll No', 'Name', 'Class', 'Demand No', 'Type', 'Year',
+        'Transaction Rec.No', 'Transaction Date', 'Transaction Id', 'Payment Mode',
+        'Semester', 'Fee type', 'Amount',
       ];
 
       for (int c = 0; c < headers.length; c++) {
@@ -3640,64 +4114,56 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final dt = DateTime.tryParse(s);
         return dt == null ? s : _formatDate(dt);
       }
+      String normType(dynamic t) => (t?.toString().trim().toUpperCase() == 'ARREAR') ? 'ARREAR' : 'REGULAR';
+      xl.TextCellValue tv(dynamic v) => xl.TextCellValue(v?.toString() ?? '');
 
       double grandTotal = 0;
-      double grandFine = 0;
       for (int i = 0; i < rows.length; i++) {
         final r = rows[i];
         final amt = (r['amount'] as num?)?.toDouble() ?? 0;
-        final fine = (r['fine'] as num?)?.toDouble() ?? 0;
         grandTotal += amt;
-        grandFine += fine;
         final row = i + 1;
 
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(r['stuadmno']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['courname']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuclass']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(fmtDate(r['paydate']));
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['paymethod']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue(r['docno']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.TextCellValue(r['demfeeterm']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: row)).value = xl.TextCellValue(r['demfeetype']?.toString() ?? '');
-        final amtCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: row));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = tv(r['stuadmno']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = tv(r['stuname']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = tv(r['stuclass']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = tv(r['docno']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(normType(r['demseqtype']));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = tv(r['demfeeyear']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = tv(r['paynumber']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: row)).value = xl.TextCellValue(fmtDate(r['paydate']));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: row)).value = tv(r['payreference']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: row)).value = tv(r['paymethod']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: row)).value = tv(r['demfeeterm']);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: row)).value = tv(r['demfeetype']);
+        final amtCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: row));
         amtCell.value = xl.DoubleCellValue(amt);
         amtCell.cellStyle = numStyle;
-        final fineCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: row));
-        fineCell.value = xl.DoubleCellValue(fine);
-        fineCell.cellStyle = numStyle;
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: row)).value = xl.TextCellValue(r['banname']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: row)).value = xl.TextCellValue(r['settlement_id']?.toString() ?? '');
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 13, rowIndex: row)).value = xl.TextCellValue(fmtDate(r['settlement_date']));
       }
 
       // Grand total row
       final totalRow = rows.length + 1;
-      final totalLabelCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: totalRow));
+      final totalLabelCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: totalRow));
       totalLabelCell.value = xl.TextCellValue('Grand Total');
       totalLabelCell.cellStyle = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
-      final totalCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: totalRow));
+      final totalCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: totalRow));
       totalCell.value = xl.DoubleCellValue(grandTotal);
       totalCell.cellStyle = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
-      final fineTotalCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: totalRow));
-      fineTotalCell.value = xl.DoubleCellValue(grandFine);
-      fineTotalCell.cellStyle = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
 
       // Reasonable widths
       sheet.setColumnWidth(0, 14);
       sheet.setColumnWidth(1, 28);
-      sheet.setColumnWidth(2, 10);
-      sheet.setColumnWidth(3, 20);
-      sheet.setColumnWidth(4, 16);
-      sheet.setColumnWidth(5, 14);
-      sheet.setColumnWidth(6, 14);
-      sheet.setColumnWidth(7, 12);
-      sheet.setColumnWidth(8, 16);
-      sheet.setColumnWidth(9, 12);
-      sheet.setColumnWidth(10, 10);
-      sheet.setColumnWidth(11, 22);
-      sheet.setColumnWidth(12, 18);
-      sheet.setColumnWidth(13, 16);
+      sheet.setColumnWidth(2, 18);
+      sheet.setColumnWidth(3, 16);
+      sheet.setColumnWidth(4, 10);
+      sheet.setColumnWidth(5, 12);
+      sheet.setColumnWidth(6, 18);
+      sheet.setColumnWidth(7, 16);
+      sheet.setColumnWidth(8, 20);
+      sheet.setColumnWidth(9, 14);
+      sheet.setColumnWidth(10, 14);
+      sheet.setColumnWidth(11, 16);
+      sheet.setColumnWidth(12, 12);
 
       await _saveExcel(excel, 'PowerCollege_${_formatDateCompact(_pcFrom!)}_${_formatDateCompact(_pcTo!)}');
     } catch (e) {
@@ -3715,12 +4181,528 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   /// preview table of every reconciled per-line-item row that the export
   /// would emit. Same shape as Daily Collection so users can see what
   /// they'll get before downloading.
+  // ══════════════════════════════════════════════════════════
+  // TAB: DCB STUDENT REGISTER (per-course Demand / Collection / Balance)
+  // ══════════════════════════════════════════════════════════
+  /// Load the extra masters the DCB register needs (student batch/quota/admn,
+  /// the Transport fee-group classification, reconciled receipts, class order).
+  Future<void> _loadDcbMeta() async {
+    if (_dcbLoaded) return;
+    final auth = context.read<AuthProvider>();
+    final insId = auth.insId;
+    if (insId == null) return;
+    try {
+      final results = await Future.wait([
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+            .select('stu_id, stuadmno, stuname, batch, quoname, admname')
+            .eq('ins_id', insId).eq('activestatus', 1)),
+        SupabaseService.fromSchema('feetype').select('fee_id, feedesc, fg_id, type').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('feegroup').select('fg_id, fgdesc').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('payment')
+            .select('stu_id, paynumber, paydate')
+            .eq('ins_id', insId).eq('paystatus', 'C').eq('recon_status', 'R').eq('activestatus', 1)),
+        SupabaseService.getClassOrder(insId),
+      ]);
+      final students = results[0] as List;
+      final feetypes = results[1] as List;
+      final feegroups = results[2] as List;
+      final payments = results[3] as List;
+      final classOrd = results[4] as Map<String, int>;
+
+      final stuInfo = <String, Map<String, dynamic>>{};
+      for (final s in students) {
+        final admno = s['stuadmno']?.toString() ?? '';
+        if (admno.isEmpty) continue;
+        stuInfo[admno] = {
+          'batch': s['batch']?.toString() ?? '',
+          'quoname': s['quoname']?.toString() ?? '',
+          'admname': s['admname']?.toString() ?? '',
+          'stuname': s['stuname']?.toString() ?? '',
+        };
+      }
+
+      // fee_id / fee-name -> feetype.type (COL / TRA / ...). Both the DCB Type
+      // filter AND the COLLEGE/TRANSPORT columns key off feetype.type: 'TRA' is
+      // Transport, everything else is College — per the fee master.
+      final feeIdToType = <int, String>{};
+      final feeTypeNameToType = <String, String>{};
+      final typeSet = <String>{};
+      for (final ft in feetypes) {
+        final fid = (ft['fee_id'] as num?)?.toInt();
+        final nm = (ft['feedesc']?.toString() ?? '').toUpperCase();
+        final tp = (ft['type']?.toString() ?? '').trim().toUpperCase();
+        if (tp.isEmpty) continue;
+        if (fid != null) feeIdToType[fid] = tp;
+        if (nm.isNotEmpty) feeTypeNameToType[nm] = tp;
+        typeSet.add(tp);
+      }
+      final typeOptions = typeSet.toList()..sort();
+
+      // Latest reconciled receipt per student.
+      final receipts = <int, Map<String, dynamic>>{};
+      for (final p in payments) {
+        final sid = (p['stu_id'] as num?)?.toInt();
+        if (sid == null) continue;
+        final pd = p['paydate']?.toString() ?? '';
+        final ex = receipts[sid];
+        if (ex == null || pd.compareTo(ex['paydate'] as String) > 0) {
+          receipts[sid] = {'paynumber': p['paynumber']?.toString() ?? '', 'paydate': pd};
+        }
+      }
+
+      if (mounted) setState(() {
+        _stuInfo = stuInfo;
+        _feeIdToType = feeIdToType;
+        _feeTypeNameToType = feeTypeNameToType;
+        _stuReceipt = receipts;
+        _dcbClassOrdid = classOrd;
+        _dcbTypeOptions = typeOptions;
+        _dcbLoaded = true;
+      });
+    } catch (e) {
+      debugPrint('DCB meta load: $e');
+      if (mounted) setState(() => _dcbLoaded = true);
+    }
+  }
+
+  /// The feetype.type a demand belongs to (COL / TRA / …), resolved by fee_id or
+  /// by fee-type name. Drives BOTH the DCB Type filter and the COLLEGE/TRANSPORT
+  /// column split, so they always agree.
+  String? _demandType(Map<String, dynamic> d) {
+    final fid = d['fee_id'];
+    if (fid is num && _feeIdToType.containsKey(fid.toInt())) return _feeIdToType[fid.toInt()];
+    return _feeTypeNameToType[(d['demfeetype']?.toString() ?? '').toUpperCase()];
+  }
+
+  /// A demand counts as Transport when its feetype.type is 'TRA' (else College).
+  bool _isTransportDemand(Map<String, dynamic> d) {
+    final t = (_demandType(d) ?? '').toUpperCase();
+    return t == 'TRA' || t == 'TRANSPORT';
+  }
+
+  int _dcbTermRank(String t) => t.trim().toUpperCase() == 'YEARLY' ? 0 : 1;
+
+  String _fmtDcbDate(String iso) {
+    final dt = DateTime.tryParse(iso);
+    return dt == null ? iso : _formatDate(dt);
+  }
+
+  /// Distinct admission types present in the loaded students (for the DCB filter).
+  List<String> _dcbAdmnOptions() {
+    final set = <String>{};
+    for (final info in _stuInfo.values) {
+      final a = (info['admname'] as String?)?.trim() ?? '';
+      if (a.isNotEmpty) set.add(a);
+    }
+    return set.toList()..sort();
+  }
+
+  /// Flattened DCB display rows for [course]. Each map has 'kind':
+  /// 'data' | 'subtotal' | 'grand'. Data rows are one per (student, term);
+  /// Sl No / Name / Receipt appear only on a student's first row.
+  List<Map<String, dynamic>> _dcbRows(String course) {
+    final groups = <String, Map<String, dynamic>>{};
+    for (final d in _allDemands) {
+      if ((d['courname']?.toString() ?? '') != course) continue;
+      if (d['activestatus'] != null && d['activestatus'] != 1) continue;
+      if (_dcbTypes.isNotEmpty && !_dcbTypes.contains(_demandType(d))) continue;
+      final admno = d['stuadmno']?.toString() ?? '';
+      if (admno.isEmpty) continue;
+      if (_dcbAdmnTypes.isNotEmpty) {
+        final at = (_stuInfo[admno]?['admname'] as String?)?.trim() ?? '';
+        if (!_dcbAdmnTypes.contains(at)) continue;
+      }
+      final term = d['demfeeterm']?.toString() ?? '';
+      final key = '$admno$term';
+      final fee = (d['feeamount'] as num?)?.toDouble() ?? 0;
+      final recBal = (d['reconbalancedue'] as num?)?.toDouble() ?? 0;
+      final transport = _isTransportDemand(d);
+      final g = groups.putIfAbsent(key, () => {
+        'admno': admno,
+        'term': term,
+        'stuId': (d['stu_id'] as num?)?.toInt(),
+        'name': d['stuname']?.toString() ?? (_stuInfo[admno]?['stuname'] as String? ?? ''),
+        'cls': d['stuclass']?.toString() ?? '',
+        'college': 0.0,
+        'transport': 0.0,
+        'balance': 0.0,
+      });
+      g['college'] = (g['college'] as double) + (transport ? 0 : fee);
+      g['transport'] = (g['transport'] as double) + (transport ? fee : 0);
+      g['balance'] = (g['balance'] as double) + recBal; // reconciled outstanding
+    }
+    if (groups.isEmpty) return [];
+
+    final byStudent = <String, List<Map<String, dynamic>>>{};
+    for (final g in groups.values) {
+      byStudent.putIfAbsent(g['admno'] as String, () => []).add(g);
+    }
+    for (final list in byStudent.values) {
+      list.sort((a, b) {
+        final r = _dcbTermRank(a['term'] as String).compareTo(_dcbTermRank(b['term'] as String));
+        return r != 0 ? r : (a['term'] as String).compareTo(b['term'] as String);
+      });
+    }
+
+    int classKey(String cls) => _dcbClassOrdid[cls.trim().toUpperCase()] ?? 1 << 30;
+    final students = byStudent.keys.toList()
+      ..sort((a, b) {
+        final ca = byStudent[a]!.first['cls'] as String;
+        final cb = byStudent[b]!.first['cls'] as String;
+        final ck = classKey(ca).compareTo(classKey(cb));
+        if (ck != 0) return ck;
+        final cc = ca.compareTo(cb);
+        return cc != 0 ? cc : a.compareTo(b);
+      });
+
+    final rows = <Map<String, dynamic>>[];
+    int sl = 0;
+    String? curClass;
+    double sCol = 0, sTra = 0, sDem = 0, sColl = 0, sBal = 0;
+    double gCol = 0, gTra = 0, gDem = 0, gColl = 0, gBal = 0;
+
+    void flushSubtotal() {
+      if (curClass == null) return;
+      rows.add({'kind': 'subtotal', 'college': sCol, 'transport': sTra, 'demand': sDem, 'collection': sColl, 'balance': sBal});
+      sCol = sTra = sDem = sColl = sBal = 0;
+    }
+
+    for (final admno in students) {
+      final terms = byStudent[admno]!;
+      final cls = terms.first['cls'] as String;
+      if (curClass != null && cls != curClass) flushSubtotal();
+      curClass = cls;
+      sl++;
+      final info = _stuInfo[admno] ?? const {};
+      final sid = terms.first['stuId'] as int?;
+      final receipt = sid != null ? _stuReceipt[sid] : null;
+      for (var i = 0; i < terms.length; i++) {
+        final t = terms[i];
+        final college = t['college'] as double;
+        final transport = t['transport'] as double;
+        final demand = college + transport;
+        final balance = t['balance'] as double;
+        final collection = demand - balance;
+        sCol += college; sTra += transport; sDem += demand; sColl += collection; sBal += balance;
+        gCol += college; gTra += transport; gDem += demand; gColl += collection; gBal += balance;
+        rows.add({
+          'kind': 'data',
+          'slno': i == 0 ? '$sl' : '',
+          'name': i == 0 ? (t['name'] as String) : '',
+          'admno': i == 0 ? admno : '',
+          'cls': cls,
+          'batch': info['batch'] ?? '',
+          'sem': t['term'],
+          'college': college,
+          'transport': transport,
+          'demand': demand,
+          'collection': collection,
+          'balance': balance,
+          'quota': info['quoname'] ?? '',
+          'admtype': info['admname'] ?? '',
+          'receipt': (i == 0 && receipt != null && (receipt['paynumber'] as String).isNotEmpty)
+              ? '${receipt['paynumber']}${(receipt['paydate'] as String).isNotEmpty ? '  ${_fmtDcbDate(receipt['paydate'] as String)}' : ''}'
+              : '',
+        });
+      }
+    }
+    flushSubtotal();
+    rows.add({'kind': 'grand', 'college': gCol, 'transport': gTra, 'demand': gDem, 'collection': gColl, 'balance': gBal});
+    return rows;
+  }
+
+  /// Combined DCB rows for every course (used when no course is selected).
+  /// Each course section = a 'courseheader' row + that course's rows (which end
+  /// in a per-course 'grand' total), followed by a final 'overall' total.
+  List<Map<String, dynamic>> _dcbAllCoursesRows() {
+    final rows = <Map<String, dynamic>>[];
+    double oCol = 0, oTra = 0, oDem = 0, oColl = 0, oBal = 0;
+    for (final course in _courses) {
+      final cr = _dcbRows(course);
+      if (cr.isEmpty) continue;
+      rows.add({'kind': 'courseheader', 'course': course});
+      for (final r in cr) {
+        if (r['kind'] == 'grand') {
+          oCol += r['college'] as double;
+          oTra += r['transport'] as double;
+          oDem += r['demand'] as double;
+          oColl += r['collection'] as double;
+          oBal += r['balance'] as double;
+        }
+        rows.add(r);
+      }
+    }
+    if (rows.isEmpty) return [];
+    rows.add({'kind': 'overall', 'college': oCol, 'transport': oTra, 'demand': oDem, 'collection': oColl, 'balance': oBal});
+    return rows;
+  }
+
+  Widget _buildDcbRegister() {
+    if (!_dcbLoaded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDcbMeta());
+      return const Center(child: CircularProgressIndicator());
+    }
+    final course = _selectedCourse; // null => every course stacked
+    final rows = course == null ? _dcbAllCoursesRows() : _dcbRows(course);
+    final label = course ?? 'All Courses';
+    final studentCount = rows.where((r) => r['kind'] == 'data' && (r['slno'] as String).isNotEmpty).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: EdgeInsets.fromLTRB(0, 8.h, 0, 8.h),
+          child: Row(children: [
+            const CardTitleBlock(icon: 'grid-1', title: 'DCB Student Register', subtitle: 'demand / collection / balance per student (reconciled)'),
+            SizedBox(width: 10.w),
+            Text('$label  ·  $studentCount students', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            _miniExportBtn(
+              onPressed: (rows.isEmpty || _dcbExporting) ? () {} : () => _exportDcbExcel(label, rows),
+              icon: Icons.table_chart_rounded,
+              label: _dcbExporting ? 'Exporting…' : 'Excel',
+              color: const Color(0xFF10B981),
+            ),
+            SizedBox(width: AppBtn.gap(context)),
+            _miniExportBtn(
+              onPressed: (rows.isEmpty || _dcbExporting) ? () {} : () => _exportDcbPdf(label, rows),
+              icon: Icons.picture_as_pdf_rounded,
+              label: 'PDF',
+              color: const Color(0xFFEF4444),
+            ),
+          ]),
+        ),
+        Expanded(child: rows.isEmpty ? _emptyState('No fee demands') : _dcbTable(rows)),
+      ],
+    );
+  }
+
+  Widget _dcbTable(List<Map<String, dynamic>> rows) {
+    const base = <double>[44, 200, 92, 84, 84, 92, 100, 92, 100, 92, 110, 130, 140];
+    const headers = ['SL', 'NAME & REG NO', 'CLASS', 'BATCH', 'SEM', 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADM TYPE', 'RECEIPT'];
+    const numCols = {5, 6, 7, 8, 9};
+    final totalW = base.fold<double>(0, (a, b) => a + b);
+    String num0(Map<String, dynamic> r, String k) { final v = (r[k] as double?) ?? 0; return v == 0 ? '' : _formatNumber(v); }
+
+    return LayoutBuilder(builder: (context, constraints) {
+      // Fit to screen: fill the available width; only scroll if truly too narrow.
+      final w = constraints.maxWidth > totalW ? constraints.maxWidth : totalW;
+      final widths = base.map((x) => x * (w / totalW)).toList();
+
+    Widget rowWidget(Map<String, dynamic> r, int idx) {
+      final kind = r['kind'];
+      if (kind == 'courseheader') {
+        return Container(
+          width: w,
+          color: AppColors.primary.withValues(alpha: 0.14),
+          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+          child: Text(r['course'] as String, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: AppColors.primary, letterSpacing: 0.2)),
+        );
+      }
+      if (kind == 'subtotal' || kind == 'grand' || kind == 'overall') {
+        final isGrand = kind == 'grand';
+        final isOverall = kind == 'overall';
+        final style = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w800, color: (isGrand || isOverall) ? AppColors.primary : AppColors.textPrimary);
+        String n(String k) => _formatNumber((r[k] as double?) ?? 0);
+        final vals = ['', isOverall ? 'OVERALL' : isGrand ? 'G.Total' : 'S.Total', '', '', '', n('college'), n('transport'), n('demand'), n('collection'), n('balance'), '', '', ''];
+        return Container(
+          color: isOverall ? AppColors.primary.withValues(alpha: 0.16) : isGrand ? AppColors.primary.withValues(alpha: 0.08) : AppColors.tableHeadBg.withValues(alpha: 0.6),
+          child: Row(children: [
+            for (int i = 0; i < vals.length; i++)
+              Container(width: widths[i], padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 9.h), alignment: numCols.contains(i) ? Alignment.centerRight : Alignment.centerLeft, child: Text(vals[i], style: style, overflow: TextOverflow.ellipsis)),
+          ]),
+        );
+      }
+      final cs = TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600);
+      final text = <int, String>{0: r['slno'] as String, 2: r['cls'] as String, 3: r['batch'].toString(), 4: r['sem'].toString(), 5: num0(r, 'college'), 6: num0(r, 'transport'), 7: num0(r, 'demand'), 8: num0(r, 'collection'), 9: num0(r, 'balance'), 10: r['quota'].toString(), 11: r['admtype'].toString(), 12: r['receipt'] as String};
+      return Container(
+        color: idx.isEven ? Colors.white : AppColors.surface.withValues(alpha: 0.5),
+        child: Row(children: [
+          for (int i = 0; i < headers.length; i++)
+            Container(
+              width: widths[i],
+              padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 8.h),
+              alignment: numCols.contains(i) ? Alignment.centerRight : Alignment.centerLeft,
+              child: i == 1
+                  ? ((r['name'] as String).isEmpty
+                      ? const SizedBox.shrink()
+                      : Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                          Text(r['name'] as String, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+                          if ((r['admno'] as String).isNotEmpty) Text(r['admno'] as String, style: TextStyle(fontSize: 11.sp, color: AppColors.textLight)),
+                        ]))
+                  : Text(text[i] ?? '', style: cs, overflow: TextOverflow.ellipsis, maxLines: 2),
+            ),
+        ]),
+      );
+    }
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: w,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                color: AppColors.tableHeadBg,
+                child: Row(children: [
+                  for (int i = 0; i < headers.length; i++)
+                    Container(width: widths[i], padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h), alignment: numCols.contains(i) ? Alignment.centerRight : Alignment.centerLeft, child: Text(headers[i], style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.2), overflow: TextOverflow.ellipsis)),
+                ]),
+              ),
+              Divider(height: 1, color: AppColors.border),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.35)),
+                  itemBuilder: (_, i) => rowWidget(rows[i], i),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    });
+  }
+
+  Future<void> _exportDcbExcel(String course, List<Map<String, dynamic>> rows) async {
+    setState(() => _dcbExporting = true);
+    try {
+      final excel = xl.Excel.createExcel();
+      final sheet = excel['DCB Register'];
+      excel.delete('Sheet1');
+      void put(int row, int col, dynamic value, {xl.CellStyle? style}) {
+        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row));
+        cell.value = value is num ? xl.DoubleCellValue(value.toDouble()) : xl.TextCellValue(value?.toString() ?? '');
+        if (style != null) cell.cellStyle = style;
+      }
+      final titleStyle = xl.CellStyle(bold: true, fontSize: 12, horizontalAlign: xl.HorizontalAlign.Center);
+      final headStyle = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'), fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'));
+      final boldNum = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
+      final boldTxt = xl.CellStyle(bold: true, fontSize: 10);
+
+      int r = 0;
+      if (_insName.isNotEmpty) { put(r, 1, _insName, style: titleStyle); r++; }
+      if (_insAddress.isNotEmpty) { put(r, 1, _insAddress, style: titleStyle); r++; }
+      put(r, 1, 'DCB Student Register for $course', style: titleStyle);
+      put(r, 8, 'Date: ${_formatDate(DateTime.now())}');
+      r += 2;
+      const headers = ['Sl No', 'Name & Reg No', 'Class', 'Batch', 'Semester', 'College Demand', 'Transport Demand', 'Demand', 'Collection', 'Balance', 'Quota', 'Admission Type', 'Receipt No & Date'];
+      for (int c = 0; c < headers.length; c++) { put(r, c, headers[c], style: headStyle); }
+      r++;
+      for (final row in rows) {
+        final kind = row['kind'];
+        if (kind == 'data') {
+          final name = (row['name'] as String).isEmpty ? '' : '${row['name']}\n${row['admno']}';
+          put(r, 0, row['slno']);
+          put(r, 1, name);
+          put(r, 2, row['cls']);
+          put(r, 3, row['batch']);
+          put(r, 4, row['sem']);
+          put(r, 5, row['college']);
+          put(r, 6, row['transport']);
+          put(r, 7, row['demand']);
+          put(r, 8, row['collection']);
+          put(r, 9, row['balance']);
+          put(r, 10, row['quota']);
+          put(r, 11, row['admtype']);
+          put(r, 12, row['receipt']);
+        } else if (kind == 'courseheader') {
+          put(r, 0, row['course'], style: boldTxt);
+        } else {
+          final isOverall = kind == 'overall';
+          final isGrand = kind == 'grand';
+          put(r, (isGrand || isOverall) ? 0 : 1, isOverall ? 'OVERALL' : isGrand ? 'G.Total' : 'S.Total', style: boldTxt);
+          put(r, 5, row['college'], style: boldNum);
+          put(r, 6, row['transport'], style: boldNum);
+          put(r, 7, row['demand'], style: boldNum);
+          put(r, 8, row['collection'], style: boldNum);
+          put(r, 9, row['balance'], style: boldNum);
+        }
+        r++;
+      }
+      sheet.setColumnWidth(1, 30);
+      await _saveExcel(excel, 'DCB_Register_${course.replaceAll(RegExp(r"[^A-Za-z0-9]+"), "_")}');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('DCB export error. ${friendlyError(e)}'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _dcbExporting = false);
+    }
+  }
+
+  Future<void> _exportDcbPdf(String course, List<Map<String, dynamic>> rows) async {
+    setState(() => _dcbExporting = true);
+    try {
+      const headers = ['SL', 'NAME & REG NO', 'CLASS', 'BATCH', 'SEM', 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADM TYPE', 'RECEIPT'];
+      String n(dynamic v) { final d = (v as double?) ?? 0; return d == 0 ? '' : _formatNumber(d); }
+      final data = <List<String>>[];
+      for (final row in rows) {
+        final kind = row['kind'];
+        if (kind == 'data') {
+          final nm = (row['name'] as String).isEmpty ? '' : '${row['name']}\n${row['admno']}';
+          data.add([
+            row['slno']?.toString() ?? '', nm, row['cls']?.toString() ?? '',
+            row['batch']?.toString() ?? '', row['sem']?.toString() ?? '',
+            n(row['college']), n(row['transport']), n(row['demand']), n(row['collection']), n(row['balance']),
+            row['quota']?.toString() ?? '', row['admtype']?.toString() ?? '', row['receipt']?.toString() ?? '',
+          ]);
+        } else if (kind == 'courseheader') {
+          data.add([row['course']?.toString() ?? '', '', '', '', '', '', '', '', '', '', '', '', '']);
+        } else {
+          final lbl = kind == 'overall' ? 'OVERALL' : kind == 'grand' ? 'G.Total' : 'S.Total';
+          data.add(['', lbl, '', '', '', n(row['college']), n(row['transport']), n(row['demand']), n(row['collection']), n(row['balance']), '', '', '']);
+        }
+      }
+      final pdf = pw.Document();
+      pdf.addPage(pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(18),
+        header: (_) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            if (_insName.isNotEmpty) pw.Text(_insName, style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+            if (_insAddress.isNotEmpty) pw.Text(_insAddress, style: const pw.TextStyle(fontSize: 9)),
+            pw.SizedBox(height: 4),
+            pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+              pw.Text('DCB Student Register for $course', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              pw.Text('Date: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
+            ]),
+            pw.SizedBox(height: 6),
+          ],
+        ),
+        build: (ctx) => [
+          pw.TableHelper.fromTextArray(
+            headers: headers,
+            data: data,
+            headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
+            cellStyle: const pw.TextStyle(fontSize: 7),
+            cellAlignments: {for (final i in const [5, 6, 7, 8, 9]) i: pw.Alignment.centerRight},
+            border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
+          ),
+        ],
+      ));
+      await _savePdf(pdf, 'DCB_Register_${course.replaceAll(RegExp(r"[^A-Za-z0-9]+"), "_")}');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('DCB PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _dcbExporting = false);
+    }
+  }
+
   Widget _buildPowerCollege() {
     String fmt(dynamic raw) {
       if (raw == null) return '';
       final dt = DateTime.tryParse(raw.toString());
       return dt == null ? raw.toString() : _formatDate(dt);
     }
+
+    // Apply the shared Course / Class filters to the loaded rows.
+    final rows = _pcFilteredRows();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3729,14 +4711,35 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           padding: EdgeInsets.fromLTRB(0, 8.h, 0, 8.h),
           child: Row(
             children: [
-              const AppIcon('document-download', size: 18, color: AppColors.accent),
-              SizedBox(width: 8.w),
-              Text('PowerCollege Export',
-                  style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              const CardTitleBlock(icon: 'document-download', title: 'Export', subtitle: 'reconciled collection by date range'),
               SizedBox(width: 8.w),
               if (_pcLoading)
                 SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent)),
               const Spacer(),
+              // Collection type filter (All / Regular / Arrear) for the export.
+              Container(
+                height: AppBtn.height(context),
+                padding: EdgeInsets.symmetric(horizontal: 12.w),
+                decoration: BoxDecoration(
+                  border: Border.all(color: _pcType != 'All' ? AppColors.accent : AppColors.border, width: 1.5),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _pcType,
+                    isDense: true,
+                    icon: Icon(Icons.filter_list, size: AppBtn.iconSize(context), color: _pcType != 'All' ? AppColors.accent : AppColors.textPrimary),
+                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _pcType != 'All' ? AppColors.accent : AppColors.textPrimary),
+                    items: const [
+                      DropdownMenuItem(value: 'All', child: Text('All types')),
+                      DropdownMenuItem(value: 'Regular', child: Text('Regular')),
+                      DropdownMenuItem(value: 'Arrear', child: Text('Arrear')),
+                    ],
+                    onChanged: (v) => setState(() => _pcType = v ?? 'All'),
+                  ),
+                ),
+              ),
+              SizedBox(width: AppBtn.gap(context)),
               Builder(builder: (_) {
                 // Filled = a date range is picked -> amber.
                 final filled = _pcFrom != null && _pcTo != null;
@@ -3760,19 +4763,28 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               }),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
-                onPressed: (_pcRows.isEmpty || _pcExporting) ? () {} : _exportPowerCollege,
-                icon: Icons.download_rounded,
+                onPressed: (rows.isEmpty || _pcExporting) ? () {} : _exportPowerCollege,
+                icon: Icons.table_chart_rounded,
                 label: _pcExporting ? 'Exporting…' : 'Excel',
                 color: const Color(0xFF10B981),
+              ),
+              SizedBox(width: AppBtn.gap(context)),
+              _miniExportBtn(
+                onPressed: (rows.isEmpty || _pcExporting) ? () {} : _exportPowerCollegePdf,
+                icon: Icons.picture_as_pdf_rounded,
+                label: 'PDF',
+                color: const Color(0xFFEF4444),
               ),
             ],
           ),
         ),
         Expanded(
-          child: _pcRows.isEmpty
+          child: rows.isEmpty
               ? _emptyState(_pcLoading
                   ? 'Loading reconciled payments…'
-                  : 'No payments in this range')
+                  : (_pcRows.isEmpty
+                      ? 'No payments in this range'
+                      : 'No payments for the selected course / class'))
               : Container(
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
@@ -3780,7 +4792,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: AppColors.border),
                   ),
-                  child: _PowerCollegeTable(rows: _pcRows, fmt: fmt),
+                  child: _PowerCollegeTable(rows: rows, fmt: fmt),
                 ),
         ),
       ],
@@ -3806,6 +4818,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           final p = _prefixOf(r['paynumber']?.toString() ?? '');
           if (p != _selectedPrefix) return false;
         }
+        if (_selectedDailyType != null && (r['type']?.toString() ?? 'Regular') != _selectedDailyType) return false;
         if (_selectedUser != null && r['createdby']?.toString() != _selectedUser) return false;
         return true;
       }).toList();
@@ -3946,10 +4959,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
       );
 
-      await Printing.sharePdf(
-        bytes: await pdf.save(),
-        filename: 'Daily_Collection_${_formatDateCompact(_dailyFrom!)}_${_formatDateCompact(_dailyTo!)}.pdf',
-      );
+      await _savePdf(pdf, 'Daily_Collection_${_formatDateCompact(_dailyFrom!)}_${_formatDateCompact(_dailyTo!)}');
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: Colors.red));
     }
@@ -3972,6 +4982,27 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Report saved: ${file.path}'), backgroundColor: Colors.green),
+      );
+    }
+  }
+
+  /// Save a PDF straight to a file (Save-As dialog) instead of routing it
+  /// through the OS print dialog (Printing.layoutPdf). Matches _saveExcel.
+  Future<void> _savePdf(pw.Document pdf, String fileName) async {
+    final bytes = await pdf.save();
+    final result = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save PDF',
+      fileName: '$fileName.pdf',
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+    );
+    if (result == null) return;
+    final path = result.toLowerCase().endsWith('.pdf') ? result : '$result.pdf';
+    final file = File(path);
+    await file.writeAsBytes(bytes);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF saved: ${file.path}'), backgroundColor: Colors.green),
       );
     }
   }
@@ -4204,14 +5235,14 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
   // Widths picked so every uppercase header fits on one line (TRANSACTION
   // DATE / PAYMENT MODE / SETTLEMENT DATE are the long ones).
   static const _colWidths = <double>[
-    120, 220, 110, 130, 170, 140, 130, 90, 200, 100, 90, 240, 180, 170,
+    155, 210, 130, 140, 95, 120, 185, 170, 180, 140, 110, 210, 120,
   ];
   static const _headers = <String>[
-    'ROLL NO', 'NAME', 'COURSE', 'CLASS',
-    'TRANSACTION DATE', 'PAYMENT MODE', 'DOC NO', 'TERM', 'FEE TYPE',
-    'AMOUNT', 'FINE', 'BANK NAME', 'SETTLEMENT ID', 'SETTLEMENT DATE',
+    'ROLL NO', 'NAME', 'CLASS', 'DEMAND NO', 'TYPE', 'YEAR',
+    'TRANSACTION REC.NO', 'TRANSACTION DATE', 'TRANSACTION ID', 'PAYMENT MODE',
+    'SEMESTER', 'FEE TYPE', 'AMOUNT',
   ];
-  static const _numericColumns = <int>{9, 10};
+  static const _numericColumns = <int>{12};
 
   @override
   void dispose() {
@@ -4318,7 +5349,6 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
                                 itemBuilder: (_, idx) {
                                   final r = widget.rows[idx];
                                   final amt = (r['amount'] as num?)?.toDouble() ?? 0;
-                                  final fine = (r['fine'] as num?)?.toDouble() ?? 0;
                                   return Container(
                                     decoration: BoxDecoration(
                                       color: idx.isEven ? Colors.white : AppColors.surface,
@@ -4330,18 +5360,17 @@ class _PowerCollegeTableState extends State<_PowerCollegeTable> {
                                       children: [
                                         _bodyCell(0, r['stuadmno']?.toString() ?? '', adj[0]),
                                         _bodyCell(1, r['stuname']?.toString() ?? '', adj[1]),
-                                        _bodyCell(2, r['courname']?.toString() ?? '', adj[2]),
-                                        _bodyCell(3, r['stuclass']?.toString() ?? '', adj[3]),
-                                        _bodyCell(4, widget.fmt(r['paydate']), adj[4]),
-                                        _bodyCell(5, r['paymethod']?.toString() ?? '', adj[5]),
-                                        _bodyCell(6, r['docno']?.toString() ?? '', adj[6]),
-                                        _bodyCell(7, r['demfeeterm']?.toString() ?? '', adj[7]),
-                                        _bodyCell(8, r['demfeetype']?.toString() ?? '', adj[8]),
-                                        _bodyCell(9, formatIndianNumber(amt), adj[9]),
-                                        _bodyCell(10, formatIndianNumber(fine), adj[10]),
-                                        _bodyCell(11, r['banname']?.toString() ?? '', adj[11]),
-                                        _bodyCell(12, r['settlement_id']?.toString() ?? '', adj[12]),
-                                        _bodyCell(13, widget.fmt(r['settlement_date']), adj[13]),
+                                        _bodyCell(2, r['stuclass']?.toString() ?? '', adj[2]),
+                                        _bodyCell(3, r['docno']?.toString() ?? '', adj[3]),
+                                        _bodyCell(4, (r['demseqtype']?.toString().trim().toUpperCase() == 'ARREAR') ? 'ARREAR' : 'REGULAR', adj[4]),
+                                        _bodyCell(5, r['demfeeyear']?.toString() ?? '', adj[5]),
+                                        _bodyCell(6, r['paynumber']?.toString() ?? '', adj[6]),
+                                        _bodyCell(7, widget.fmt(r['paydate']), adj[7]),
+                                        _bodyCell(8, r['payreference']?.toString() ?? '', adj[8]),
+                                        _bodyCell(9, r['paymethod']?.toString() ?? '', adj[9]),
+                                        _bodyCell(10, r['demfeeterm']?.toString() ?? '', adj[10]),
+                                        _bodyCell(11, r['demfeetype']?.toString() ?? '', adj[11]),
+                                        _bodyCell(12, formatIndianNumber(amt), adj[12]),
                                       ],
                                     ),
                                   );

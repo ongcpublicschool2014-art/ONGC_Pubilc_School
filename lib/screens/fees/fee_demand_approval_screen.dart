@@ -586,7 +586,6 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                               _headerCell('Fee Amount', 3, right: true),
                               SizedBox(width: 16.w),
                               _headerCell('Concession', 3, center: true),
-                              _headerCell('Balance Due', 3, right: true),
                               SizedBox(width: 32.w),
                               _headerCell('Created By', 3),
                               _headerCell('Status', 3, center: true),
@@ -815,10 +814,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
     // tempfeedemand: demfeetype
     final type = (d['demfeetype'] ?? d['feetype'] ?? d['feetypename'] ?? d['typename'] ?? '-').toString();
     final feeAmt = (d['feeamount'] as num?)?.toDouble() ?? 0;
-    final conAmt = (d['conamount'] as num?)?.toDouble() ?? 0;
     final concessionName = (d['stucondesc'] ?? '-').toString();
-    // use stored balancedue if available
-    final balance = (d['balancedue'] as num?)?.toDouble() ?? (feeAmt - conAmt);
     final createdBy =
         (d['createdby'] ?? d['created_by'] ?? d['createdbyname'] ?? '-')
             .toString();
@@ -904,14 +900,6 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
-              ),
-              // Balance Due
-              Expanded(
-                flex: 3,
-                child: Text('${_fmt(balance)}',
-                    style: TextStyle(
-                        fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                    textAlign: TextAlign.right),
               ),
               SizedBox(width: 32.w),
               // Created By

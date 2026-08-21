@@ -195,6 +195,101 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     if (mounted) await _load();
   }
 
+  /// Lightweight bulk import for simple name-only masters (Community, Concession,
+  /// Division…). Paste one name per line (commas also split); duplicates and
+  /// names already present are skipped.
+  Future<void> _bulkImport() async {
+    final auth = context.read<AuthProvider>();
+    final ctrl = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Import ${widget.title}'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Paste one ${widget.title.toLowerCase()} per line. '
+                  'Duplicates and existing records are skipped.',
+                  style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+              SizedBox(height: 10.h),
+              TextField(
+                controller: ctrl,
+                minLines: 6,
+                maxLines: 12,
+                autofocus: true,
+                textCapitalization: TextCapitalization.characters,
+                style: _fieldTextStyle(),
+                decoration: _filledFieldDec('e.g.\nBC\nMBC\nSC\nST\nOC'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+    final raw = ctrl.text;
+    ctrl.dispose();
+    if (go != true) return;
+
+    // Split on newlines/commas, trim, drop blanks, dedupe (case-insensitive).
+    final seen = <String>{};
+    final names = <String>[];
+    for (final part in raw.split(RegExp(r'[\r\n,]+'))) {
+      final n = part.trim();
+      if (n.isEmpty) continue;
+      if (seen.add(n.toLowerCase())) names.add(n);
+    }
+    if (names.isEmpty) {
+      _snack('Nothing to import.', AppColors.warning);
+      return;
+    }
+
+    final existing = _rows
+        .map((r) => r[widget.nameCol]?.toString().trim().toLowerCase() ?? '')
+        .toSet();
+    setState(() => _saving = true);
+    int added = 0, skipped = 0;
+    try {
+      for (final name in names) {
+        if (existing.contains(name.toLowerCase())) {
+          skipped++;
+          continue;
+        }
+        final id = await AdmissionService.nextMasterId(widget.table, widget.idCol);
+        await AdmissionService.addMasterRow(widget.table, {
+          widget.idCol: id,
+          widget.nameCol: name,
+          'ins_id': auth.insId,
+          'activestatus': 1,
+          if (widget.includeCreatedBy) 'createdby': auth.userName,
+        });
+        existing.add(name.toLowerCase());
+        added++;
+      }
+      await _load();
+      _snack(
+        'Imported $added ${widget.title.toLowerCase()}${added == 1 ? '' : 's'}'
+        '${skipped > 0 ? ', skipped $skipped duplicate${skipped == 1 ? '' : 's'}' : ''}.',
+        AppColors.success,
+      );
+    } catch (e) {
+      await _load();
+      _snack('Import stopped after $added added. ${friendlyError(e)}', AppColors.error);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   // ── design helpers (mirror master_data_screen / fee-master / admission-master) ──
 
   Widget _lbl(String text) =>
@@ -241,6 +336,33 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
         onPressed: _saving ? null : _openImport,
         icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
         label: const Text('Import CSV/Excel'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: EdgeInsets.symmetric(horizontal: hPad),
+          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+        ),
+      ),
+    );
+  }
+
+  /// Lightweight paste-a-list import button for simple name-only masters
+  /// (shown when there is no full CSV/Excel importer for this master).
+  Widget _bulkImportButton() {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final btnHeight = compact ? 30.0 : 40.0;
+    final iconSize = compact ? 12.0 : 16.0;
+    final hPad = compact ? 10.0 : 18.0;
+    final radius = compact ? 6.0 : 10.0;
+    final textSize = compact ? 11.0 : 13.0;
+    return SizedBox(
+      height: btnHeight,
+      child: ElevatedButton.icon(
+        onPressed: _saving ? null : _bulkImport,
+        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
+        label: const Text('Import'),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.accent,
           foregroundColor: Colors.white,
@@ -355,7 +477,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                     style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
               ),
               const Spacer(),
-              if (widget.importTabIndex != null) _importButton(),
+              if (widget.importTabIndex != null) _importButton() else _bulkImportButton(),
             ]),
           ),
           Expanded(

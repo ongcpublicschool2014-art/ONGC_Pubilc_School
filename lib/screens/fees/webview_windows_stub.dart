@@ -6,6 +6,7 @@ class WebviewController {
   Future<void> setBackgroundColor(Color color) async {}
   Future<void> loadUrl(String url) async {}
   Stream<String> get url => const Stream<String>.empty();
+  Stream<dynamic> get webMessage => const Stream<dynamic>.empty();
   void dispose() {}
 }
 

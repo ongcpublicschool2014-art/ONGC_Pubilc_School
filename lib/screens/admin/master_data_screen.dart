@@ -390,12 +390,12 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.fromSchema('course').update({
+        await SupabaseService.saveSchemaRow('course', {
           'courname': name,
-        }).eq('cour_id', _editId!);
+        }, pkCol: 'cour_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Course updated.', AppColors.success);
       } else {
-        await SupabaseService.fromSchema('course').insert({
+        await SupabaseService.saveSchemaRow('course', {
           'cour_id': await _nextId('course', 'cour_id'),
           'courname': name,
           'ordid': _nextOrder(_rows),
@@ -417,7 +417,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'course')) return;
     try {
-      await SupabaseService.fromSchema('course').update({'activestatus': 0}).eq('cour_id', id);
+      await SupabaseService.deleteSchemaRow('course', 'cour_id', id);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
@@ -526,7 +526,9 @@ class _ClassMasterPanel extends StatefulWidget {
 }
 
 class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeepAliveClientMixin {
-  final _name = TextEditingController();
+  // Class is picked as a level (I/II/III/IV); the saved name is "course-level".
+  static const _classLevels = ['I', 'II', 'III', 'IV'];
+  String? _classLevel;
   String? _courId;
   String? _succId;
   List<Map<String, dynamic>> _rows = [];
@@ -547,7 +549,6 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
 
   @override
   void dispose() {
-    _name.dispose();
     super.dispose();
   }
 
@@ -600,24 +601,29 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
   void _edit(Map<String, dynamic> r) {
     setState(() {
       _editId = r['cla_id'] is int ? r['cla_id'] as int : int.tryParse(r['cla_id'].toString());
-      _name.text = r['claname']?.toString() ?? '';
       _courId = r['cour_id']?.toString();
       _succId = r['succeedingclass']?.toString();
+      // Derive the level (trailing segment) from the saved "course-level" name.
+      final lvl = (r['claname']?.toString().trim().split('-').last.trim() ?? '');
+      _classLevel = _classLevels.contains(lvl) ? lvl : null;
     });
   }
 
   void _cancelEdit() {
     setState(() {
       _editId = null;
-      _name.clear();
+      _classLevel = null;
       _courId = null;
       _succId = null;
     });
   }
 
   Future<void> _add() async {
-    final name = _name.text.trim();
-    if (name.isEmpty) return _snack(context, 'Enter a class name.', AppColors.warning);
+    if (_courId == null) return _snack(context, 'Select a course.', AppColors.warning);
+    if (_classLevel == null) return _snack(context, 'Select a class (I / II / III / IV).', AppColors.warning);
+    // Class name is the course name combined with the level, e.g. "B.E-CSE-I".
+    final courName = _courName[_courId] ?? '';
+    final name = '$courName-$_classLevel';
     if (_rows.any((r) => (r['claname']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() &&
         (r['cla_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
       return _snack(context, '"$name" already exists.', AppColors.warning);
@@ -628,22 +634,28 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
         'claname': name,
         'cour_id': _courId == null ? null : int.tryParse(_courId!),
         'succeedingclass': _succId == null ? null : int.tryParse(_succId!),
+        // Order by level so classes sort I → II → III → IV within each course.
+        'ordid': _classLevels.indexOf(_classLevel!) + 1,
       };
       if (_editId != null) {
-        await SupabaseService.fromSchema('class').update(payload).eq('cla_id', _editId!);
+        await SupabaseService.saveSchemaRow('class', payload, pkCol: 'cla_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Class updated.', AppColors.success);
       } else {
-        await SupabaseService.fromSchema('class').insert({
+        await SupabaseService.saveSchemaRow('class', {
           'cla_id': await _nextId('class', 'cla_id'),
           ...payload,
-          'ordid': _nextOrder(_rows),
           'ins_id': _insId,
           'activestatus': 1,
         });
         if (mounted) _snack(context, 'Class added.', AppColors.success);
       }
+      final savedCourId = _courId;
       _cancelEdit();
       await _load();
+      // Link the ladder now that the new class exists. Adding "MSc-I" before
+      // "MSc-II" exists leaves nothing to point at, so instead of forcing the
+      // user to come back and edit, every add re-links the course's chain.
+      if (savedCourId != null) await _autoChainCourse(savedCourId);
     } catch (e) {
       if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
     } finally {
@@ -651,10 +663,51 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
     }
   }
 
+  /// Fill in each class's succeeding class from the next one up the ladder
+  /// (I → II → III → IV, ordered by ordid) for the given course.
+  ///
+  /// Only ever fills BLANKS — an explicit choice is never overwritten, and the
+  /// final class is correctly left with none.
+  Future<void> _autoChainCourse(String courId) async {
+    final ladder = _rows.where((r) => r['cour_id']?.toString() == courId).toList()
+      ..sort((a, b) {
+        final oa = (a['ordid'] is num) ? (a['ordid'] as num).toInt() : 1 << 30;
+        final ob = (b['ordid'] is num) ? (b['ordid'] as num).toInt() : 1 << 30;
+        return oa.compareTo(ob);
+      });
+    if (ladder.length < 2) return;
+
+    var linked = 0;
+    for (var i = 0; i < ladder.length - 1; i++) {
+      final current = ladder[i];
+      final existing = current['succeedingclass']?.toString().trim() ?? '';
+      if (existing.isNotEmpty) continue; // respect a manual choice
+      final nextId = ladder[i + 1]['cla_id'];
+      final claId = current['cla_id'] is int
+          ? current['cla_id'] as int
+          : int.tryParse(current['cla_id'].toString());
+      if (claId == null || nextId == null) continue;
+      try {
+        await SupabaseService.saveSchemaRow('class',
+            {'succeedingclass': nextId is int ? nextId : int.tryParse(nextId.toString())},
+            pkCol: 'cla_id', pkVal: claId);
+        linked++;
+      } catch (_) {
+        // A single failed link shouldn't abort the rest of the chain.
+      }
+    }
+    if (linked > 0) {
+      await _load();
+      if (mounted) {
+        _snack(context, 'Linked $linked class${linked == 1 ? '' : 'es'} to its succeeding class.', AppColors.success);
+      }
+    }
+  }
+
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'class')) return;
     try {
-      await SupabaseService.fromSchema('class').update({'activestatus': 0}).eq('cla_id', id);
+      await SupabaseService.deleteSchemaRow('class', 'cla_id', id);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
@@ -678,16 +731,6 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _lbl('Class Name *'),
-                SizedBox(height: 6.h),
-                TextField(
-                  controller: _name,
-                  style: _fieldTextStyle(context, filled: _name.text.trim().isNotEmpty),
-                  decoration: _filledFieldDec(context, 'Enter class name', filled: _name.text.trim().isNotEmpty),
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _add(),
-                ),
-                SizedBox(height: 16.h),
                 _lbl('Course'),
                 SizedBox(height: 6.h),
                 DropdownButtonFormField<String>(
@@ -713,6 +756,26 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   }),
                 ),
                 SizedBox(height: 16.h),
+                _lbl('Class Name *'),
+                SizedBox(height: 6.h),
+                DropdownButtonFormField<String>(
+                  initialValue: _classLevel,
+                  icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: _fieldTextStyle(context, filled: _classLevel != null),
+                  decoration: _filledFieldDec(context, 'Select class', filled: _classLevel != null),
+                  items: _classLevels
+                      .map((lvl) => DropdownMenuItem(value: lvl, child: Text(lvl, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))))
+                      .toList(),
+                  selectedItemBuilder: (context) => _classLevels
+                      .map((lvl) => Align(alignment: Alignment.centerLeft, child: Text(lvl, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))))
+                      .toList(),
+                  onChanged: (v) => setState(() => _classLevel = v),
+                ),
+                SizedBox(height: 16.h),
                 _lbl('Succeeding Class'),
                 SizedBox(height: 6.h),
                 Builder(builder: (_) {
@@ -732,16 +795,28 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
                     style: _fieldTextStyle(context, filled: succValue != null),
-                    decoration: _filledFieldDec(context, 'Select succeeding class', filled: succValue != null),
+                    decoration: _filledFieldDec(context, 'Auto — links when next class is added', filled: succValue != null),
                     items: [
+                      DropdownMenuItem<String>(
+                        value: '',
+                        child: Text('None — final class',
+                            style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                      ),
                       ...succClasses.map((r) => DropdownMenuItem(value: r['cla_id'].toString(), child: Text(r['claname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))),
                     ],
                     selectedItemBuilder: (context) => [
+                      Align(alignment: Alignment.centerLeft, child: Text('None — final class', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
                       ...succClasses.map((r) => Align(alignment: Alignment.centerLeft, child: Text(r['claname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
                     ],
-                    onChanged: (v) => setState(() => _succId = v),
+                    onChanged: (v) => setState(() => _succId = (v == null || v.isEmpty) ? null : v),
                   );
                 }),
+                SizedBox(height: 6.h),
+                Text(
+                  'Leave blank when adding the first class — it links automatically '
+                  'once the next one exists. Pick "None" only for the final class.',
+                  style: TextStyle(fontSize: 11.sp, color: AppColors.textLight, height: 1.3),
+                ),
                 SizedBox(height: 18.h),
                 Row(children: [
                   Expanded(
@@ -773,8 +848,8 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
             action: _importButton(context, title: 'Class', tabIndex: 3, disabled: _saving, onReturn: _load),
             headerCells: [
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
-              Expanded(flex: 2, child: Text('CLASS', style: _h())),
               Expanded(flex: 2, child: Text('COURSE', style: _h())),
+              Expanded(flex: 2, child: Text('CLASS', style: _h())),
               Expanded(flex: 2, child: Text('SUCCEEDING', style: _h())),
               SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
@@ -793,8 +868,8 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
                             child: Row(children: [
                               SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                              Expanded(flex: 2, child: Text(r['claname']?.toString() ?? '', style: _c())),
                               Expanded(flex: 2, child: Text(_courName['${r['cour_id'] ?? ''}'] ?? '', style: _c())),
+                              Expanded(flex: 2, child: Text(r['claname']?.toString() ?? '', style: _c())),
                               Expanded(flex: 2, child: Text(_claName['${r['succeedingclass'] ?? ''}'] ?? '', style: _c())),
                               SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                 InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),

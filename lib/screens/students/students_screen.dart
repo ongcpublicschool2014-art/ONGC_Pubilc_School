@@ -56,12 +56,23 @@ class _StudentsScreenState extends State<StudentsScreen> {
   String? _selectedQuoName;
   List<Map<String, dynamic>> _quotas = [];
   final _batchController = TextEditingController();
+  final _admittedYearController = TextEditingController();
+  // Demographic / identity fields (also populated from bulk import)
+  final _aadharController = TextEditingController();
+  final _mediumController = TextEditingController();
+  final _communityController = TextEditingController();
+  final _casteController = TextEditingController();
+  final _religionController = TextEditingController();
+  final _nationalityController = TextEditingController();
+  final _transportController = TextEditingController();
+  String? _selectedHostel; // 'Y' / 'N'
   String? _photoUrl;
   String? _insName;
   String? _insLogo;
 
   // Parent Info
   String _selectedParentTab = 'Father';
+  final _parentEmailController = TextEditingController();
   final _fatherNameController = TextEditingController();
   final _fatherMobileController = TextEditingController();
   final _fatherOccController = TextEditingController();
@@ -81,6 +92,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   int _photoUploadDone = 0;
   int _photoUploadTotal = 0;
   bool _isFormEnabled = true;
+  int? _selectedParId; // linked parent id of the selected student (for edits)
   List<StudentModel> _students = [];
   Map<String, int> _classCounts = {};
   // Master-table ordering: claname -> ordid, courname -> ordid.
@@ -123,55 +135,80 @@ class _StudentsScreenState extends State<StudentsScreen> {
   Set<String> _importCourseNames = {};        // normalized courname
   Map<String, String?> _importClassToCourse = {}; // normalized claname â†’ normalized course name (from class.cour_id)
 
+  // Column order mirrors the export template exactly: all name/value columns
+  // first, then every ID column grouped at the end.
   static const _importGridKeys = [
-    'stuadmno', 'stuname', 'stugender', 'studob', 'stuadmdate', 'courname', 'stuclass',
-    'stumobile', 'stuemail', 'concession',
-    'stuaddress', 'stucity', 'stustate', 'stucountry',
-    'stupin', 'stubloodgrp',
+    'stuadmno', 'stuname', 'stugender',
+    'courname', 'stuclass', 'admname',
+    'batch', 'stuadmdate', 'studob', 'admittyear', 'medium',
+    'concession', 'quoname',
+    'stumobile', 'stuemail',
+    'stuaddress', 'stucity', 'stustate', 'stucountry', 'stupin', 'stubloodgrp',
+    'aadharno', 'community', 'caste', 'religion', 'nationality', 'transportmode', 'hostel',
     'fathername', 'fathermobile', 'fatheroccupation',
     'mothername', 'mothermobile', 'motheroccupation',
-    'guardianname', 'guardianmobile', 'guardianoccupation',
+    'guardianname', 'guardianmobile', 'guardianoccupation', 'paremail',
     'payincharge', 'payinchargemob',
-    'admname', 'quoname', 'batch', 'admittyear',
+    'admitted_course_id', 'course_id', 'class_id', 'admission_type_id', 'concession_id', 'quota_id',
   ];
 
+  // Labels + order mirror the student import Excel template.
   static const Map<String, String> _importGridLabels = {
-    'stuadmno': 'Roll No *',
+    'stuadmno': 'Reg. No *',
     'stuname': 'Name *',
     'stugender': 'Gender *',
-    'studob': 'DOB *',
-    'stuadmdate': 'Adm Date',
+    'courname': 'Course *',
     'stuclass': 'Class *',
-    'courname': 'Course',
+    'admname': 'Admission Type *',
+    'batch': 'Batch *',
+    'stuadmdate': 'Admission Date *',
+    'studob': 'DOB *',
+    'admittyear': 'Admitted Year *',
+    'medium': 'Medium *',
+    'concession': 'Concession',
+    'quoname': 'Quota',
     'stumobile': 'Mobile',
     'stuemail': 'Email',
-    'concession': 'Concession *',
-    'admname': 'Admission Type',
-    'quoname': 'Quota',
-    'batch': 'Batch',
-    'admittyear': 'Admitted Year',
     'stuaddress': 'Address',
     'stucity': 'City',
     'stustate': 'State',
     'stucountry': 'Country',
-    'stupin': 'Pin Code',
+    'stupin': 'PIN',
     'stubloodgrp': 'Blood Group',
+    'aadharno': 'Aadhar No',
+    'community': 'Community',
+    'caste': 'Caste',
+    'religion': 'Religion',
+    'nationality': 'Nationality',
+    'transportmode': 'Transport Mode',
+    'hostel': 'Hostel (Y/N)',
     'fathername': 'Father Name',
     'fathermobile': 'Father Mobile',
-    'fatheroccupation': 'Father Occ.',
+    'fatheroccupation': 'Father Occupation',
     'mothername': 'Mother Name',
     'mothermobile': 'Mother Mobile',
-    'motheroccupation': 'Mother Occ.',
+    'motheroccupation': 'Mother Occupation',
     'guardianname': 'Guardian Name',
     'guardianmobile': 'Guardian Mobile',
-    'guardianoccupation': 'Guardian Occ.',
-    'payincharge': 'Pay In Charge *',
-    'payinchargemob': 'Pay Mobile *',
+    'guardianoccupation': 'Guardian Occupation',
+    'paremail': 'Parent Email',
+    'payincharge': 'Payment In Charge',
+    'payinchargemob': 'Payment Mobile',
+    'admitted_course_id': 'Admitted Course Id',
+    'course_id': 'Course Id',
+    'class_id': 'Class Id',
+    'admission_type_id': 'Admission Type Id',
+    'concession_id': 'Concession Id',
+    'quota_id': 'Quota id',
   };
 
   final ScrollController _importScrollController = ScrollController();
 
-  static const _importRequiredFields = {'stuadmno', 'stuname', 'stugender', 'stuclass', 'payincharge', 'payinchargemob'};
+  // Required = the NOT NULL columns on students/parents (studob is NOT NULL;
+  // con_id is nullable so Concession is optional). payincharge / payinchargemob
+  // are NOT listed here: they're auto-filled from a parent (see
+  // _deriveImportPayer) when left blank, and validated conditionally.
+  static const _importRequiredFields = {'stuadmno', 'stuname', 'stugender', 'studob', 'stuclass'};
 
   static final TextStyle _inputStyle = TextStyle(fontWeight: FontWeight.w500, fontSize: 13.sp, color: const Color(0xFF555555));
 
@@ -181,29 +218,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII',
   ];
 
-  static const List<Color> _classColors = [
-    Color(0xFF6366F1), // PKG - Indigo
-    Color(0xFF8B5CF6), // LKG - Violet
-    Color(0xFFA855F7), // UKG - Purple
-    Color(0xFFEC4899), // I - Pink
-    Color(0xFFF43F5E), // II - Rose
-    Color(0xFFEF4444), // III - Red
-    Color(0xFFF97316), // IV - Orange
-    Color(0xFFF59E0B), // V - Amber
-    Color(0xFF22C55E), // VI - Green
-    Color(0xFF6C8EEF), // VII - Teal
-    Color(0xFF06B6D4), // VIII - Cyan
-    Color(0xFF6C8EEF), // IX - Blue
-    Color(0xFF2563EB), // X - Blue dark
-    Color(0xFF7C3AED), // XI - Violet dark
-    Color(0xFF9333EA), // XII - Purple dark
-  ];
-
-  Color _getClassColor(String className) {
-    final index = _classOrder.indexOf(className);
-    if (index >= 0 && index < _classColors.length) return _classColors[index];
-    return AppColors.accent;
-  }
+  // Every class/course tile uses one uniform colour (no per-class palette).
+  Color _getClassColor(String className) => AppColors.accent;
 
   @override
   void initState() {
@@ -235,6 +251,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _payNameController.dispose();
     _payMobileController.dispose();
     _batchController.dispose();
+    _admittedYearController.dispose();
+    _aadharController.dispose();
+    _mediumController.dispose();
+    _communityController.dispose();
+    _casteController.dispose();
+    _religionController.dispose();
+    _nationalityController.dispose();
+    _transportController.dispose();
+    _parentEmailController.dispose();
     _searchController.dispose();
     _globalSearchController.dispose();
     super.dispose();
@@ -317,10 +342,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
     for (final c in rawClasses) {
       if (c.isNotEmpty && seen.add(c)) dedupedRaw.add(c);
     }
-    final ordered = _classOrder.where((c) => dedupedRaw.contains(c)).toList();
-    final extra = dedupedRaw.where((c) => !_classOrder.contains(c)).toList();
-
-    final allClasses = [...ordered, ...extra];
+    // Order by the class master's ordid (the institution's preferred order),
+    // so college classes like "B.E CIVIL-I" sort correctly. Classes missing an
+    // ordid fall to the end alphabetically.
+    final allClasses = dedupedRaw
+      ..sort((a, b) {
+        final oa = classOrdMap[a.trim()], ob = classOrdMap[b.trim()];
+        if (oa != null && ob != null) return oa != ob ? oa.compareTo(ob) : a.compareTo(b);
+        if (oa != null) return -1;
+        if (ob != null) return 1;
+        return a.compareTo(b);
+      });
     setState(() {
       _years = years;
       _concessions = concessions;
@@ -395,6 +427,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _payNameController.clear();
     _payMobileController.clear();
     _batchController.clear();
+    _admittedYearController.clear();
+    _aadharController.clear();
+    _mediumController.clear();
+    _communityController.clear();
+    _casteController.clear();
+    _religionController.clear();
+    _nationalityController.clear();
+    _transportController.clear();
+    _parentEmailController.clear();
     setState(() {
       _selectedGender = null;
       _selectedBloodGroup = null;
@@ -402,6 +443,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _selectedConId = null;
       _selectedAdmName = null;
       _selectedQuoName = null;
+      _selectedHostel = null;
       _admDate = null;
       _dob = null;
       _photoUrl = null;
@@ -423,11 +465,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _countryController.text = clean(s.stucountry);
     _pinController.text = clean(s.stupin);
     _batchController.text = clean(s.batch);
+    _admittedYearController.text = clean(s.admittyear);
+    _mediumController.text = clean(s.medium);
+    _aadharController.text = clean(s.aadharno);
+    _communityController.text = clean(s.community);
+    _casteController.text = clean(s.caste);
+    _religionController.text = clean(s.religion);
+    _nationalityController.text = clean(s.nationality);
+    _transportController.text = clean(s.transportmode);
 
     // Fetch parent data
     final parent = await SupabaseService.getStudentParent(s.stuId);
     if (!mounted) return;
 
+    _parentEmailController.text = clean(parent?['paremail']?.toString());
     _fatherNameController.text = clean(parent?['fathername']?.toString());
     _fatherMobileController.text = clean(parent?['fathermobile']?.toString());
     _fatherOccController.text = clean(parent?['fatheroccupation']?.toString());
@@ -442,16 +493,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     setState(() {
       _selectedStudent = s;
+      _selectedParId = parent?['par_id'] is int
+          ? parent!['par_id'] as int
+          : int.tryParse('${parent?['par_id'] ?? ''}');
       _selectedGender = s.gender;
       _selectedBloodGroup = _normalizeBloodGroup(s.stubloodgrp);
       _selectedClass = s.stuclass.trim();
       _selectedConId = s.conId?.toString();
       _selectedAdmName = s.admname;
       _selectedQuoName = s.quoname;
+      _selectedHostel = (s.hostel == 'Y' || s.hostel == 'N') ? s.hostel : null;
       _admDate = s.stuadmdate;
       _dob = s.studob;
       _photoUrl = s.stuphoto;
-      _isFormEnabled = false; // view mode - buttons disabled
+      _isFormEnabled = false; // view mode until Edit is pressed
     });
   }
 
@@ -477,6 +532,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _payNameController.clear();
     _payMobileController.clear();
     _batchController.clear();
+    _admittedYearController.clear();
+    _aadharController.clear();
+    _mediumController.clear();
+    _communityController.clear();
+    _casteController.clear();
+    _religionController.clear();
+    _nationalityController.clear();
+    _transportController.clear();
+    _parentEmailController.clear();
     setState(() {
       _selectedGender = null;
       _selectedBloodGroup = null;
@@ -484,6 +548,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _selectedConId = null;
       _selectedAdmName = null;
       _selectedQuoName = null;
+      _selectedHostel = null;
       _admDate = null;
       _dob = null;
       _photoUrl = null;
@@ -543,6 +608,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'admname': _selectedAdmName,
         'quoname': _selectedQuoName,
         'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
+        'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
+        'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
+        'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
+        'community': _communityController.text.trim().isNotEmpty ? _communityController.text.trim() : null,
+        'caste': _casteController.text.trim().isNotEmpty ? _casteController.text.trim() : null,
+        'religion': _religionController.text.trim().isNotEmpty ? _religionController.text.trim() : null,
+        'nationality': _nationalityController.text.trim().isNotEmpty ? _nationalityController.text.trim() : null,
+        'transportmode': _transportController.text.trim().isNotEmpty ? _transportController.text.trim() : null,
+        'hostel': _selectedHostel,
         'stuphoto': _photoUrl,
         'stuser_id': _admNoController.text.trim(),
         'stuotpstatus': 0,
@@ -570,6 +644,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'yr_id': yrId,
         'yrlabel': yrLabel,
         'partype': 'P',
+        'paremail': _parentEmailController.text.trim().isNotEmpty ? _parentEmailController.text.trim() : null,
         'fathername': _fatherNameController.text.trim().isNotEmpty ? _fatherNameController.text.trim() : null,
         'fathermobile': fatherMob,
         'fatheroccupation': _fatherOccController.text.trim().isNotEmpty ? _fatherOccController.text.trim() : null,
@@ -615,6 +690,113 @@ class _StudentsScreenState extends State<StudentsScreen> {
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  /// Save edits to the currently-selected student (student + parent +
+  /// parentdetail), then return to view mode.
+  Future<void> _updateStudent() async {
+    final s = _selectedStudent;
+    if (s == null) return;
+    // Mobile is not required on edit — many existing students have none.
+    if (_admNoController.text.trim().isEmpty ||
+        _nameController.text.trim().isEmpty ||
+        _selectedClass == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all required fields (Roll No, Name, Class)'), backgroundColor: AppColors.error),
+      );
+      return;
+    }
+    setState(() => _isSaving = true);
+    try {
+      await SupabaseService.updateStudent(s.stuId, {
+        'stuadmno': _admNoController.text.trim(),
+        'stuadmdate': (_admDate ?? DateTime.now()).toIso8601String().split('T').first,
+        'stuname': _nameController.text.trim(),
+        'stugender': _selectedGender == 'Female' ? 'F' : _selectedGender == 'Male' ? 'M' : 'O',
+        'studob': _dob?.toIso8601String().split('T').first,
+        'stumobile': _mobileController.text.trim(),
+        'stuemail': _emailController.text.trim().isNotEmpty ? _emailController.text.trim() : null,
+        'stuaddress': _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
+        'stucity': _cityController.text.trim().isNotEmpty ? _cityController.text.trim() : null,
+        'stustate': _stateController.text.trim().isNotEmpty ? _stateController.text.trim() : null,
+        'stucountry': _countryController.text.trim().isNotEmpty ? _countryController.text.trim() : null,
+        'stupin': _pinController.text.trim().isNotEmpty ? _pinController.text.trim() : null,
+        'stubloodgrp': _selectedBloodGroup,
+        'stuclass': _selectedClass,
+        'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
+        'stucondesc': _selectedConId != null ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId, orElse: () => {})['condesc'] : null,
+        'admname': _selectedAdmName,
+        'quoname': _selectedQuoName,
+        'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
+        'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
+        'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
+        'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
+        'community': _communityController.text.trim().isNotEmpty ? _communityController.text.trim() : null,
+        'caste': _casteController.text.trim().isNotEmpty ? _casteController.text.trim() : null,
+        'religion': _religionController.text.trim().isNotEmpty ? _religionController.text.trim() : null,
+        'nationality': _nationalityController.text.trim().isNotEmpty ? _nationalityController.text.trim() : null,
+        'transportmode': _transportController.text.trim().isNotEmpty ? _transportController.text.trim() : null,
+        'hostel': _selectedHostel,
+        'stuphoto': _photoUrl,
+      });
+
+      // Update the linked parent, if any.
+      if (_selectedParId != null) {
+        String? t(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
+        try {
+          await SupabaseService.updateParent(_selectedParId!, {
+            'paremail': t(_parentEmailController),
+            'fathername': t(_fatherNameController),
+            'fathermobile': t(_fatherMobileController),
+            'fatheroccupation': t(_fatherOccController),
+            'mothername': t(_motherNameController),
+            'mothermobile': t(_motherMobileController),
+            'motheroccupation': t(_motherOccController),
+            'guardianname': t(_guardianNameController),
+            'guardianmobile': t(_guardianMobileController),
+            'guardianoccupation': t(_guardianOccController),
+            'payincharge': t(_payNameController),
+            'payinchargemob': t(_payMobileController),
+          });
+        } catch (_) {}
+      }
+
+      // Keep the denormalized parentdetail fields in sync.
+      try {
+        await SupabaseService.updateParentDetail(s.stuId, {
+          'stuadmno': _admNoController.text.trim(),
+          'stuname': _nameController.text.trim(),
+          'stuclass': _selectedClass,
+        });
+      } catch (_) {}
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Student updated successfully'), backgroundColor: AppColors.success),
+        );
+        setState(() => _isFormEnabled = false); // back to view mode
+        _loadDropdowns();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating student. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  /// Cancel the current form: discard a new entry, or exit edit mode and
+  /// reload the selected student's saved values.
+  void _cancelForm() {
+    final s = _selectedStudent;
+    if (s == null) {
+      _clearForm();
+    } else {
+      _populateStudentForm(s); // re-loads saved values and returns to view mode
     }
   }
 
@@ -776,10 +958,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           fileOptions: FileOptions(contentType: mimeType, upsert: true),
         );
         final url = SupabaseService.client.storage.from(bucket).getPublicUrl(path);
-        await SupabaseService.fromSchema('students')
-            .update({'stuphoto': url})
-            .eq('stu_id', stuId)
-            .eq('ins_id', insId);
+        await SupabaseService.updateStudent(stuId, {'stuphoto': url});
         successes.add(fileName);
       } catch (e) {
         failed.add('$fileName: ${friendlyError(e)}');
@@ -791,7 +970,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (mounted) {
       setState(() => _isImportingPhotos = false);
       // Refresh the students list so new stuphoto URLs show in cards.
-      final refreshed = await SupabaseService.getStudents(insId);
+      final refreshed = await SupabaseService.getStudents(insId, forceRefresh: true);
       if (mounted) setState(() => _students = refreshed);
       if (!mounted) return;
       await showDialog<void>(
@@ -1680,6 +1859,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                                 SizedBox(width: 8.w),
                                                 Text('Student Information',
                                                     style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                                const Spacer(),
+                                                if (_selectedStudent != null && !_isFormEnabled)
+                                                  OutlinedButton.icon(
+                                                    onPressed: () => setState(() => _isFormEnabled = true),
+                                                    icon: AppIcon('edit-2', size: 16, color: AppColors.primary),
+                                                    label: const Text('Edit'),
+                                                    style: OutlinedButton.styleFrom(
+                                                      foregroundColor: AppColors.primary,
+                                                      side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+                                                    ),
+                                                  ),
                                               ]),
                                               SizedBox(height: 6.h),
                                               Row(children: [
@@ -1738,13 +1928,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               _panel(title: 'Parent / Guardian Information', icon: 'people', child: _buildParentFields()),
                               SizedBox(height: 16.h),
                               _panel(title: 'Payment In Charge', icon: 'indianrupeesign.circle.fill', child: _buildPaymentFields()),
-                              if (_selectedStudent == null) ...[
+                              if (_selectedStudent == null || _isFormEnabled) ...[
                                 SizedBox(height: 16.h),
                                 Row(
                                   children: [
                                     Expanded(
                                       child: TextButton.icon(
-                                        onPressed: _isSaving ? null : _clearForm,
+                                        onPressed: _isSaving ? null : _cancelForm,
                                         icon: AppIcon('close-circle', size: 16),
                                         label: Text('Cancel', style: TextStyle(fontWeight: FontWeight.w500)),
                                         style: TextButton.styleFrom(
@@ -1756,11 +1946,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                     SizedBox(width: 12.w),
                                     Expanded(
                                       child: ElevatedButton.icon(
-                                        onPressed: _isSaving ? null : _saveNewStudent,
+                                        onPressed: _isSaving ? null : (_selectedStudent == null ? _saveNewStudent : _updateStudent),
                                         icon: _isSaving
                                             ? SizedBox(width: 18.w, height: 18.h, child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                                             : AppIcon('save-2', size: 18),
-                                        label: Text(_isSaving ? 'Saving...' : 'Save', style: const TextStyle(fontWeight: FontWeight.w600)),
+                                        label: Text(_isSaving ? 'Saving...' : (_selectedStudent == null ? 'Save' : 'Update'), style: const TextStyle(fontWeight: FontWeight.w600)),
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppColors.accent,
                                           foregroundColor: Colors.white,
@@ -2073,6 +2263,52 @@ class _StudentsScreenState extends State<StudentsScreen> {
             validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
           )),
         ),
+        SizedBox(height: 14.h),
+
+        _row4(
+          _fieldFull(label: 'Aadhar No', child: TextFormField(
+            controller: _aadharController,
+            decoration: _dec('Enter Aadhar', filled: _aadharController.text.trim().isNotEmpty),
+            style: _inputStyle.copyWith(color: _aadharController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            onChanged: (_) => setState(() {}),
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          )),
+          _fieldFull(label: 'Community', child: TextFormField(controller: _communityController, decoration: _dec('Enter community', filled: _communityController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _communityController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          _fieldFull(label: 'Caste', child: TextFormField(controller: _casteController, decoration: _dec('Enter caste', filled: _casteController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _casteController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          _fieldFull(label: 'Religion', child: TextFormField(controller: _religionController, decoration: _dec('Enter religion', filled: _religionController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _religionController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+        ),
+        SizedBox(height: 14.h),
+
+        _row4(
+          _fieldFull(label: 'Nationality', child: TextFormField(controller: _nationalityController, decoration: _dec('Enter nationality', filled: _nationalityController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _nationalityController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          _fieldFull(label: 'Transport Mode', child: TextFormField(controller: _transportController, decoration: _dec('e.g. Bus / Own', filled: _transportController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _transportController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          _fieldFull(label: 'Hostel', child: DropdownButtonFormField<String>(
+            initialValue: _selectedHostel,
+            isExpanded: true,
+            dropdownColor: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            elevation: 6,
+            decoration: _dec('Select', filled: _selectedHostel != null),
+            icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+            style: _inputStyle,
+            items: const [
+              DropdownMenuItem(value: 'Y', child: Text('Yes')),
+              DropdownMenuItem(value: 'N', child: Text('No')),
+            ],
+            selectedItemBuilder: (context) => ['Yes', 'No'].map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+            onChanged: (v) => setState(() => _selectedHostel = v),
+          )),
+          _fieldFull(label: 'Admitted Year', child: TextFormField(controller: _admittedYearController, decoration: _dec('e.g. 2025-2026', filled: _admittedYearController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _admittedYearController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+        ),
+        SizedBox(height: 14.h),
+
+        _row4(
+          _fieldFull(label: 'Medium', child: TextFormField(controller: _mediumController, decoration: _dec('e.g. English / Tamil', filled: _mediumController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _mediumController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          const SizedBox(),
+          const SizedBox(),
+          const SizedBox(),
+        ),
       ],
     ),
     );
@@ -2134,6 +2370,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
             )),
           ),
         ),
+        SizedBox(height: 14.h),
+        // Parent email is a single parents-level field (shared across tabs).
+        IgnorePointer(
+          ignoring: !_isFormEnabled,
+          child: _row3(
+            _fieldFull(label: 'Parent Email', child: TextFormField(
+              controller: _parentEmailController,
+              decoration: _dec('Enter parent email', filled: _parentEmailController.text.trim().isNotEmpty),
+              style: _inputStyle.copyWith(color: _parentEmailController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              onChanged: (_) => setState(() {}),
+              keyboardType: TextInputType.emailAddress,
+            )),
+            const SizedBox.shrink(),
+            const SizedBox.shrink(),
+          ),
+        ),
       ],
     ),
     );
@@ -2185,6 +2437,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'stucountry': 'Country',
     'stupin': 'PIN',
     'stubloodgrp': 'Blood Group',
+    'aadharno': 'Aadhar No',
+    'community': 'Community',
+    'caste': 'Caste',
+    'religion': 'Religion',
+    'nationality': 'Nationality',
+    'transportmode': 'Transport Mode',
+    'hostel': 'Hostel (Y/N)',
     'stuadmdate': 'Admission Date',
     'admittyear': 'Admitted Year',
     'fathername': 'Father Name',
@@ -2196,20 +2455,32 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'guardianname': 'Guardian Name',
     'guardianmobile': 'Guardian Mobile',
     'guardianoccupation': 'Guardian Occupation',
+    'paremail': 'Parent Email',
     'payincharge': 'Payment In Charge',
     'payinchargemob': 'Payment Mobile',
     'admname': 'Admission Type',
     'quoname': 'Quota',
     'batch': 'Batch',
+    'medium': 'Medium',
+    // ID columns — resolved to canonical names on staging (id wins over name).
+    'course_id': 'Course Id',
+    'class_id': 'Class Id',
+    'admission_type_id': 'Admission Type Id',
+    'concession_id': 'Concession Id',
+    'quota_id': 'Quota Id',
+    'admitted_course_id': 'Admitted Course Id',
   };
 
   /// Auto-map header text to field key (case-insensitive)
   static String _autoMapHeader(String header) {
     // Strip the trailing "*" used to flag mandatory columns in our templates
     // ("Roll No *" â†’ "roll no") so re-uploaded templates still auto-map.
-    final h = header.replaceAll('*', '').trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+    // Normalise: drop the "*" mandatory flag, turn dots into spaces ("REG.NO"
+    // -> "reg no"), lowercase, and collapse runs of whitespace.
+    final h = header.replaceAll('*', '').replaceAll('.', ' ').toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
     const map = {
       'adm no': 'stuadmno', 'admission number': 'stuadmno', 'admno': 'stuadmno', 'admission no': 'stuadmno', 'roll no': 'stuadmno', 'rollno': 'stuadmno', 'roll number': 'stuadmno',
+      'reg no': 'stuadmno', 'regno': 'stuadmno', 'reg number': 'stuadmno', 'register no': 'stuadmno', 'register number': 'stuadmno', 'registration no': 'stuadmno', 'registration number': 'stuadmno',
       'name': 'stuname', 'student name': 'stuname', 'stuname': 'stuname',
       'gender': 'stugender', 'sex': 'stugender',
       'dob': 'studob', 'date of birth': 'studob', 'birth date': 'studob',
@@ -2223,6 +2494,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'country': 'stucountry',
       'pin': 'stupin', 'pincode': 'stupin', 'pin code': 'stupin', 'zip': 'stupin', 'zip code': 'stupin',
       'blood group': 'stubloodgrp', 'bloodgroup': 'stubloodgrp',
+      'aadhar no': 'aadharno', 'aadhaar no': 'aadharno', 'aadhar': 'aadharno', 'aadhaar': 'aadharno', 'aadharno': 'aadharno', 'aadhar number': 'aadharno', 'aadhaar number': 'aadharno',
+      'community': 'community',
+      'caste': 'caste',
+      'religion': 'religion',
+      'nationality': 'nationality',
+      'transport mode': 'transportmode', 'transportmode': 'transportmode', 'transport': 'transportmode',
+      'hostel': 'hostel', 'hostel (y/n)': 'hostel', 'hosteller': 'hostel',
       'admission date': 'stuadmdate', 'adm date': 'stuadmdate',
       'admitted year': 'admittyear', 'admittedyear': 'admittyear', 'admittyear': 'admittyear', 'adm year': 'admittyear', 'admndate': 'admittyear',
       'father name': 'fathername', 'fathername': 'fathername',
@@ -2240,6 +2518,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'admission type': 'admname', 'admtype': 'admname', 'admname': 'admname',
       'quota': 'quoname', 'quota name': 'quoname', 'quoname': 'quoname',
       'batch': 'batch', 'batch no': 'batch', 'batch number': 'batch',
+      'medium': 'medium', 'stumedium': 'medium',
+      // ID columns (whitespace already collapsed by the normaliser).
+      'course id': 'course_id', 'courseid': 'course_id', 'cour id': 'course_id',
+      'class id': 'class_id', 'classid': 'class_id', 'cla id': 'class_id',
+      'admission type id': 'admission_type_id', 'admtype id': 'admission_type_id', 'adm type id': 'admission_type_id',
+      'concession id': 'concession_id', 'concession category id': 'concession_id', 'con id': 'concession_id',
+      'quota id': 'quota_id', 'quo id': 'quota_id',
+      'admitted course id': 'admitted_course_id',
     };
     return map[h] ?? '';
   }
@@ -2480,18 +2766,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final sheet = excel['Students'];
     excel.delete('Sheet1');
 
-    // Asterisk marks the columns the importer requires
-    // (_importRequiredFields = stuadmno, stuname, stugender, stuclass,
-    // payincharge, payinchargemob).
-    final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Course', 'Class *', 'Mobile', 'Email', 'Concession',
-      'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
-      'Father Name', 'Father Mobile', 'Father Occupation',
-      'Mother Name', 'Mother Mobile', 'Mother Occupation',
-      'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
-      'Payment In Charge *', 'Payment Mobile *',
-      'Admission Type', 'Quota', 'Batch', 'Admitted Year',
-    ];
+    // Headers follow the import grid exactly (same order + labels + the new
+    // Medium / ID columns), so the template always matches what the grid shows.
+    final headers = _importGridKeys.map((k) => _importGridLabels[k] ?? k).toList();
 
     final headerStyle = xl.CellStyle(
       backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
@@ -2539,21 +2816,36 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final sheet = excel['Students'];
     excel.delete('Sheet1');
 
-    final headers = [
-      'Roll No *', 'Name *', 'Gender *', 'DOB', 'Admission Date', 'Course', 'Class *', 'Mobile', 'Email', 'Concession',
-      'Address', 'City', 'State', 'Country', 'PIN', 'Blood Group',
-      'Father Name', 'Father Mobile', 'Father Occupation',
-      'Mother Name', 'Mother Mobile', 'Mother Occupation',
-      'Guardian Name', 'Guardian Mobile', 'Guardian Occupation',
-      'Payment In Charge *', 'Payment Mobile *',
-      'Admission Type', 'Quota', 'Batch', 'Admitted Year',
+    // Headers + row values keyed to the import grid, so the sample always
+    // matches the grid's order + new columns (Medium / IDs left blank).
+    final headers = _importGridKeys.map((k) => _importGridLabels[k] ?? k).toList();
+    final sampleMaps = <Map<String, String>>[
+      {
+        'stuadmno': 'CS001', 'stuname': 'RAHUL KUMAR', 'stugender': 'Male', 'studob': '2004-06-15',
+        'stuadmdate': '2025-06-01', 'courname': 'BSC-CS', 'stuclass': 'I Year', 'stumobile': '9876543210',
+        'stuemail': 'rahul@email.com', 'concession': 'GENERAL', 'stuaddress': 'No.5 Main Street',
+        'stucity': 'Chennai', 'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600001',
+        'stubloodgrp': 'B+', 'aadharno': '234567890123', 'community': 'OC', 'caste': 'Iyer',
+        'religion': 'Hindu', 'nationality': 'Indian', 'transportmode': 'Y', 'hostel': 'N',
+        'fathername': 'KUMAR S', 'fathermobile': '9876543210', 'fatheroccupation': 'Business',
+        'mothername': 'LAKSHMI K', 'mothermobile': '9876543211', 'motheroccupation': 'Teacher',
+        'paremail': 'kumar@email.com', 'payincharge': 'KUMAR S', 'payinchargemob': '9876543210',
+        'admname': 'GEN', 'quoname': 'GQ', 'batch': '2025-2026', 'admittyear': '2025-2026', 'medium': 'English',
+      },
+      {
+        'stuadmno': 'CS002', 'stuname': 'PRIYA S', 'stugender': 'Female', 'studob': '2004-03-22',
+        'stuadmdate': '2025-06-01', 'courname': 'BSC-CS', 'stuclass': 'I Year', 'stumobile': '9876543220',
+        'concession': 'GENERAL', 'stuaddress': 'No.10 Anna Nagar', 'stucity': 'Chennai',
+        'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600040', 'stubloodgrp': 'O+',
+        'aadharno': '345678901234', 'community': 'BC', 'caste': 'Naidu', 'religion': 'Hindu',
+        'nationality': 'Indian', 'transportmode': 'N', 'hostel': 'Y', 'fathername': 'SENTHIL S',
+        'fathermobile': '9876543220', 'fatheroccupation': 'Engineer', 'mothername': 'MEENA S',
+        'mothermobile': '9876543221', 'motheroccupation': 'Homemaker', 'paremail': 'senthil@email.com',
+        'payincharge': 'SENTHIL S', 'payinchargemob': '9876543220', 'admname': 'GEN', 'quoname': 'GQ',
+        'batch': '2025-2026', 'admittyear': '2025-2026', 'medium': 'Tamil',
+      },
     ];
-    final sampleRows = [
-      ['CS001', 'RAHUL KUMAR', 'Male', '2004-06-15', '2025-06-01', 'BSC-CS', 'I Year', '9876543210', 'rahul@email.com', 'GENERAL', 'No.5 Main Street', 'Chennai', 'Tamil Nadu', 'India', '600001', 'B+', 'KUMAR S', '9876543210', 'Business', 'LAKSHMI K', '9876543211', 'Teacher', '', '', '', 'KUMAR S', '9876543210', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['CS002', 'PRIYA S', 'Female', '2004-03-22', '2025-06-01', 'BSC-CS', 'I Year', '9876543220', '', 'GENERAL', 'No.10 Anna Nagar', 'Chennai', 'Tamil Nadu', 'India', '600040', 'O+', 'SENTHIL S', '9876543220', 'Engineer', 'MEENA S', '9876543221', 'Homemaker', '', '', '', 'SENTHIL S', '9876543220', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['BBA001', 'ARUN M', 'Male', '2003-11-08', '2025-06-01', 'BBA', 'II Year', '9876543230', 'arun@email.com', 'GENERAL', 'No.15 Park Road', 'Madurai', 'Tamil Nadu', 'India', '625001', 'A+', 'MURUGAN A', '9876543230', 'Doctor', 'SELVI M', '9876543231', 'Nurse', '', '', '', 'MURUGAN A', '9876543230', 'GEN', 'GQ', '2025-2026', '25-26'],
-      ['MCA001', 'DIVYA R', 'Female', '2002-08-30', '2025-06-01', 'MCA', 'I Year', '9876543240', '', 'GENERAL', 'No.20 Lake View', 'Coimbatore', 'Tamil Nadu', 'India', '641001', 'AB+', 'RAJAN D', '9876543240', 'Farmer', 'KALA R', '9876543241', 'Homemaker', '', '', '', 'RAJAN D', '9876543240', 'GEN', 'GQ', '2025-2026', '25-26'],
-    ];
+    final sampleRows = sampleMaps.map((m) => _importGridKeys.map((k) => m[k] ?? '').toList()).toList();
 
     final headerStyle = xl.CellStyle(
       backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
@@ -2619,9 +2911,38 @@ class _StudentsScreenState extends State<StudentsScreen> {
     return trimmed.isEmpty ? null : trimmed;
   }
 
+  // Hostel is char(1) on students - normalize free text to 'Y'/'N' (null when
+  // blank, since the column is nullable).
+  static String? _normalizeYesNo(String? v) {
+    final t = _nullIfEmpty(v)?.toUpperCase();
+    if (t == null) return null;
+    if (t == 'Y' || t == 'YES' || t == 'TRUE' || t == '1') return 'Y';
+    if (t == 'N' || t == 'NO' || t == 'FALSE' || t == '0') return 'N';
+    return null;
+  }
+
   static String? _truncate(String? v, int maxLen) {
     if (v == null) return null;
     return v.length <= maxLen ? v : v.substring(0, maxLen);
+  }
+
+  /// Transport Mode: the export encodes N = own transport, Y = institution
+  /// transport. Existing free-text values (Bus, Own, …) pass through unchanged.
+  static String? _normalizeTransportMode(String? v) {
+    final raw = _nullIfEmpty(v);
+    if (raw == null) return null;
+    switch (raw.toUpperCase()) {
+      case 'N':
+      case 'NO':
+      case 'OWN':
+        return 'OWN';
+      case 'Y':
+      case 'YES':
+      case 'INSTITUTION':
+      case 'INSTITUTIONAL':
+        return 'INSTITUTION';
+    }
+    return _truncate(raw, 20);
   }
 
   /// Validates email format; returns null if invalid
@@ -2631,6 +2952,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // Basic email check - must contain @ and .
     final regex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
     return regex.hasMatch(e) ? e : null;
+  }
+
+  /// Payment-in-charge auto-fill for import: pick the first parent
+  /// (father -> mother -> guardian) that has BOTH a name and a mobile, and
+  /// return [name, mobile]. Returns [null, null] when no parent qualifies.
+  List<String?> _deriveImportPayer(List<dynamic> row) {
+    String? cell(String k) => _nullIfEmpty(_importCellByKey(row, k));
+    final fn = cell('fathername'), fm = cell('fathermobile');
+    if (fn != null && fm != null) return [fn, fm];
+    final mn = cell('mothername'), mm = cell('mothermobile');
+    if (mn != null && mm != null) return [mn, mm];
+    final gn = cell('guardianname'), gm = cell('guardianmobile');
+    if (gn != null && gm != null) return [gn, gm];
+    return [null, null];
   }
 
   /// Per-field validation. Returns a map of fieldKey â†’ reason for every cell
@@ -2643,6 +2978,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
       if (colIdx < 0 || colIdx >= row.length || row[colIdx].toString().trim().isEmpty) {
         errors[reqKey] = 'Required';
       }
+    }
+    // Pay In Charge / Mobile: satisfied either by an explicit value or by a
+    // parent that has BOTH a name and a mobile (auto-filled at import time).
+    final payer = _deriveImportPayer(row);
+    final payName = _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? payer[0];
+    final payMob = _nullIfEmpty(_importCellByKey(row, 'payinchargemob')) ?? payer[1];
+    if (payName == null) errors['payincharge'] = 'Pay In Charge: give a value or a parent with name & mobile';
+    if (payMob == null) errors['payinchargemob'] = 'Pay Mobile: give a value or a parent with name & mobile';
+    // DOB is NOT NULL on students - a non-empty but unparseable value would
+    // insert null and fail server-side, so flag the bad format here.
+    final dobRaw = (_importCellByKey(row, 'studob') ?? '').trim();
+    if (dobRaw.isNotEmpty && _parseDate(dobRaw) == null) {
+      errors['studob'] = 'Invalid date (use YYYY-MM-DD)';
     }
     // Class + course must exist in the master and (if both supplied) agree
     // with the class-course mapping. Skip if masters haven't loaded yet -
@@ -2743,26 +3091,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId ?? 1;
 
-    // Check master data exists before allowing import
-    final masterData = await SupabaseService.checkMasterData(insId);
-    if (!masterData.hasFeeGroups || !masterData.hasFeeTypes || !masterData.hasConcessions || !masterData.hasClassFeeDemand) {
-      if (mounted) {
-        final missing = <String>[];
-        if (!masterData.hasFeeGroups) missing.add('Fee Groups');
-        if (!masterData.hasFeeTypes) missing.add('Fee Types');
-        if (!masterData.hasConcessions) missing.add('Concessions');
-        if (!masterData.hasClassFeeDemand) missing.add('Class Fee Demand');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Please import master data first: ${missing.join(', ')}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-      return;
-    }
-
+    // Students can be imported independently of the fee master data (fee groups
+    // / types / concessions / class fee demand) — no pre-import gate.
     final inscode = auth.inscode ?? '';
     final yrId = int.tryParse(_selectedYrId ?? '1') ?? 1;
     final yrLabel = _selectedYrLabel ?? '';
@@ -2804,6 +3134,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
       courNameById[id] = name;
     }
 
+    // Admission type / concession / quota masters — used to resolve the import's
+    // ID columns (Admission Type Id / Concession Id / Quota Id) to canonical
+    // names. An ID (when present) wins over the corresponding name column.
+    final admMasterRaw = await SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', insId).eq('activestatus', 1);
+    final conMasterRaw = await SupabaseService.fromSchema('concessioncategory').select('con_id, condesc').eq('ins_id', insId).eq('activestatus', 1);
+    final quoMasterRaw = await SupabaseService.fromSchema('quota').select('quo_id, quoname').eq('ins_id', insId).eq('activestatus', 1);
+    final admNameById = <int, String>{ for (final r in (admMasterRaw as List)) if (r['adm_id'] != null) (r['adm_id'] as int): (r['admname'] ?? '').toString().trim() };
+    final conNameById = <int, String>{ for (final r in (conMasterRaw as List)) if (r['con_id'] != null) (r['con_id'] as int): (r['condesc'] ?? '').toString().trim() };
+    final quoNameById = <int, String>{ for (final r in (quoMasterRaw as List)) if (r['quo_id'] != null) (r['quo_id'] as int): (r['quoname'] ?? '').toString().trim() };
+    // Reverse maps (name -> id) so we can also store adm_id / quo_id when only
+    // the name is given (cla_id is resolved above; con_id is resolved server-side).
+    final admIdByName = <String, int>{ for (final r in (admMasterRaw as List)) if (r['adm_id'] != null && (r['admname']?.toString() ?? '').isNotEmpty) _normKey(r['admname'].toString()): (r['adm_id'] as int) };
+    final quoIdByName = <String, int>{ for (final r in (quoMasterRaw as List)) if (r['quo_id'] != null && (r['quoname']?.toString() ?? '').isNotEmpty) _normKey(r['quoname'].toString()): (r['quo_id'] as int) };
+
     // 1. Validate and build staging rows
     final stagingRows = <Map<String, dynamic>>[];
     for (int i = 0; i < _importRows.length; i++) {
@@ -2820,37 +3164,73 @@ class _StudentsScreenState extends State<StudentsScreen> {
       // class as either a numeric id (e.g. "53") OR the name (e.g. "B.E ECE -II").
       // Always write the canonical claname/courname from the master back into
       // stuclass / courname so downstream JOINs and dashboards work.
+      // Prefer the dedicated Class Id column; else the stuclass cell (id or name).
+      final classIdCell = int.tryParse((_importCellByKey(row, 'class_id') ?? '').trim());
       final classRaw = (_importCellByKey(row, 'stuclass') ?? '').trim();
       int? claId;
       String claNameCanon = classRaw;
-      final classAsInt = int.tryParse(classRaw);
-      if (classAsInt != null && claNameById.containsKey(classAsInt)) {
-        // Excel had a valid cla_id â†’ resolve to canonical name
-        claId = classAsInt;
+      if (classIdCell != null && claNameById.containsKey(classIdCell)) {
+        claId = classIdCell;
         claNameCanon = claNameById[claId]!;
       } else {
-        // Excel had a name (or a number that isn't in the master) â†’ name lookup
-        final byName = claIdByName[_normKey(classRaw)];
-        if (byName != null) {
-          claId = byName;
-          claNameCanon = claNameById[claId] ?? classRaw;
+        final classAsInt = int.tryParse(classRaw);
+        if (classAsInt != null && claNameById.containsKey(classAsInt)) {
+          claId = classAsInt;
+          claNameCanon = claNameById[claId]!;
+        } else {
+          final byName = claIdByName[_normKey(classRaw)];
+          if (byName != null) {
+            claId = byName;
+            claNameCanon = claNameById[claId] ?? classRaw;
+          }
         }
       }
 
+      // Prefer the Course Id column (fall back to Admitted Course Id), else name.
+      final courseIdCell = int.tryParse((_importCellByKey(row, 'course_id') ?? _importCellByKey(row, 'admitted_course_id') ?? '').trim());
       final courseRaw = (_importCellByKey(row, 'courname') ?? '').trim();
       int? courId;
       String? courNameCanon = _nullIfEmpty(courseRaw);
-      final courseAsInt = int.tryParse(courseRaw);
-      if (courseAsInt != null && courNameById.containsKey(courseAsInt)) {
-        courId = courseAsInt;
+      if (courseIdCell != null && courNameById.containsKey(courseIdCell)) {
+        courId = courseIdCell;
         courNameCanon = courNameById[courId];
       } else {
-        final byName = courIdByName[_normKey(courseRaw)];
-        if (byName != null) {
-          courId = byName;
+        final courseAsInt = int.tryParse(courseRaw);
+        if (courseAsInt != null && courNameById.containsKey(courseAsInt)) {
+          courId = courseAsInt;
           courNameCanon = courNameById[courId];
+        } else {
+          final byName = courIdByName[_normKey(courseRaw)];
+          if (byName != null) {
+            courId = byName;
+            courNameCanon = courNameById[courId];
+          }
         }
       }
+      // Admitted course (distinct from current course). Prefer the Admitted
+      // Course Id column; fall back to the Course Id column, then to the
+      // resolved current course id so it is never left null.
+      final admitCourseIdCell = int.tryParse((_importCellByKey(row, 'admitted_course_id') ?? _importCellByKey(row, 'course_id') ?? '').trim());
+      int? admitCourId;
+      if (admitCourseIdCell != null && courNameById.containsKey(admitCourseIdCell)) {
+        admitCourId = admitCourseIdCell;
+      }
+      admitCourId ??= courId;
+
+      // Admission type / quota / concession resolved by id (id wins over name).
+      final admIdCell = int.tryParse((_importCellByKey(row, 'admission_type_id') ?? '').trim());
+      final admNameResolved = (admIdCell != null && admNameById.containsKey(admIdCell)) ? admNameById[admIdCell] : _nullIfEmpty(_importCellByKey(row, 'admname'));
+      final quoIdCell = int.tryParse((_importCellByKey(row, 'quota_id') ?? '').trim());
+      final quoNameResolved = (quoIdCell != null && quoNameById.containsKey(quoIdCell)) ? quoNameById[quoIdCell] : _nullIfEmpty(_importCellByKey(row, 'quoname'));
+      final conIdCell = int.tryParse((_importCellByKey(row, 'concession_id') ?? '').trim());
+      final conNameResolved = (conIdCell != null && conNameById.containsKey(conIdCell)) ? conNameById[conIdCell] : _nullIfEmpty(_importCellByKey(row, 'concession'));
+      // Store adm_id / quo_id (id column wins; else look up from the resolved name).
+      final admId = (admIdCell != null && admNameById.containsKey(admIdCell)) ? admIdCell : (admNameResolved != null ? admIdByName[_normKey(admNameResolved)] : null);
+      final quoId = (quoIdCell != null && quoNameById.containsKey(quoIdCell)) ? quoIdCell : (quoNameResolved != null ? quoIdByName[_normKey(quoNameResolved)] : null);
+      // Auto-fill Pay In Charge from a parent (name + mobile) when left blank.
+      final payer = _deriveImportPayer(row);
+      final payName = _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? payer[0];
+      final payMob = _nullIfEmpty(_importCellByKey(row, 'payinchargemob')) ?? payer[1];
       stagingRows.add({
         'ins_id': insId,
         'inscode': inscode,
@@ -2865,15 +3245,25 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'cla_id': claId,
         'courname': courNameCanon,
         'cour_id': courId,
+        'admit_cour_id': admitCourId,
         'stumobile': _importCellByKey(row, 'stumobile'),
         'stuemail': _validEmail(_importCellByKey(row, 'stuemail')),
-        'concession': _nullIfEmpty(_importCellByKey(row, 'concession')),
+        'concession': conNameResolved,
         'stuaddress': _nullIfEmpty(_importCellByKey(row, 'stuaddress')),
         'stucity': _nullIfEmpty(_importCellByKey(row, 'stucity')),
         'stustate': _nullIfEmpty(_importCellByKey(row, 'stustate')),
         'stucountry': _nullIfEmpty(_importCellByKey(row, 'stucountry')),
-        'stupin': _nullIfEmpty(_importCellByKey(row, 'stupin')),
+        // PIN column is varchar(6). Excel often emits it as "600123.0" or with
+        // stray spaces; strip non-digits and cap at 6 so it can't overflow.
+        'stupin': _truncate(_nullIfEmpty((_importCellByKey(row, 'stupin') ?? '').replaceAll(RegExp(r'[^0-9]'), '')), 6),
         'stubloodgrp': _nullIfEmpty(_importCellByKey(row, 'stubloodgrp')),
+        'aadharno': _nullIfEmpty(_importCellByKey(row, 'aadharno')),
+        'community': _nullIfEmpty(_importCellByKey(row, 'community')),
+        'caste': _nullIfEmpty(_importCellByKey(row, 'caste')),
+        'religion': _nullIfEmpty(_importCellByKey(row, 'religion')),
+        'nationality': _nullIfEmpty(_importCellByKey(row, 'nationality')),
+        'transportmode': _normalizeTransportMode(_importCellByKey(row, 'transportmode')),
+        'hostel': _normalizeYesNo(_importCellByKey(row, 'hostel')),
         'fathername': _nullIfEmpty(_importCellByKey(row, 'fathername')),
         'fathermobile': _nullIfEmpty(_importCellByKey(row, 'fathermobile')),
         'fatheroccupation': _nullIfEmpty(_importCellByKey(row, 'fatheroccupation')),
@@ -2883,12 +3273,16 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'guardianname': _nullIfEmpty(_importCellByKey(row, 'guardianname')),
         'guardianmobile': _nullIfEmpty(_importCellByKey(row, 'guardianmobile')),
         'guardianoccupation': _nullIfEmpty(_importCellByKey(row, 'guardianoccupation')),
-        'payincharge': _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? '-',
-        'payinchargemob': _nullIfEmpty(_importCellByKey(row, 'payinchargemob')),
-        'admname': _nullIfEmpty(_importCellByKey(row, 'admname')),
-        'quoname': _nullIfEmpty(_importCellByKey(row, 'quoname')),
+        'paremail': _validEmail(_importCellByKey(row, 'paremail')),
+        'payincharge': payName ?? '-',
+        'payinchargemob': payMob,
+        'admname': admNameResolved,
+        'adm_id': admId,
+        'quoname': quoNameResolved,
+        'quo_id': quoId,
         'batch': _truncate(_nullIfEmpty(_importCellByKey(row, 'batch')), 9),
         'admittyear': _truncate(_nullIfEmpty(_importCellByKey(row, 'admittyear')), 9),
+        'medium': _truncate(_nullIfEmpty(_importCellByKey(row, 'medium')), 30),
         'status': 'PENDING',
       });
     }
@@ -2915,6 +3309,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _importedCount = 0;
       });
       final result = await SupabaseService.client.rpc('process_student_import', params: {'p_ins_id': insId});
+      SupabaseService.invalidateStudentsCache(insId); // imported rows → drop stale cache
 
       if (result is List && result.isNotEmpty) {
         final r = result.first;
@@ -2922,29 +3317,39 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _skippedCount += (r['skipped'] as num?)?.toInt() ?? 0;
       }
 
-      // 4. Fetch errors from staging table
-      final errors = await SupabaseService.fromSchema('student_import')
-          .select('imp_id, stuadmno, error_msg, status')
-          .eq('ins_id', insId)
-          .inFilter('status', ['ERROR', 'NO_PARENT']);
-      for (final e in errors) {
-        final status = e['status'];
-        final admNo = e['stuadmno'] ?? '';
-        if (status == 'NO_PARENT') {
-          _importErrors.add('Roll $admNo: Payment In Charge or Mobile is missing - student not created');
-        } else {
-          _importErrors.add('Roll $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
+      // 4. Fetch errors from staging table (best-effort — a blocked read must
+      // not turn a SUCCESSFUL import into a scary generic error).
+      try {
+        final errors = await SupabaseService.fromSchema('student_import')
+            .select('imp_id, stuadmno, error_msg, status')
+            .eq('ins_id', insId)
+            .inFilter('status', ['ERROR', 'NO_PARENT']);
+        for (final e in errors) {
+          final status = e['status'];
+          final admNo = e['stuadmno'] ?? '';
+          if (status == 'NO_PARENT') {
+            _importErrors.add('Roll $admNo: Payment In Charge or Mobile is missing - student not created');
+          } else {
+            _importErrors.add('Roll $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
+          }
         }
+      } catch (e) {
+        debugPrint('Fetch student_import errors failed: $e');
       }
 
-      // 5. Clean up processed staging rows
-      await SupabaseService.fromSchema('student_import')
-          .delete()
-          .eq('ins_id', insId)
-          .inFilter('status', ['DONE', 'ERROR', 'NO_PARENT']);
-
+      // 5. Clean up processed staging rows via a SECURITY DEFINER RPC — the
+      // direct client DELETE is revoked under the write lockdown, so it runs
+      // server-side. Best-effort: silently no-ops if the RPC isn't deployed yet.
+      try {
+        await SupabaseService.client.rpc('cleanup_student_import', params: {'p_ins_id': insId});
+      } catch (e) {
+        debugPrint('cleanup_student_import failed: $e');
+      }
     } catch (e) {
-      _importErrors.add(friendlyError(e));
+      // Only a genuinely fatal error (e.g. process_student_import itself failed)
+      // reaches here; those leave _importedCount at 0. Show the raw cause so it
+      // isn't masked by the generic "Something went wrong".
+      _importErrors.add('Import error: $e');
     }
 
     setState(() => _importStep = 3);
@@ -3329,17 +3734,32 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'stucountry': return 110;        // COUNTRY
       case 'stupin': return 110;            // PIN CODE
       case 'stubloodgrp': return 130;       // BLOOD GROUP
+      case 'aadharno': return 140;          // AADHAR NO
+      case 'community': return 130;         // COMMUNITY
+      case 'caste': return 110;             // CASTE
+      case 'religion': return 120;          // RELIGION
+      case 'nationality': return 130;       // NATIONALITY
+      case 'transportmode': return 150;     // TRANSPORT MODE
+      case 'hostel': return 120;            // HOSTEL (Y/N)
       case 'fathername': case 'mothername': return 150;
       case 'guardianname': return 160;      // GUARDIAN NAME
       case 'fathermobile': case 'mothermobile': return 150;
       case 'guardianmobile': return 170;    // GUARDIAN MOBILE
       case 'fatheroccupation': case 'motheroccupation': case 'guardianoccupation': return 150;
+      case 'paremail': return 170;          // PARENT EMAIL
       case 'payincharge': return 160;       // PAY IN CHARGE *
       case 'payinchargemob': return 140;    // PAY MOBILE *
       case 'admname': return 160;           // ADMISSION TYPE
       case 'quoname': return 110;           // QUOTA
       case 'batch': return 110;             // BATCH
       case 'admittyear': return 140;        // ADMITTED YEAR
+      case 'medium': return 120;            // MEDIUM
+      case 'admitted_course_id': return 150;
+      case 'course_id': return 120;
+      case 'class_id': return 110;
+      case 'admission_type_id': return 160;
+      case 'concession_id': return 140;
+      case 'quota_id': return 110;
       default: return 120;
     }
   }

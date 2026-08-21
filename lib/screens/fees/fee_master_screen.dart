@@ -30,10 +30,10 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
   late final TabController _tabController;
 
   static const _tabLabels = [
-    'Fee Group', 'Fee Type', 'Term', 'Class Fee Demand', 'Payment Sequence', 'Fine Rules',
+    'Fee Group', 'Fee Type', 'Semester', 'Class Fee Demand', 'Payment Sequence', 'Demand No', 'Fine Rules',
   ];
   static const _tabIcons = [
-    'receipt-discount', 'tag', 'calendar-1', 'category', 'sort', 'warning-2',
+    'receipt-discount', 'tag', 'calendar-1', 'category', 'sort', 'hashtag', 'warning-2',
   ];
 
   @override
@@ -89,6 +89,7 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
               _SemesterPanel(),
               _ClassFeeDemandPanel(),
               PaymentSequenceTab(),
+              _DemandSequencePanel(),
               FineRulesTab(),
             ],
           ),
@@ -396,11 +397,11 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.fromSchema('feegroup').update({'fgdesc': name}).eq('fg_id', _editId!);
+        await SupabaseService.saveSchemaRow('feegroup', {'fgdesc': name}, pkCol: 'fg_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Fee group updated.', AppColors.success);
       } else {
         final yr = await _currentYear(_insId);
-        await SupabaseService.fromSchema('feegroup').insert({
+        await SupabaseService.saveSchemaRow('feegroup', {
           'fg_id': await _nextId('feegroup', 'fg_id'),
           'fgdesc': name,
           'ins_id': _insId,
@@ -423,7 +424,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'fee group')) return;
     try {
-      await SupabaseService.fromSchema('feegroup').update({'activestatus': 0}).eq('fg_id', id);
+      await SupabaseService.deleteSchemaRow('feegroup', 'fg_id', id);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
@@ -532,6 +533,7 @@ class _FeeTypePanel extends StatefulWidget {
 class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveClientMixin {
   final _name = TextEditingController();
   final _short = TextEditingController();
+  final _type = TextEditingController();
   String? _fgId;
   String? _fine;
   List<Map<String, dynamic>> _feeGroups = [];
@@ -553,6 +555,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   void dispose() {
     _name.dispose();
     _short.dispose();
+    _type.dispose();
     super.dispose();
   }
 
@@ -561,6 +564,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _editId = r['fee_id'] is int ? r['fee_id'] as int : int.tryParse(r['fee_id'].toString());
       _name.text = r['feedesc']?.toString() ?? '';
       _short.text = r['feeshort']?.toString() ?? '';
+      _type.text = r['type']?.toString() ?? '';
       _fgId = r['fg_id']?.toString();
       _fine = '${r['feefineapplicable'] ?? 0}' == '1' ? 'Yes' : 'No';
     });
@@ -571,6 +575,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _editId = null;
       _name.clear();
       _short.clear();
+      _type.clear();
       _fine = null;
     });
   }
@@ -607,21 +612,23 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.fromSchema('feetype').update({
+        await SupabaseService.saveSchemaRow('feetype', {
           'feedesc': name,
           'feeshort': _short.text.trim(),
           'fg_id': int.tryParse(_fgId!),
           'feefineapplicable': _fine == 'Yes' ? 1 : 0,
-        }).eq('fee_id', _editId!);
+          'type': _type.text.trim().isEmpty ? null : _type.text.trim(),
+        }, pkCol: 'fee_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Fee type updated.', AppColors.success);
       } else {
         final yr = await _currentYear(_insId);
-        await SupabaseService.fromSchema('feetype').insert({
+        await SupabaseService.saveSchemaRow('feetype', {
           'fee_id': await _nextId('feetype', 'fee_id'),
           'feedesc': name,
           'feeshort': _short.text.trim(),
           'fg_id': int.tryParse(_fgId!),
           'feefineapplicable': _fine == 'Yes' ? 1 : 0,
+          'type': _type.text.trim().isEmpty ? null : _type.text.trim(),
           'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
           'yrlabel': yr?['yrlabel']?.toString() ?? '',
           'ins_id': _insId,
@@ -631,6 +638,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       }
       _name.clear();
       _short.clear();
+      _type.clear();
       _editId = null;
       await _load();
     } catch (e) {
@@ -643,7 +651,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'fee type')) return;
     try {
-      await SupabaseService.fromSchema('feetype').update({'activestatus': 0}).eq('fee_id', id);
+      await SupabaseService.deleteSchemaRow('feetype', 'fee_id', id);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
@@ -711,6 +719,10 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                   ],
                   onChanged: (v) => setState(() => _fine = v),
                 ),
+                SizedBox(height: 16.h),
+                _lbl('Type'),
+                SizedBox(height: 6.h),
+                TextField(controller: _type, style: _fieldTextStyle(context).copyWith(color: _type.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter type (e.g. COL)', filled: _type.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 SizedBox(height: 18.h),
                 Row(children: [
                   Expanded(
@@ -796,6 +808,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   final _name = TextEditingController();
   final _short = TextEditingController();
   String? _type; // S = Semester, M = Monthly, Y = Yearly (null = not chosen)
+  DateTime? _startDate;
+  DateTime? _endDate;
   List<Map<String, dynamic>> _rows = [];
   int? _editId; // non-null while editing an existing row
   bool _loading = true, _saving = false;
@@ -825,10 +839,19 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
     setState(() => _loading = true);
     try {
       final res = await SupabaseService.fromSchema('semester')
-          .select('*').eq('ins_id', _insId).eq('activestatus', 1).order('sem_id', ascending: true);
+          .select('*').eq('ins_id', _insId).eq('activestatus', 1);
       if (!mounted) return;
+      // Order by the master-defined ordid, falling back to sem_id (also handles
+      // schemas where the ordid column hasn't been added yet).
+      final list = List<Map<String, dynamic>>.from(res as List)
+        ..sort((a, b) {
+          int key(Map<String, dynamic> r) => r['ordid'] is num
+              ? (r['ordid'] as num).toInt()
+              : (r['sem_id'] is num ? (r['sem_id'] as num).toInt() : 1 << 30);
+          return key(a).compareTo(key(b));
+        });
       setState(() {
-        _rows = List<Map<String, dynamic>>.from(res as List);
+        _rows = list;
         _loading = false;
       });
     } catch (e) {
@@ -843,6 +866,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       _short.text = r['semshort']?.toString() ?? '';
       final t = r['semtype']?.toString().trim() ?? '';
       _type = _typeLabels.containsKey(t) ? t : 'S';
+      _startDate = DateTime.tryParse(r['semstart']?.toString() ?? '');
+      _endDate = DateTime.tryParse(r['semend']?.toString() ?? '');
     });
   }
 
@@ -852,6 +877,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       _name.clear();
       _short.clear();
       _type = null;
+      _startDate = null;
+      _endDate = null;
     });
   }
 
@@ -863,22 +890,30 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
         (r['sem_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
       return _snack(context, '"$name" already exists.', AppColors.warning);
     }
+    if (_startDate != null && _endDate != null && _endDate!.isBefore(_startDate!)) {
+      return _snack(context, 'End date must be on or after the start date.', AppColors.warning);
+    }
     setState(() => _saving = true);
     try {
       final short = _short.text.trim();
+      String? d(DateTime? v) => v?.toIso8601String().split('T').first;
       if (_editId != null) {
-        await SupabaseService.fromSchema('semester').update({
+        await SupabaseService.saveSchemaRow('semester', {
           'semname': name,
           'semshort': short.isEmpty ? null : short,
           'semtype': _type,
-        }).eq('sem_id', _editId!);
+          'semstart': d(_startDate),
+          'semend': d(_endDate),
+        }, pkCol: 'sem_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Semester updated.', AppColors.success);
       } else {
-        await SupabaseService.fromSchema('semester').insert({
+        await SupabaseService.saveSchemaRow('semester', {
           'sem_id': await _nextId('semester', 'sem_id'),
           'semname': name,
           'semshort': short.isEmpty ? null : short,
           'semtype': _type,
+          'semstart': d(_startDate),
+          'semend': d(_endDate),
           'ins_id': _insId,
           'activestatus': 1,
         });
@@ -887,6 +922,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       _name.clear();
       _short.clear();
       _type = null;
+      _startDate = null;
+      _endDate = null;
       _editId = null;
       await _load();
     } catch (e) {
@@ -899,11 +936,47 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'semester')) return;
     try {
-      await SupabaseService.fromSchema('semester').update({'activestatus': 0}).eq('sem_id', id);
+      await SupabaseService.deleteSchemaRow('semester', 'sem_id', id);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
     }
+  }
+
+  static String _fmtDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
+
+  Widget _semDateField(DateTime? value, String hint, ValueChanged<DateTime> onPick) {
+    final filled = value != null;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8.r),
+      onTap: () async {
+        final now = DateTime.now();
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: value ?? now,
+          firstDate: DateTime(now.year - 5),
+          lastDate: DateTime(now.year + 6),
+        );
+        if (picked != null) onPick(picked);
+      },
+      child: InputDecorator(
+        decoration: _filledFieldDec(context, hint, filled: filled),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              filled ? _fmtDate(value) : hint,
+              style: _fieldTextStyle(context).copyWith(
+                color: filled ? AppColors.accent : AppColors.textLight,
+                fontWeight: filled ? FontWeight.w600 : null,
+              ),
+            ),
+            Icon(Icons.calendar_today_outlined, size: 14.sp, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -945,6 +1018,14 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                   selectedItemBuilder: (context) => _typeLabels.entries.map((e) => Align(alignment: Alignment.centerLeft, child: Text(e.value, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
                   onChanged: (v) => setState(() => _type = v),
                 ),
+                SizedBox(height: 16.h),
+                _lbl('Start Date'),
+                SizedBox(height: 6.h),
+                _semDateField(_startDate, 'Select start date', (dt) => setState(() => _startDate = dt)),
+                SizedBox(height: 16.h),
+                _lbl('End Date'),
+                SizedBox(height: 6.h),
+                _semDateField(_endDate, 'Select end date', (dt) => setState(() => _endDate = dt)),
                 SizedBox(height: 18.h),
                 Row(children: [
                   Expanded(
@@ -972,12 +1053,15 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
             subtitle: 'all collection cycles in this institution',
             count: _rows.length,
             countLabel: 'terms',
+            action: _importButton(context, title: 'Semester', tabIndex: 8, disabled: _saving, onReturn: _load),
             headerCells: [
-              SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
-              Expanded(flex: 2, child: Text('SEMESTER NAME', style: _h())),
-              SizedBox(width: 90.w, child: Text('SHORT', style: _h())),
-              SizedBox(width: 100.w, child: Text('TYPE', style: _h())),
-              SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
+              Expanded(child: Text('S NO.', style: _h())),
+              Expanded(child: Text('SEMESTER NAME', style: _h())),
+              Expanded(child: Text('SHORT', style: _h())),
+              Expanded(child: Text('TYPE', style: _h())),
+              Expanded(child: Text('START DATE', style: _h())),
+              Expanded(child: Text('END DATE', style: _h())),
+              Expanded(child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -990,15 +1074,19 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                           final r = _rows[i];
                           final id = r['sem_id'] is int ? r['sem_id'] as int : int.tryParse(r['sem_id'].toString()) ?? 0;
                           final type = _typeLabels[r['semtype']?.toString().trim()] ?? 'Semester';
+                          final sd = DateTime.tryParse(r['semstart']?.toString() ?? '');
+                          final ed = DateTime.tryParse(r['semend']?.toString() ?? '');
                           return Container(
                             color: i.isEven ? Colors.white : AppColors.surface,
                             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
                             child: Row(children: [
-                              SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                              Expanded(flex: 2, child: Text(r['semname']?.toString() ?? '', style: _c())),
-                              SizedBox(width: 90.w, child: Text(r['semshort']?.toString() ?? '', style: _c())),
-                              SizedBox(width: 100.w, child: Text(type, style: _c())),
-                              SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                              Expanded(child: Text('${i + 1}', style: _c())),
+                              Expanded(child: Text(r['semname']?.toString() ?? '', style: _c())),
+                              Expanded(child: Text(r['semshort']?.toString() ?? '', style: _c())),
+                              Expanded(child: Text(type, style: _c())),
+                              Expanded(child: Text(sd != null ? _fmtDate(sd) : '-', style: _c())),
+                              Expanded(child: Text(ed != null ? _fmtDate(ed) : '-', style: _c())),
+                              Expanded(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                 InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
                                 SizedBox(width: 8.w),
                                 InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
@@ -1021,11 +1109,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
 class _FeeLine {
   String? feeType;
   final amount = TextEditingController();
-  bool applyAll = false;
-  bool fromExisting = false; // true once loaded from a saved classfeedemand row
-  // An apply-to-all fee is locked (read-only) once it has been created/saved —
-  // its demand is already generated for every student.
-  bool get locked => fromExisting && applyAll;
+  bool applyAll = false; // ALL tick → feedemand.collectible (true/false)
+  bool isCustom = false; // user-added via "Add Row" — fee type is a dropdown
   void dispose() => amount.dispose();
 }
 
@@ -1045,6 +1130,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 
   List<String> _classNames = [];
   List<String> _semesters = [];
+  // Semester name -> {start, end} dates, used to bound the Pay-On-or-Before picker.
   List<String> _feeTypeNames = [];
   List<Map<String, dynamic>> _admTypes = [];
   Map<String, String> _admName = {};
@@ -1076,17 +1162,52 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final results = await Future.wait([
-        SupabaseService.fromSchema('classfeedemand').select('*'),
-        SupabaseService.fromSchema('class').select('claname').eq('ins_id', _insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('feetype').select('feedesc').eq('activestatus', 1),
-        SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', _insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('semester').select('semname').eq('ins_id', _insId).eq('activestatus', 1),
-      ]);
+      // Retry the batch a couple of times so a dropped connection self-heals
+      // instead of leaving the panel stuck/blank on the flaky network.
+      List<dynamic> results = const [];
+      for (var attempt = 0;; attempt++) {
+        try {
+          results = await Future.wait([
+            // Page past PostgREST's 1000-row cap — an institution can have far
+            // more class-fee definitions across all classes/sems/quotas, and Edit
+            // needs every row to prefill. Ordered by cf_id for stable paging.
+            SupabaseService.fetchAll(() => SupabaseService.fromSchema('classfeedemand').select('*').eq('activestatus', 1).order('cf_id')),
+            SupabaseService.fromSchema('class').select('claname, ordid, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('feetype').select('feedesc').eq('activestatus', 1),
+            SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('semester').select('semname, semstart, semend').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('course').select('cour_id, ordid').eq('ins_id', _insId).eq('activestatus', 1),
+          ]);
+          break;
+        } catch (_) {
+          if (attempt >= 2) rethrow;
+          await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        }
+      }
       if (!mounted) return;
       setState(() {
         _rows = List<Map<String, dynamic>>.from((results[0] as List).cast<Map<String, dynamic>>());
-        _classNames = (results[1] as List).map((e) => e['claname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
+        // Order classes by course order, then class order (matches the
+        // dashboard's class-wise ordering) instead of plain alphabetical.
+        final courseOrd = <int, int>{
+          for (final c in (results[5] as List))
+            if ((c['cour_id'] as num?) != null)
+              (c['cour_id'] as num).toInt(): (c['ordid'] as num?)?.toInt() ?? 9999,
+        };
+        final seenClass = <String>{};
+        final classRows = (results[1] as List).where((e) {
+          final nm = e['claname']?.toString().trim() ?? '';
+          return nm.isNotEmpty && seenClass.add(nm);
+        }).toList()
+          ..sort((a, b) {
+            final ca = courseOrd[(a['cour_id'] as num?)?.toInt()] ?? 9999;
+            final cb = courseOrd[(b['cour_id'] as num?)?.toInt()] ?? 9999;
+            if (ca != cb) return ca.compareTo(cb);
+            final oa = (a['ordid'] as num?)?.toInt() ?? 9999;
+            final ob = (b['ordid'] as num?)?.toInt() ?? 9999;
+            return oa.compareTo(ob);
+          });
+        _classNames = classRows.map((e) => e['claname'].toString().trim()).toList();
         _feeTypeNames = (results[2] as List).map((e) => e['feedesc']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
         _admTypes = List<Map<String, dynamic>>.from((results[3] as List).cast<Map<String, dynamic>>());
         _semesters = (results[4] as List).map((e) => e['semname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
@@ -1133,8 +1254,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         final amt = r['cfamount'];
         final n = amt is num ? amt : double.tryParse(amt?.toString() ?? '');
         if (n != null) line.amount.text = _amtStr(n);
-        line.applyAll = r['collectible'] == true; // restore the ALL tick
-        line.fromExisting = true; // mark as a saved row (locks if apply-to-all)
+        line.applyAll = r['collectible'] == true; // restore the ALL tick on edit
       }
       _lines.add(line);
     }
@@ -1183,9 +1303,11 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     // (an insert-only save left the old collectible=true row behind, so the
     // ALL tick reappeared on reload).
     try {
-      var del = SupabaseService.fromSchema('classfeedemand').delete().eq('cfclass', _cls!).eq('cfterm', _sem!);
-      del = _admId != null ? del.eq('admissiontype', int.parse(_admId!)) : del.isFilter('admissiontype', null);
-      await del;
+      await SupabaseService.deleteSchemaRowsWhere('classfeedemand', {
+        'cfclass': _cls!,
+        'cfterm': _sem!,
+        'admissiontype': _admId != null ? int.tryParse(_admId!) : null,
+      });
     } catch (e) {
       if (mounted) setState(() => _saving = false);
       return _snack(context, 'Save failed clearing old rows. ${friendlyError(e)}', AppColors.error);
@@ -1193,7 +1315,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 
     for (final l in lines) {
       try {
-        await SupabaseService.fromSchema('classfeedemand').insert({
+        await SupabaseService.saveSchemaRow('classfeedemand', {
           'cf_id': await _nextId('classfeedemand', 'cf_id'),
           'cfclass': _cls,
           'cfterm': _sem,
@@ -1223,13 +1345,17 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     if (!mounted) return;
     setState(() => _saving = false);
     if (fails.isEmpty) {
-      final ticked = lines.where((l) => l.applyAll).length;
+      // When no demands were generated, make it explicit that no students
+      // matched (the most common confusion) instead of a silent "Saved".
+      final noStudents = !_editMode && demCount == 0;
       _snack(
         context,
         _editMode
             ? 'Updated $done fee line(s)${demCount > 0 ? ' • $demCount student demand(s) updated' : ''}.'
-            : 'Saved $done fee line(s)${demCount > 0 ? ' • $demCount demand(s) sent for approval ($ticked collectible)' : ''}.',
-        AppColors.success,
+            : noStudents
+                ? 'Saved $done fee line(s), but no students match this class${_admId != null ? ' + admission type' : ''} — no demands created.'
+                : 'Saved $done fee line(s) • $demCount demand(s) sent for approval.',
+        noStudents ? AppColors.warning : AppColors.success,
       );
       setState(() {
         for (final l in _lines) {
@@ -1255,22 +1381,24 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     final yr = years.isNotEmpty ? years.first : null;
     final yrId = yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0;
     final yrLabel = yr?['yrlabel']?.toString() ?? '';
-    var studentsQuery = SupabaseService.fromSchema('students')
-        .select('stu_id, stuadmno, courname')
-        .eq('ins_id', insId)
-        .eq('stuclass', cls)
-        .eq('activestatus', 1);
     // Restrict to the chosen admission type (null = All).
+    String? admName;
     if (_admId != null) {
-      final admName = _admTypes
+      admName = _admTypes
           .firstWhere((a) => a['adm_id'].toString() == _admId, orElse: () => const {})['admname']
           ?.toString();
-      if (admName != null && admName.isNotEmpty) {
-        studentsQuery = studentsQuery.eq('admname', admName);
-      }
     }
-    final studentsRes = await studentsQuery;
-    final students = List<Map<String, dynamic>>.from(studentsRes as List);
+    // Paged: a truncated roster here would silently skip students when
+    // generating demands, leaving them unbilled with no error.
+    final students = await SupabaseService.fetchAll(() {
+      var q = SupabaseService.fromSchema('students')
+          .select('stu_id, stuadmno, courname')
+          .eq('ins_id', insId)
+          .eq('stuclass', cls)
+          .eq('activestatus', 1);
+      if (admName != null && admName.isNotEmpty) q = q.eq('admname', admName);
+      return q;
+    });
     if (students.isEmpty) return 0;
     final rows = <Map<String, dynamic>>[];
     final due = _due!.toIso8601String().split('T').first;
@@ -1299,7 +1427,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       }
     }
     if (rows.isEmpty) return 0;
-    await SupabaseService.fromSchema('tempfeedemand').insert(rows);
+    await SupabaseService.importSchemaRows('tempfeedemand',
+        List<Map<String, dynamic>>.from(rows));
     return rows.length;
   }
 
@@ -1341,12 +1470,12 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         final con = (m['conamount'] as num?)?.toDouble() ?? 0;
         final paid = (m['paidamount'] as num?)?.toDouble() ?? 0;
         final bal = (amt - con - paid) > 0 ? (amt - con - paid) : 0;
-        await SupabaseService.fromSchema('feedemand').update({
-          'feeamount': amt,
-          'balancedue': bal,
-          'reconbalancedue': bal,
-          'collectible': l.applyAll,
-        }).eq('dem_id', m['dem_id']);
+        await SupabaseService.rebuildDemand(
+          (m['dem_id'] as num).toInt(),
+          feeamount: amt,
+          balancedue: bal,
+          collectible: l.applyAll,
+        );
         updated++;
       }
     }
@@ -1375,11 +1504,13 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     for (final cls in targets) {
       try {
         // Idempotent: clear this target's template rows for the selection.
-        var del = SupabaseService.fromSchema('classfeedemand').delete().eq('cfclass', cls).eq('cfterm', _sem!);
-        del = admType != null ? del.eq('admissiontype', admType) : del.isFilter('admissiontype', null);
-        await del;
+        await SupabaseService.deleteSchemaRowsWhere('classfeedemand', {
+          'cfclass': cls,
+          'cfterm': _sem!,
+          'admissiontype': admType,
+        });
         for (final l in lines) {
-          await SupabaseService.fromSchema('classfeedemand').insert({
+          await SupabaseService.saveSchemaRow('classfeedemand', {
             'cf_id': await _nextId('classfeedemand', 'cf_id'),
             'cfclass': cls,
             'cfterm': _sem,
@@ -1458,7 +1589,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Future<void> _delete(int id) async {
     if (!await _confirmDelete(context, 'fee line')) return;
     try {
-      await SupabaseService.fromSchema('classfeedemand').delete().eq('cf_id', id);
+      await SupabaseService.deleteSchemaRow('classfeedemand', 'cf_id', id, soft: false);
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
@@ -1471,14 +1602,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) return const Center(child: CircularProgressIndicator());
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(flex: 3, child: _creation()),
-        SizedBox(width: 16.w),
-        Expanded(flex: 2, child: _existing()),
-      ],
-    );
+    // Saved Demands panel removed — the creation form spans the full width.
+    return _creation();
   }
 
   Widget _modeButton(String label, IconData icon, bool active, VoidCallback onTap) {
@@ -1550,8 +1675,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 elevation: 6,
                 style: _fieldTextStyle(context),
                 icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                decoration: _filledFieldDec(context, 'Select Term', filled: _sem != null),
-                hint: Text('Select Term',
+                decoration: _filledFieldDec(context, 'Select Semester', filled: _sem != null),
+                hint: Text('Select Semester',
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: MediaQuery.of(context).size.width <= 1366 ? 11 : 14)),
                 items: _semesters.map((e) => DropdownMenuItem(value: e, child: Text(e, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
@@ -1567,19 +1692,33 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 elevation: 6,
                 style: _fieldTextStyle(context),
                 icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                decoration: _filledFieldDec(context, 'Admission Type', filled: _admId != null),
-                hint: Text('Admission Type',
+                decoration: _filledFieldDec(context, 'All Admission Types', filled: _admId != null),
+                hint: Text('All Admission Types',
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: MediaQuery.of(context).size.width <= 1366 ? 11 : 14)),
-                items: _admTypes.map((a) => DropdownMenuItem(value: a['adm_id'].toString(), child: Text(a['admname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
-                selectedItemBuilder: (context) => _admTypes.map((a) => Align(alignment: Alignment.centerLeft, child: Text(a['admname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
-                onChanged: (v) => setState(() { _admId = v; _reloadGrid(); }),
+                items: [
+                  // 'all' is a sentinel → normalised to null (applies to every
+                  // admission type). Null shows the "All Admission Types" hint.
+                  DropdownMenuItem(value: 'all', child: Text('All Admission Types', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis)),
+                  ..._admTypes.map((a) => DropdownMenuItem(value: a['adm_id'].toString(), child: Text(a['admname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))),
+                ],
+                selectedItemBuilder: (context) => [
+                  Align(alignment: Alignment.centerLeft, child: Text('All Admission Types', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                  ..._admTypes.map((a) => Align(alignment: Alignment.centerLeft, child: Text(a['admname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
+                ],
+                onChanged: (v) => setState(() { _admId = v == 'all' ? null : v; _reloadGrid(); }),
               )),
               SizedBox(width: 8.w),
               Expanded(child: FocusableTap(
                 onTap: () async {
                   final now = DateTime.now();
-                  final p = await showDatePicker(context: context, initialDate: _due ?? now, firstDate: DateTime(now.year - 1), lastDate: DateTime(now.year + 5));
+                  // Due date is independent of the semester start/end dates.
+                  final first = DateTime(now.year - 1);
+                  final last = DateTime(now.year + 5);
+                  final initial = (_due != null && !_due!.isBefore(first) && !_due!.isAfter(last))
+                      ? _due!
+                      : now;
+                  final p = await showDatePicker(context: context, initialDate: initial, firstDate: first, lastDate: last);
                   if (p != null) setState(() => _due = p);
                 },
                 child: InputDecorator(
@@ -1587,7 +1726,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   // present, so we render the placeholder text inline ourselves.
                   decoration: _filledFieldDec(context, '', filled: _due != null),
                   child: Text(
-                    _due == null ? 'Select Date' : _fmt(_due!),
+                    _due == null ? 'Pay On or Before' : _fmt(_due!),
                     style: _due == null
                         ? TextStyle(fontSize: 13.sp, color: AppColors.textPrimary.withValues(alpha: 0.6))
                         : _fieldTextStyle(context).copyWith(color: AppColors.accent),
@@ -1614,6 +1753,10 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   label: const Text('Copy Fee'),
                 ),
               ),
+              SizedBox(width: 8.w),
+              ExcludeFocus(
+                child: _importButton(context, title: 'Class Fee Demand', tabIndex: 7, disabled: _saving, onReturn: _load),
+              ),
             ],
           )),
         ),
@@ -1631,16 +1774,47 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
               Expanded(child: FocusTraversalGroup(child: ListView.separated(itemCount: _lines.length, separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.4)), itemBuilder: (_, i) {
                 final l = _lines[i];
                 return Container(color: i.isEven ? Colors.white : AppColors.surface, padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h), child: Row(children: [
-                  Expanded(flex: 3, child: Padding(padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h), child: Text(l.feeType ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
+                  Expanded(flex: 3, child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h),
+                    child: l.isCustom
+                        ? DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: l.feeType,
+                              isExpanded: true,
+                              isDense: true,
+                              dropdownColor: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              elevation: 6,
+                              icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                              hint: Text('Select fee type', style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary.withValues(alpha: 0.5))),
+                              items: _feeTypeNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+                              onChanged: (v) => setState(() => l.feeType = v),
+                            ),
+                          )
+                        : Text(l.feeType ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                  )),
                   SizedBox(width: 8.w),
                   SizedBox(width: 132.w, child: TextField(controller: l.amount, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: l.amount.text.trim().isNotEmpty ? AppColors.accent : AppColors.textPrimary), decoration: _dec('', filled: l.amount.text.trim().isNotEmpty), onChanged: (_) => setState(() {}))),
-                  SizedBox(width: 70.w, child: Center(child: Tooltip(message: l.locked ? 'Apply-to-all fee is locked once created' : 'Apply this fee to all students in the class', child: ExcludeFocus(child: Checkbox(value: l.applyAll, activeColor: AppColors.accent, visualDensity: VisualDensity.compact, onChanged: l.locked ? null : (v) => setState(() => l.applyAll = v ?? false)))))),
-                  SizedBox(width: 44.w),
+                  SizedBox(width: 70.w, child: Center(child: Tooltip(message: 'Tick = collectible from all students (feedemand.collectible = true)', child: ExcludeFocus(child: Checkbox(value: l.applyAll, activeColor: AppColors.accent, visualDensity: VisualDensity.compact, onChanged: (v) => setState(() => l.applyAll = v ?? false)))))),
+                  SizedBox(width: 44.w, child: l.isCustom
+                      ? IconButton(
+                          tooltip: 'Remove row',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => setState(() { l.dispose(); _lines.removeAt(i); }),
+                          icon: const AppIcon('trash', size: 16, color: AppColors.error),
+                        )
+                      : null),
                 ]));
               }))),
               Divider(height: 1.h, color: AppColors.border),
               Padding(padding: EdgeInsets.all(12.w), child: Row(children: [
-                Text('Tick ALL to demand a fee for every student', style: TextStyle(fontSize: 11.sp, color: AppColors.textLight)),
+                OutlinedButton.icon(
+                  onPressed: () => setState(() => _lines.add(_FeeLine()..isCustom = true)),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add Row'),
+                ),
+                SizedBox(width: 12.w),
+                Flexible(child: Text('Tick ALL to make a fee collectible from every student', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.sp, color: AppColors.textLight))),
                 const Spacer(),
                 Text('Total  ', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                 Text(_total.toStringAsFixed(2), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
@@ -1655,6 +1829,9 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     );
   }
 
+  // Saved Demands panel — currently hidden (not rendered in build); kept so it
+  // can be restored if needed.
+  // ignore: unused_element
   Widget _existing() {
     final filtered = _cls == null ? _rows : _rows.where((r) => (r['cfclass']?.toString() ?? '') == _cls).toList();
     return _listCard(
@@ -1692,6 +1869,313 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 );
               },
             ),
+    );
+  }
+}
+
+// ── Demand No sequence ─────────────────────────────────────────────────────
+/// Single institution-wide demand-number (demno) sequence, stored in the shared
+/// `sequence` table with actname='DEMNO', fg_id NULL. Once configured, new fee
+/// demands emit <prefix><padded seqcurno+1> (e.g. DM00001) instead of the
+/// default DExx/NNNNN — see migrations/add_demno_sequence.sql (the set_dem_id /
+/// set_temp_id triggers read this row).
+class _DemandSequencePanel extends StatefulWidget {
+  const _DemandSequencePanel();
+  @override
+  State<_DemandSequencePanel> createState() => _DemandSequencePanelState();
+}
+
+class _DemandSequencePanelState extends State<_DemandSequencePanel> with AutomaticKeepAliveClientMixin {
+  bool _loading = true, _saving = false;
+  Map<String, dynamic>? _seq;
+  final _prefixCtrl = TextEditingController(text: 'DM');
+  final _widthCtrl = TextEditingController(text: '5');
+  final _startCtrl = TextEditingController(text: '1');
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _prefixCtrl.dispose();
+    _widthCtrl.dispose();
+    _startCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final insId = context.read<AuthProvider>().insId;
+    if (insId == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final res = await SupabaseService.fromSchema('sequence')
+          .select()
+          .eq('ins_id', insId)
+          .eq('actname', 'DEMNO')
+          .eq('activestatus', 1)
+          .order('seq_id')
+          .limit(1)
+          .maybeSingle();
+      if (!mounted) return;
+      setState(() {
+        _seq = res == null ? null : Map<String, dynamic>.from(res);
+        if (_seq != null) {
+          _prefixCtrl.text = _seq!['seqprefix']?.toString() ?? '';
+          _widthCtrl.text = ((_seq!['seqwidth'] as num?)?.toInt() ?? 5).toString();
+          _startCtrl.text = ((_seq!['seqstart'] as num?)?.toInt() ?? 1).toString();
+        }
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('DEMNO load: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  int get _width => (int.tryParse(_widthCtrl.text.trim()) ?? 5).clamp(1, 9);
+  int get _start => int.tryParse(_startCtrl.text.trim()) ?? 1;
+  String get _preview => '${_prefixCtrl.text.trim().toUpperCase()}${_start.toString().padLeft(_width, '0')}';
+
+  Future<void> _save() async {
+    final insId = context.read<AuthProvider>().insId;
+    if (insId == null) return;
+    var prefix = _prefixCtrl.text.trim().toUpperCase();
+    if (prefix.isEmpty) {
+      _snack(context, 'Enter a prefix.', AppColors.warning);
+      return;
+    }
+    if (prefix.length > 15) prefix = prefix.substring(0, 15);
+    final width = _width;
+    final start = _start.clamp(1, 999999999);
+    setState(() => _saving = true);
+    try {
+      final sequid0 = '$prefix${start.toString().padLeft(width, '0')}';
+      final sequid = sequid0.length > 18 ? sequid0.substring(0, 18) : sequid0;
+      // Only ever ONE demand sequence per institution: reuse the existing row
+      // if there is one (even if it wasn't loaded into state), else insert.
+      int? seqId = (_seq?['seq_id'] as num?)?.toInt();
+      if (seqId == null) {
+        final existing = await SupabaseService.fromSchema('sequence')
+            .select('seq_id')
+            .eq('ins_id', insId)
+            .eq('actname', 'DEMNO')
+            .eq('activestatus', 1)
+            .order('seq_id')
+            .limit(1)
+            .maybeSingle();
+        seqId = (existing?['seq_id'] as num?)?.toInt();
+      }
+      if (seqId != null) {
+        await SupabaseService.saveSchemaRow('sequence', {
+          'seqprefix': prefix,
+          'seqname': prefix,
+          'seqwidth': width,
+          'seqstart': start,
+          'sequid': sequid,
+        }, pkCol: 'seq_id', pkVal: seqId);
+      } else {
+        final year = await _currentYear(insId);
+        await SupabaseService.saveSchemaRow('sequence', {
+          'ins_id': insId,
+          'mod_id': 0,
+          'yr_id': year?['yr_id'] ?? 0,
+          'yrlabel': year?['yrlabel']?.toString() ?? '',
+          'actname': 'DEMNO',
+          'seqname': prefix,
+          'isprefix': 'Y',
+          'seqprefix': prefix,
+          'seqstart': start,
+          'seqwidth': width,
+          'sequid': sequid,
+          'seqcurno': start - 1, // first demand number == start
+          'fg_id': null,
+        });
+      }
+      if (mounted) {
+        _snack(context, 'Demand No sequence saved.', AppColors.success);
+        _load();
+      }
+    } catch (e) {
+      if (mounted) _snack(context, friendlyError(e), AppColors.error);
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    return Padding(
+      padding: EdgeInsets.only(top: 8.h),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 340.w, child: _form()),
+          SizedBox(width: 16.w),
+          Expanded(child: _info()),
+        ],
+      ),
+    );
+  }
+
+  Widget _form() {
+    final exists = _seq != null;
+    return Container(
+      padding: EdgeInsets.all(20.w),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      child: FocusTraversalGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              Icon(Icons.tag_rounded, color: AppColors.accent, size: 20.sp),
+              SizedBox(width: 8.w),
+              Expanded(child: Text('Demand No Sequence', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary))),
+            ]),
+            SizedBox(height: 4.h),
+            Text('one demand-number sequence for the whole institution', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+            SizedBox(height: 20.h),
+            _lbl('Prefix *'),
+            SizedBox(height: 6.h),
+            TextField(
+              controller: _prefixCtrl,
+              textCapitalization: TextCapitalization.characters,
+              style: _fieldTextStyle(context).copyWith(color: _prefixCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              decoration: _filledFieldDec(context, 'e.g. DM', filled: _prefixCtrl.text.trim().isNotEmpty),
+              onChanged: (_) => setState(() {}),
+            ),
+            SizedBox(height: 16.h),
+            _lbl('Number Width'),
+            SizedBox(height: 6.h),
+            TextField(
+              controller: _widthCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              style: _fieldTextStyle(context).copyWith(color: _widthCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              decoration: _filledFieldDec(context, '5', filled: _widthCtrl.text.trim().isNotEmpty),
+              onChanged: (_) => setState(() {}),
+            ),
+            SizedBox(height: 16.h),
+            _lbl(exists ? 'Start Number (locked)' : 'Start Number'),
+            SizedBox(height: 6.h),
+            TextField(
+              controller: _startCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              enabled: !exists, // the start is locked once the counter is running
+              style: _fieldTextStyle(context).copyWith(color: _startCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              decoration: _filledFieldDec(context, '1', filled: _startCtrl.text.trim().isNotEmpty),
+              onChanged: (_) => setState(() {}),
+            ),
+            SizedBox(height: 12.h),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+              decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.accent.withValues(alpha: 0.25))),
+              child: Row(children: [
+                Text('Preview:  ', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                Expanded(child: Text(_prefixCtrl.text.trim().isEmpty ? '—' : _preview, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.accent), overflow: TextOverflow.ellipsis)),
+              ]),
+            ),
+            SizedBox(height: 18.h),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Icon(exists ? Icons.save_rounded : Icons.add, size: 16),
+                label: Text(exists ? 'Update' : 'Create'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Right panel — the configured demand sequence, as a table matching the
+  /// Payment Sequence tab.
+  Widget _info() {
+    final s = _seq;
+    final width = (s?['seqwidth'] as num?)?.toInt() ?? 5;
+    final cur = (s?['seqcurno'] as num?)?.toInt() ?? 0;
+    final start = (s?['seqstart'] as num?)?.toInt() ?? 1;
+    final prefix = s?['seqprefix']?.toString() ?? '';
+    final preview = '$prefix${start.toString().padLeft(width, '0')}';
+    final count = s == null ? 0 : 1;
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            child: Row(children: [
+              Icon(Icons.tag_rounded, color: AppColors.accent, size: 18.sp),
+              SizedBox(width: 8.w),
+              Text('Demand Sequences', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              SizedBox(width: 10.w),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
+                child: Text('$count sequence${count == 1 ? '' : 's'}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+              ),
+              const Spacer(),
+            ]),
+          ),
+          Expanded(
+            child: Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.border)),
+              child: Column(
+                children: [
+                  Container(
+                    color: AppColors.tableHeadBg,
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                    child: Row(children: [
+                      Expanded(flex: 3, child: Text('SEQUENCE', style: h())),
+                      SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
+                      SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
+                      SizedBox(width: 80.w, child: Text('CURRENT', style: h())),
+                    ]),
+                  ),
+                  Expanded(
+                    child: s == null
+                        ? Center(child: Text('No demand sequence yet', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                        : ListView(
+                            children: [
+                              Container(
+                                color: Colors.white,
+                                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                                child: Row(children: [
+                                  Expanded(flex: 3, child: Text('Demand No', style: c(), overflow: TextOverflow.ellipsis)),
+                                  SizedBox(width: 90.w, child: Text(prefix, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.primary))),
+                                  SizedBox(width: 120.w, child: Text(preview, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                                  SizedBox(width: 80.w, child: Text('$cur', style: c())),
+                                ]),
+                              ),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

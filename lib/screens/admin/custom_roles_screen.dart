@@ -59,21 +59,19 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
 
     setState(() => _isLoading = true);
 
-    bool success;
-    if (_editingUrId != null) {
-      success = await SupabaseService.updateUserRole(_editingUrId!, {
-        'urname': _nameController.text.trim(),
-      });
-    } else {
-      success = await SupabaseService.createUserRole({
-        'ins_id': insId,
-        'inscode': inscode ?? '',
-        'urname': _nameController.text.trim(),
-        'activestatus': 1,
-      });
-    }
+    try {
+      final success = _editingUrId != null
+          ? await SupabaseService.updateUserRole(_editingUrId!, {
+              'urname': _nameController.text.trim(),
+            })
+          : await SupabaseService.createUserRole({
+              'ins_id': insId,
+              'inscode': inscode ?? '',
+              'urname': _nameController.text.trim(),
+              'activestatus': 1,
+            });
 
-    if (mounted) {
+      if (!mounted) return;
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(_editingUrId != null ? 'Role updated' : 'Role created'), backgroundColor: AppColors.success),
@@ -84,8 +82,17 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to save role'), backgroundColor: Colors.red),
         );
-        setState(() => _isLoading = false);
       }
+    } catch (e) {
+      // Never let a failed save freeze the button (e.g. a permission error on
+      // custuserroles before the session-gated RPC is deployed).
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to save role'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -129,6 +136,15 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
     _nameController.clear();
     _editingUrId = null;
   }
+
+  /// Table-header cell style, matching _h() in master_data_screen.dart so
+  /// every master table reads identically.
+  TextStyle _th() => TextStyle(
+        fontSize: 12.sp,
+        fontWeight: FontWeight.w700,
+        color: AppColors.textPrimary,
+        letterSpacing: 0.3,
+      );
 
   InputDecoration _inputDecoration(String label, {bool filled = false}) {
     final idle = filled ? AppColors.accent : AppColors.border;
@@ -228,17 +244,23 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
+                  // Plain header + accent count pill, matching Bank Accounts /
+                  // Master Data (they don't tint the header band).
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(12.r)),
-                    ),
                     child: Row(
                       children: [
                         const CardTitleBlock(icon: 'security-user', title: 'Custom Roles', subtitle: 'all custom roles in this institution'),
                         const Spacer(),
-                        Text('${_roles.length} records', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                          decoration: BoxDecoration(
+                            color: AppColors.accent.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8.r),
+                          ),
+                          child: Text('${_roles.length} roles',
+                              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                        ),
                         SizedBox(width: 12.w),
                         SizedBox(
                           height: AppBtn.height(context),
@@ -247,6 +269,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                             icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Refresh'),
                             style: ElevatedButton.styleFrom(
+                              // App-wide Refresh green (used across 13 screens).
                               backgroundColor: const Color(0xFF10B981),
                               foregroundColor: Colors.white,
                               elevation: 0,
@@ -256,16 +279,18 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                       ],
                     ),
                   ),
-                  // Table header
+                  // Table header — same treatment as every other master table
+                  // (Master Data, Fee Master): light slate band, dark bold
+                  // labels. See _h() in master_data_screen.dart.
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                    color: const Color(0xFF6C8EEF),
+                    color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 3, child: Text('ROLE NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 2, child: Text('INS CODE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
+                        SizedBox(width: 40.w, child: Text('S NO.', style: _th())),
+                        Expanded(flex: 3, child: Text('ROLE NAME', style: _th())),
+                        Expanded(flex: 2, child: Text('INS CODE', style: _th())),
+                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _th())),
                       ],
                     ),
                   ),

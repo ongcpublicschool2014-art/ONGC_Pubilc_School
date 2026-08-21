@@ -31,6 +31,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   final _nameController = TextEditingController();
   final _mobileController = TextEditingController();
   final _emailController = TextEditingController();
+  final _parentEmailController = TextEditingController();
+  final _mediumController = TextEditingController();
   final _aadharController = TextEditingController();
   final _addressController = TextEditingController();
   final _cityController = TextEditingController();
@@ -59,7 +61,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _gender;
   String? _bloodGroup;
   DateTime? _dob;
-  DateTime? _admDate;
+  DateTime? _admDate = DateTime.now(); // defaults to today; editable, overwritten when editing
   String? _source;
   String? _selectedYrId;
   String? _selectedYrLabel;
@@ -71,7 +73,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _transportMode; // 'Own' | 'College'
   String? _hostel;        // 'Yes' | 'No'
   String? _selectedCommunity;
-  String? _selectedRegSeqId; // chosen register-number sequence (rns_id)
+  String? _selectedRegSeqId; // chosen register-number sequence (sequence.seq_id)
   String? _regMode; // null = not chosen | 'Manual' | 'Auto'
 
   static const _regModes = ['Manual', 'Auto'];
@@ -102,8 +104,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   //   2  book-1         Academic    → Applied For, Additional Details, Previous School
   //   3  people         Family      → Parent / Guardian, Remarks
   int _currentStep = 0;
-  static const _wizardLabels = ['Admission', 'Applicant', 'Academic', 'Family'];
-  static const _wizardIcons = ['document-text', 'user', 'book-1', 'people'];
+  static const _wizardLabels = ['Admission', 'Applicant', 'Academic'];
+  static const _wizardIcons = ['document-text', 'user', 'book-1'];
 
   static const _genders = ['Male', 'Female', 'Other'];
   static const _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
@@ -113,6 +115,34 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadRegModeDefault();
+  }
+
+  /// Seeds the Reg No Mode from the institution's Utilities setting
+  /// (admission_number_mode: AUTO -> 'Auto', else 'Manual'). Only applied when
+  /// the user hasn't already picked a mode this session.
+  Future<void> _loadRegModeDefault() async {
+    final s = await SupabaseService.getInstitutionSettings(_insId);
+    if (!mounted || _regMode != null) return;
+    setState(() {
+      _regMode = (s['admission_number_mode'] ?? 'MANUAL').toUpperCase() == 'AUTO' ? 'Auto' : 'Manual';
+    });
+    _maybeAutoPickRegSeq();
+  }
+
+  /// Once the Reg No Mode and register sequences are both loaded, auto-select the
+  /// first sequence and fill the suggested Register No — so Auto is fully
+  /// automatic (no manual pick) and Manual still shows a suggestion. No-op while
+  /// editing an existing admission, or once a sequence is already chosen.
+  void _maybeAutoPickRegSeq() {
+    if (!mounted || _readonly || _selected != null) return;
+    if (_regMode == null || _regSeqs.isEmpty || _selectedRegSeqId != null) return;
+    if (_admnoController.text.trim().isNotEmpty) return;
+    final seq = _regSeqs.first;
+    setState(() {
+      _selectedRegSeqId = seq['seq_id'].toString();
+      _admnoController.text = _buildRegNo(seq);
+    });
   }
 
   @override
@@ -127,6 +157,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _fatherOccController, _motherOccController, _guardianOccController,
       _payNameController, _payMobileController,
       _casteController, _religionController, _nationalityController,
+      _parentEmailController, _mediumController,
       _remarksController,
     ]) {
       c.dispose();
@@ -144,12 +175,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         AdmissionService.getAdmissions(insId),
         SupabaseService.getYears(insId),
         SupabaseService.fromSchema('course').select('cour_id, courname').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('class').select('claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('class').select('cla_id, claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.getAdmissionTypes(insId),
         SupabaseService.getQuotas(insId),
         SupabaseService.getConcessions(insId),
         SupabaseService.fromSchema('community').select('comname').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('regnoseq').select('*').eq('activestatus', 1).order('rns_id', ascending: true),
+        SupabaseService.fromSchema('sequence').select('*').eq('actname', 'REGNO').eq('activestatus', 1).order('seq_id', ascending: true),
       ]);
       if (!mounted) return;
       setState(() {
@@ -166,6 +197,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         _regSeqs = List<Map<String, dynamic>>.from(results[8] as List);
         _loading = false;
       });
+      _maybeAutoPickRegSeq();
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
@@ -234,7 +266,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   void _newAdmission() {
     setState(() {
       _selected = null;
-      _admDate = null;
+      // Default the admission date to today; the user can still change it.
+      _admDate = DateTime.now();
       _dob = null;
       _gender = null;
       _bloodGroup = null;
@@ -262,6 +295,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         _fatherOccController, _motherOccController, _guardianOccController,
         _payNameController, _payMobileController,
         _casteController, _religionController, _nationalityController,
+        _parentEmailController, _mediumController,
         _remarksController,
       ]) {
         c.clear();
@@ -290,6 +324,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _nameController.text = a.stuname;
       _mobileController.text = a.stumobile ?? '';
       _emailController.text = a.stuemail ?? '';
+      _mediumController.text = a.medium ?? '';
+      _parentEmailController.text = a.paremail ?? '';
       _aadharController.text = a.aadharno ?? '';
       _addressController.text = a.stuaddress ?? '';
       _cityController.text = a.stucity ?? '';
@@ -325,17 +361,17 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
 
   /// The next counter value a register sequence would issue.
   int _nextRegNum(Map<String, dynamic> seq) {
-    final cur = (seq['rnscurrent'] as num?)?.toInt() ?? 0;
-    final start = (seq['rnsstart'] as num?)?.toInt() ?? 1;
+    final cur = (seq['seqcurno'] as num?)?.toInt() ?? 0;
+    final start = (seq['seqstart'] as num?)?.toInt() ?? 1;
     return cur < start ? start : cur + 1;
   }
 
   /// Build the formatted register number for a sequence (prefix/suffix + pad).
   String _buildRegNo(Map<String, dynamic> seq) {
-    final width = (seq['rnswidth'] as num?)?.toInt() ?? 0;
+    final width = (seq['seqwidth'] as num?)?.toInt() ?? 0;
     final padded = _nextRegNum(seq).toString().padLeft(width, '0');
-    final affix = seq['rnsaffix']?.toString() ?? '';
-    return (seq['rnsmode']?.toString() ?? 'P') == 'P' ? '$affix$padded' : '$padded$affix';
+    final affix = seq['seqprefix']?.toString() ?? '';
+    return (seq['isprefix']?.toString() ?? 'Y') == 'Y' ? '$affix$padded' : '$padded$affix';
   }
 
   /// Pay-in-charge is auto-derived from the parent/guardian details with the
@@ -345,9 +381,15 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     final f = _fatherNameController.text.trim(), fm = _fatherMobileController.text.trim();
     final m = _motherNameController.text.trim(), mm = _motherMobileController.text.trim();
     final g = _guardianNameController.text.trim(), gm = _guardianMobileController.text.trim();
+    // Prefer the first parent with both Name and Mobile, then fall back to the
+    // first with a Name — so Pay In Charge is auto-filled from the parent
+    // details (Father → Mother → Guardian).
     if (f.isNotEmpty && fm.isNotEmpty) return [f, fm];
     if (m.isNotEmpty && mm.isNotEmpty) return [m, mm];
     if (g.isNotEmpty && gm.isNotEmpty) return [g, gm];
+    if (f.isNotEmpty) return [f, fm];
+    if (m.isNotEmpty) return [m, mm];
+    if (g.isNotEmpty) return [g, gm];
     return ['', ''];
   }
 
@@ -358,8 +400,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     return {
       'ins_id': auth.insId ?? 1,
       'inscode': auth.inscode ?? '',
-      'yr_id': int.tryParse(_selectedYrId ?? '0') ?? 0,
-      'yrlabel': _selectedYrLabel ?? '',
+      // yr_id/yrlabel removed from public.admission — the year is derived from
+      // the schema during allocate_admission_to_student.
       'admno': _admnoController.text.trim(),
       'admdate': _admDate?.toIso8601String().split('T').first,
       'admsource': _source,
@@ -378,6 +420,16 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       'stuclass': _selectedClass,
       'admname': _selectedAdmName,
       'quoname': _selectedQuoName,
+      // Entity IDs resolved from the selected master names, so public.admission
+      // carries them the same way the student import does.
+      'cour_id': _idFor(_courseList, 'courname', _selectedCourse, 'cour_id'),
+      'admit_cour_id': _idFor(_courseList, 'courname', _selectedCourse, 'cour_id'),
+      'cla_id': _classIdFor(_selectedClass, _idFor(_courseList, 'courname', _selectedCourse, 'cour_id')),
+      'admtype_id': _idFor(_admissionTypes, 'admname', _selectedAdmName, 'adm_id'),
+      'quo_id': _idFor(_quotas, 'quoname', _selectedQuoName, 'quo_id'),
+      // Admitted year defaults to the current academic year.
+      'admittyear': _years.isNotEmpty ? _years.first['yrlabel']?.toString() : null,
+      'medium': t(_mediumController),
       'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
       'stucondesc': _selectedConId != null
           ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId,
@@ -400,6 +452,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       'guardianoccupation': t(_guardianOccController),
       'payincharge': payer[0].isEmpty ? null : payer[0],
       'payinchargemob': payer[1].isEmpty ? null : payer[1],
+      'paremail': t(_parentEmailController),
       'community': _selectedCommunity,
       'caste': t(_casteController),
       'religion': t(_religionController),
@@ -411,6 +464,33 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     };
   }
 
+  /// Look up an integer id for [name] in [list] (row[nameKey]==name → row[idKey]).
+  int? _idFor(List<Map<String, dynamic>> list, String nameKey, String? name, String idKey) {
+    if (name == null || name.trim().isEmpty) return null;
+    for (final m in list) {
+      if (m[nameKey]?.toString() == name) {
+        final v = m[idKey];
+        return v is int ? v : int.tryParse(v?.toString() ?? '');
+      }
+    }
+    return null;
+  }
+
+  /// Class id for [className], scoped to [courId] when the class row carries it.
+  int? _classIdFor(String? className, int? courId) {
+    if (className == null || className.trim().isEmpty) return null;
+    for (final m in _classList) {
+      if (m['claname']?.toString() != className) continue;
+      final rowCour = m['cour_id'] is int
+          ? m['cour_id'] as int
+          : int.tryParse(m['cour_id']?.toString() ?? '');
+      if (courId != null && rowCour != null && rowCour != courId) continue;
+      final v = m['cla_id'];
+      return v is int ? v : int.tryParse(v?.toString() ?? '');
+    }
+    return null;
+  }
+
   bool _validate() {
     if (_regMode == null) {
       _snack('Select Reg No Mode', AppColors.error);
@@ -418,10 +498,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     }
     if (_admDate == null) {
       _snack('Select Admission Date', AppColors.error);
-      return false;
-    }
-    if (_selectedYrId == null) {
-      _snack('Select Academic Year', AppColors.error);
       return false;
     }
     if (_source == null) {
@@ -446,21 +522,46 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
 
   Future<void> _save() async {
     if (!_validate()) return;
+    final userName = context.read<AuthProvider>().userName; // capture before async gaps
     setState(() => _saving = true);
     try {
       if (_selected == null) {
-        await AdmissionService.addAdmission(_formData());
-        // Advance the chosen register sequence so the next admission gets the next no.
+        final admId = await AdmissionService.addAdmission(_formData());
+        // Advance the chosen register sequence so the next admission gets the
+        // next no. In Auto the suggestion is always used; in Manual the user may
+        // overwrite it, so only consume a sequence number when the entered value
+        // still matches the suggestion (otherwise the manual number stands alone).
         if (_selectedRegSeqId != null) {
           final seq = _regSeqs.firstWhere(
-            (s) => s['rns_id'].toString() == _selectedRegSeqId,
+            (s) => s['seq_id'].toString() == _selectedRegSeqId,
             orElse: () => const {},
           );
-          if (seq.isNotEmpty) {
+          if (seq.isNotEmpty &&
+              (_regMode == 'Auto' || _admnoController.text.trim() == _buildRegNo(seq))) {
             await AdmissionService.bumpRegSeqCurrent(int.parse(_selectedRegSeqId!), _nextRegNum(seq));
           }
         }
-        _snack('Admission saved.', AppColors.success);
+        // Class selected → move straight to students; no class → leave the
+        // admission pending for Class Allocation.
+        var enrolled = false;
+        if (_selectedClass != null && _selectedClass!.trim().isNotEmpty) {
+          try {
+            await AdmissionService.allocateClass(
+              admId: admId,
+              className: _selectedClass!.trim(),
+              stuadmno: _admnoController.text.trim(),
+              allocatedBy: userName,
+            );
+            enrolled = true;
+          } catch (_) {
+            // Admission is saved; allocation can be retried from Class Allocation.
+          }
+        }
+        _snack(enrolled ? 'Admission saved & moved to students.' : 'Admission saved.', AppColors.success);
+        // Reset the register fields so _load()'s auto-pick fills the NEXT number
+        // (the sequence counter was just bumped above).
+        _admnoController.clear();
+        _selectedRegSeqId = null;
       } else {
         await AdmissionService.updateAdmission(_selected!.admId, _formData());
         _snack('Admission updated.', AppColors.success);
@@ -766,18 +867,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             _row([
               _dropdown('Reg No Mode', _regMode, _regModes, (v) => setState(() {
                     _regMode = v;
-                    // Leaving Auto clears any chosen sequence; null (not chosen)
-                    // and Manual both mean no auto-sequence is active.
-                    if (_regMode != 'Auto') {
-                      _selectedRegSeqId = null;
-                    }
+                    // Both Manual (suggest + edit) and Auto (generate + lock) use
+                    // a register sequence, so keep the chosen sequence across modes.
                   }), hint: 'Select mode'),
               _regSeqField(),
               _text('Register No *', _admnoController, enabled: _regMode == 'Manual'),
             ]),
             _row([
               _dateField('Admission Date', _admDate, (d) => setState(() => _admDate = d), hint: 'Select date'),
-              _yearDropdown(),
               _dropdown('Source', _source, _sources, (v) => setState(() => _source = v)),
             ]),
           ]),
@@ -811,8 +908,47 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               const Spacer(),
             ]),
           ]),
+          _section('Parent / Guardian', [
+            _row([
+              _text('Father Name', _fatherNameController),
+              _text('Father Mobile', _fatherMobileController, keyboard: TextInputType.phone),
+              _text('Father Occupation', _fatherOccController),
+            ]),
+            _row([
+              _text('Mother Name', _motherNameController),
+              _text('Mother Mobile', _motherMobileController, keyboard: TextInputType.phone),
+              _text('Mother Occupation', _motherOccController),
+            ]),
+            _row([
+              _text('Guardian Name', _guardianNameController),
+              _text('Guardian Mobile', _guardianMobileController, keyboard: TextInputType.phone),
+              _text('Guardian Occupation', _guardianOccController),
+            ]),
+            _row([
+              _text('Parent Email', _parentEmailController, keyboard: TextInputType.emailAddress),
+              const Spacer(),
+              const Spacer(),
+            ]),
+            Padding(
+              padding: EdgeInsets.only(top: 4.h),
+              child: Row(children: [
+                Icon(Icons.info_outline, size: 14.sp, color: AppColors.textLight),
+                SizedBox(width: 6.w),
+                Expanded(
+                  child: Text(
+                    'Pay In Charge is set automatically from Father → Mother → Guardian (the first with both Name and Mobile).',
+                    style: TextStyle(fontSize: 11.sp, color: AppColors.textLight),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+          _section('Remarks', [
+            _text('Notes', _remarksController, maxLines: 2),
+          ]),
         ];
       case 2:
+      default:
         return [
           _section('Applied For', [
             _row([
@@ -834,6 +970,11 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                   (v) => setState(() => _selectedQuoName = v)),
               _dropdownMap('Concession', _selectedConId, _concessions, 'con_id', 'condesc',
                   (v) => setState(() => _selectedConId = v)),
+            ]),
+            _row([
+              _text('Medium', _mediumController),
+              const Spacer(),
+              const Spacer(),
             ]),
           ]),
           _section('Additional Details', [
@@ -857,43 +998,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               _text('Class / Course', _prevClassController),
               _text('Marks %', _prevPercentController, keyboard: TextInputType.number),
             ]),
-          ]),
-        ];
-      case 3:
-      default:
-        return [
-          _section('Parent / Guardian', [
-            _row([
-              _text('Father Name', _fatherNameController),
-              _text('Father Mobile', _fatherMobileController, keyboard: TextInputType.phone),
-              _text('Father Occupation', _fatherOccController),
-            ]),
-            _row([
-              _text('Mother Name', _motherNameController),
-              _text('Mother Mobile', _motherMobileController, keyboard: TextInputType.phone),
-              _text('Mother Occupation', _motherOccController),
-            ]),
-            _row([
-              _text('Guardian Name', _guardianNameController),
-              _text('Guardian Mobile', _guardianMobileController, keyboard: TextInputType.phone),
-              _text('Guardian Occupation', _guardianOccController),
-            ]),
-            Padding(
-              padding: EdgeInsets.only(top: 4.h),
-              child: Row(children: [
-                Icon(Icons.info_outline, size: 14.sp, color: AppColors.textLight),
-                SizedBox(width: 6.w),
-                Expanded(
-                  child: Text(
-                    'Pay In Charge is set automatically from Father → Mother → Guardian (the first with both Name and Mobile).',
-                    style: TextStyle(fontSize: 11.sp, color: AppColors.textLight),
-                  ),
-                ),
-              ]),
-            ),
-          ]),
-          _section('Remarks', [
-            _text('Notes', _remarksController, maxLines: 2),
           ]),
         ];
     }
@@ -1261,7 +1365,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// Register-sequence picker. Selecting one auto-fills the Register No field
   /// from the sequence's current counter (prefix/suffix + zero-padded next no).
   Widget _regSeqField() {
-    final values = _regSeqs.map((s) => s['rns_id'].toString()).toList();
+    final values = _regSeqs.map((s) => s['seq_id'].toString()).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1278,19 +1382,22 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           hint: Text('Select register sequence', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
           items: _regSeqs
               .map((s) => DropdownMenuItem(
-                    value: s['rns_id'].toString(),
-                    child: Text(s['rnsname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+                    value: s['seq_id'].toString(),
+                    child: Text(s['seqname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
                   ))
               .toList(),
           selectedItemBuilder: (context) => _regSeqs
-              .map((s) => Align(alignment: Alignment.centerLeft, child: Text(s['rnsname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))))
+              .map((s) => Align(alignment: Alignment.centerLeft, child: Text(s['seqname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))))
               .toList(),
-          onChanged: (_readonly || _regMode != 'Auto')
+          // Enabled in both Auto and Manual — picking a sequence fills the
+          // suggested number. In Auto the Register No field is locked; in Manual
+          // it stays editable so the user can overwrite the suggestion.
+          onChanged: (_readonly || _regMode == null)
               ? null
               : (v) => setState(() {
                     _selectedRegSeqId = v;
                     final seq = _regSeqs.firstWhere(
-                      (s) => s['rns_id'].toString() == v,
+                      (s) => s['seq_id'].toString() == v,
                       orElse: () => const {},
                     );
                     if (seq.isNotEmpty) _admnoController.text = _buildRegNo(seq);

@@ -239,9 +239,20 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
 
     // Fetch fee details from feedemand table
     List<ReceiptTermDetail> feeDetails = [];
+    // For an ARREAR receipt, Branch = the arrear's original class
+    // (feedemand.arrearclass) rather than the student's current class.
+    String? arrearBranch;
     try {
       final details = await SupabaseService.getFeeDetailsByPayId(t.payId);
       if (details.isNotEmpty) {
+        for (final d in details) {
+          final isArr = (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+          final ac = d['arrearclass']?.toString() ?? '';
+          if (isArr && ac.isNotEmpty) {
+            arrearBranch = ac;
+            break;
+          }
+        }
         // Group by term - show month name from duedate for TUITION/VAN fees
         const monthFeeTypes = ['TUITION FEES', 'TUITION FEE', 'VAN FEES', 'VAN FEE'];
         final termMap = <String, List<ReceiptFeeItem>>{};
@@ -295,7 +306,9 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       mobileNo: student?.stumobile ?? '-',
       address: student?.stuaddress ?? '-',
       admissionNo: student?.stuadmno ?? '-',
-      className: student?.stuclass ?? '-',
+      className: (arrearBranch != null && arrearBranch.isNotEmpty)
+          ? arrearBranch
+          : (student?.stuclass ?? '-'),
       courseName: student?.courname ?? '-',
       schoolName: _insName ?? auth.inscode ?? 'Institution',
       schoolAddress: _insAddress ?? '-',
@@ -968,7 +981,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       datePart = 'Until ${_fmtDate(_filterToDate!)}';
     }
     if (hasMethod) {
-      return '$datePart Â· ${_filterMethods.length} method${_filterMethods.length == 1 ? '' : 's'}';
+      return '$datePart • ${_filterMethods.length} method${_filterMethods.length == 1 ? '' : 's'}';
     }
     return datePart;
   }

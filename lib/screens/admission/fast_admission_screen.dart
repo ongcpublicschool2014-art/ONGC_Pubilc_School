@@ -20,10 +20,11 @@ class FastAdmissionScreen extends StatefulWidget {
 }
 
 class _FastRow {
-  final regNo = TextEditingController();
+  final regNo = TextEditingController(); // manual register/admission no (overrides sequence)
   final name = TextEditingController();
   final batch = TextEditingController();
-  final admYear = TextEditingController();
+  final fatherName = TextEditingController();
+  final fatherMobile = TextEditingController();
   String? sex; // M | F | T
   String? course;
   String? cls;
@@ -35,20 +36,45 @@ class _FastRow {
     regNo.dispose();
     name.dispose();
     batch.dispose();
-    admYear.dispose();
+    fatherName.dispose();
+    fatherMobile.dispose();
   }
 
-  bool get isBlank => name.text.trim().isEmpty && regNo.text.trim().isEmpty;
+  bool get isBlank => name.text.trim().isEmpty;
 }
 
 class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   final List<_FastRow> _rows = [];
-  List<String> _courses = [];
-  List<String> _classes = [];
+  List<Map<String, dynamic>> _courseList = []; // {cour_id, courname}
+  List<Map<String, dynamic>> _classList = [];  // {claname, cour_id}
+
+  List<String> get _courses =>
+      (_courseList.map((e) => e['courname']?.toString().trim() ?? '')
+          .where((s) => s.isNotEmpty).toSet().toList()
+        ..sort());
+
+  /// Class names belonging to [courname] (matched via class.cour_id). With no
+  /// course selected, returns all classes; the Class dropdown is scoped to the
+  /// chosen Course.
+  List<String> _classNamesFor(String? courname) {
+    Iterable<Map<String, dynamic>> src = _classList;
+    if (courname != null && courname.trim().isNotEmpty) {
+      final cm = _courseList.firstWhere(
+        (c) => (c['courname']?.toString().trim() ?? '') == courname.trim(),
+        orElse: () => const {},
+      );
+      final courId = cm['cour_id'];
+      src = courId == null
+          ? const <Map<String, dynamic>>[]
+          : _classList.where((cl) => cl['cour_id'] == courId);
+    }
+    return (src.map((e) => e['claname']?.toString().trim() ?? '')
+        .where((s) => s.isNotEmpty).toSet().toList()
+      ..sort());
+  }
   List<Map<String, dynamic>> _admTypes = [];
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _regSeqs = [];
-  String? _selectedYrId;
   String? _selectedYrLabel;
   String? _selectedRegSeqId;
   String? _lastRegNo; // last admission reg no — shown inline next to the label
@@ -60,46 +86,77 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) {
+      if (mounted) _maybeAutoPickSeq();
+    });
     _refreshLastRegNo();
   }
+
+  /// When the Utilities admission-number mode is AUTO, auto-select the first
+  /// register sequence so blank Register No cells are auto-numbered on save
+  /// (no manual sequence pick). No-op if a sequence is already chosen.
+  Future<void> _maybeAutoPickSeq() async {
+    if (!mounted || _selectedRegSeqId != null || _regSeqs.isEmpty) return;
+    final s = await SupabaseService.getInstitutionSettings(_insId);
+    if (!mounted || _selectedRegSeqId != null || _regSeqs.isEmpty) return;
+    if ((s['admission_number_mode'] ?? 'MANUAL').toUpperCase() == 'AUTO') {
+      setState(() => _selectedRegSeqId = _regSeqs.first['seq_id'].toString());
+    }
+  }
+
+  // Scroll controllers so the entry grid shows visible scrollbars.
+  final ScrollController _vScroll = ScrollController();
+  final ScrollController _hScroll = ScrollController();
 
   @override
   void dispose() {
     for (final r in _rows) {
       r.dispose();
     }
+    _vScroll.dispose();
+    _hScroll.dispose();
     super.dispose();
   }
 
   int get _insId => context.read<AuthProvider>().insId ?? 1;
 
+  /// Retry a network call a couple of times with a short backoff so a single
+  /// dropped connection (handshake/timeout) self-heals instead of stranding
+  /// the screen on the spinner.
+  Future<T> _withRetry<T>(Future<T> Function() fn, {int retries = 2}) async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await fn();
+      } catch (_) {
+        if (attempt >= retries) rethrow;
+        await Future.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+      }
+    }
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     final insId = _insId;
     try {
-      final results = await Future.wait<dynamic>([
-        SupabaseService.fromSchema('course').select('courname').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('class').select('claname').eq('ins_id', insId).eq('activestatus', 1),
+      final results = await _withRetry(() => Future.wait<dynamic>([
+        SupabaseService.fromSchema('course').select('cour_id, courname').eq('ins_id', insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('class').select('cla_id, claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.getAdmissionTypes(insId),
         SupabaseService.getYears(insId),
-        SupabaseService.fromSchema('regnoseq').select('*').eq('activestatus', 1).order('rns_id', ascending: true),
-      ]);
+        SupabaseService.fromSchema('sequence').select('*').eq('actname', 'REGNO').eq('activestatus', 1).order('seq_id', ascending: true),
+      ]));
       if (!mounted) return;
       setState(() {
-        _courses = (results[0] as List).map((e) => e['courname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
-        _classes = (results[1] as List).map((e) => e['claname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
+        _courseList = List<Map<String, dynamic>>.from(results[0] as List);
+        _classList = List<Map<String, dynamic>>.from(results[1] as List);
         _admTypes = List<Map<String, dynamic>>.from(results[2] as List);
         _years = results[3] as List<Map<String, dynamic>>;
         _regSeqs = List<Map<String, dynamic>>.from(results[4] as List);
         if (_years.isNotEmpty) {
-          _selectedYrId = _years.first['yr_id'].toString();
           _selectedYrLabel = _years.first['yrlabel']?.toString();
         }
         if (_rows.isEmpty) {
-          for (var i = 0; i < 8; i++) {
-            _rows.add(_FastRow());
-          }
+          _rows.add(_FastRow());
         }
         _loading = false;
       });
@@ -113,38 +170,20 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
 
   void _addRow() => setState(() => _rows.add(_FastRow()));
 
-  void _removeRow(int i) => setState(() => _rows.removeAt(i).dispose());
 
   int _seqNext(Map<String, dynamic> seq) {
-    final cur = (seq['rnscurrent'] as num?)?.toInt() ?? 0;
-    final start = (seq['rnsstart'] as num?)?.toInt() ?? 1;
+    final cur = (seq['seqcurno'] as num?)?.toInt() ?? 0;
+    final start = (seq['seqstart'] as num?)?.toInt() ?? 1;
     return cur < start ? start : cur + 1;
   }
 
   String _seqFormat(Map<String, dynamic> seq, int n) {
-    final width = (seq['rnswidth'] as num?)?.toInt() ?? 0;
+    final width = (seq['seqwidth'] as num?)?.toInt() ?? 0;
     final padded = n.toString().padLeft(width, '0');
-    final affix = seq['rnsaffix']?.toString() ?? '';
-    return (seq['rnsmode']?.toString() ?? 'P') == 'P' ? '$affix$padded' : '$padded$affix';
+    final affix = seq['seqprefix']?.toString() ?? '';
+    return (seq['isprefix']?.toString() ?? 'Y') == 'Y' ? '$affix$padded' : '$padded$affix';
   }
 
-  /// Fill Reg No for every non-blank row sequentially from the chosen sequence.
-  void _autoNumber() {
-    if (_selectedRegSeqId == null) {
-      _snack('Pick an Admission Sequence first.', AppColors.warning);
-      return;
-    }
-    final seq = _regSeqs.firstWhere((s) => s['rns_id'].toString() == _selectedRegSeqId, orElse: () => const {});
-    if (seq.isEmpty) return;
-    var n = _seqNext(seq);
-    setState(() {
-      for (final r in _rows) {
-        if (r.isBlank) continue;
-        r.regNo.text = _seqFormat(seq, n);
-        n++;
-      }
-    });
-  }
 
   /// Fetch the most-recent admission reg no and store it for the inline label.
   Future<void> _refreshLastRegNo() async {
@@ -164,6 +203,33 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     }
   }
 
+  /// Look up an integer id for [name] in [list] (row[nameKey]==name → row[idKey]).
+  int? _idFor(List<Map<String, dynamic>> list, String nameKey, String? name, String idKey) {
+    if (name == null || name.trim().isEmpty) return null;
+    for (final m in list) {
+      if (m[nameKey]?.toString() == name) {
+        final v = m[idKey];
+        return v is int ? v : int.tryParse(v?.toString() ?? '');
+      }
+    }
+    return null;
+  }
+
+  /// Class id for [className], scoped to [courId] when the class row carries it.
+  int? _classIdFor(String? className, int? courId) {
+    if (className == null || className.trim().isEmpty) return null;
+    for (final m in _classList) {
+      if (m['claname']?.toString() != className) continue;
+      final rowCour = m['cour_id'] is int
+          ? m['cour_id'] as int
+          : int.tryParse(m['cour_id']?.toString() ?? '');
+      if (courId != null && rowCour != null && rowCour != courId) continue;
+      final v = m['cla_id'];
+      return v is int ? v : int.tryParse(v?.toString() ?? '');
+    }
+    return null;
+  }
+
   Future<void> _saveAll() async {
     final auth = context.read<AuthProvider>();
     final entries = _rows.where((r) => !r.isBlank).toList();
@@ -171,15 +237,33 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       _snack('Enter at least one row.', AppColors.warning);
       return;
     }
+    // Numbers are auto-generated from the selected sequence — but a row with a
+    // manually-typed Register No doesn't need one. Require a sequence only when
+    // at least one row is left blank for auto-numbering.
+    final needsSeq = entries.any((r) => r.regNo.text.trim().isEmpty);
+    Map<String, dynamic> seq = const {};
+    if (_selectedRegSeqId != null) {
+      seq = _regSeqs.firstWhere((s) => s['seq_id'].toString() == _selectedRegSeqId, orElse: () => const {});
+    }
+    if (needsSeq && seq.isEmpty) {
+      _snack('Select an Admission Sequence — blank Register No rows are auto-numbered on save.', AppColors.warning);
+      return;
+    }
     // validate
     final problems = <String>[];
     for (var i = 0; i < entries.length; i++) {
       final r = entries[i];
       final miss = <String>[];
-      if (r.regNo.text.trim().isEmpty) miss.add('Reg No');
+      // All columns are mandatory.
       if (r.name.text.trim().isEmpty) miss.add('Name');
-      if (r.sex == null) miss.add('Sex');
+      if (r.sex == null) miss.add('Gender');
+      if (r.course == null) miss.add('Course');
+      if (r.cls == null) miss.add('Class');
+      if (r.admType == null) miss.add('Adm Type');
+      if (r.batch.text.trim().isEmpty) miss.add('Batch');
       if (r.dob == null) miss.add('Birth Date');
+      if (r.fatherName.text.trim().isEmpty) miss.add('Father Name');
+      if (r.fatherMobile.text.trim().isEmpty) miss.add('Father Mobile');
       if (miss.isNotEmpty) problems.add('Row ${_rows.indexOf(r) + 1}: ${miss.join(', ')}');
     }
     if (problems.isNotEmpty) {
@@ -189,16 +273,18 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
 
     setState(() => _saving = true);
     int done = 0;
-    int maxSeqNum = 0;
+    var seqN = seq.isEmpty ? 0 : _seqNext(seq); // running admission number, advanced per saved row
     final failures = <String>[];
     for (final r in entries) {
       try {
-        await AdmissionService.addAdmission({
+        // Manual register no overrides the auto sequence when entered.
+        final manualRegNo = r.regNo.text.trim();
+        final admno = manualRegNo.isNotEmpty ? manualRegNo : _seqFormat(seq, seqN);
+        final admId = await AdmissionService.addAdmission({
           'ins_id': auth.insId ?? 1,
           'inscode': auth.inscode ?? '',
-          'yr_id': int.tryParse(_selectedYrId ?? '0') ?? 0,
-          'yrlabel': _selectedYrLabel ?? '',
-          'admno': r.regNo.text.trim(),
+          // yr_id/yrlabel removed from public.admission (year derived at allocation).
+          'admno': admno,
           'admdate': r.admDate.toIso8601String().split('T').first,
           'admsource': 'WALK-IN',
           'stuname': r.name.text.trim(),
@@ -207,24 +293,47 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           'courname': r.course,
           'stuclass': r.cls,
           'admname': r.admType,
+          // Entity IDs resolved from the selected masters (quota/medium not in this form).
+          'cour_id': _idFor(_courseList, 'courname', r.course, 'cour_id'),
+          'admit_cour_id': _idFor(_courseList, 'courname', r.course, 'cour_id'),
+          'cla_id': _classIdFor(r.cls, _idFor(_courseList, 'courname', r.course, 'cour_id')),
+          'admtype_id': _idFor(_admTypes, 'admname', r.admType, 'adm_id'),
           'batch': r.batch.text.trim().isEmpty ? null : r.batch.text.trim(),
-          'admittyear': r.admYear.text.trim().isEmpty ? null : r.admYear.text.trim(),
+          // Admitted year defaults to the current academic year label.
+          'admittyear': _selectedYrLabel,
+          // Father details — also auto-fill the Pay In Charge fields.
+          'fathername': r.fatherName.text.trim().isEmpty ? null : r.fatherName.text.trim(),
+          'fathermobile': r.fatherMobile.text.trim().isEmpty ? null : r.fatherMobile.text.trim(),
+          'payincharge': r.fatherName.text.trim().isEmpty ? null : r.fatherName.text.trim(),
+          'payinchargemob': r.fatherMobile.text.trim().isEmpty ? null : r.fatherMobile.text.trim(),
           'createdby': auth.userName,
         });
+        // Class selected → move straight to students (skip Class Allocation).
+        // No class → leave the admission pending for allocation later.
+        if (r.cls != null && r.cls!.trim().isNotEmpty) {
+          try {
+            await AdmissionService.allocateClass(
+              admId: admId,
+              className: r.cls!.trim(),
+              stuadmno: admno,
+              allocatedBy: auth.userName,
+            );
+          } catch (_) {
+            // Admission is saved; allocation can be retried from Class Allocation.
+          }
+        }
+        if (manualRegNo.isEmpty) seqN++; // advance sequence only when it was used
         done++;
       } catch (e) {
-        failures.add('${r.regNo.text.trim()} ${r.name.text.trim()}: ${friendlyError(e)}');
+        failures.add('${r.name.text.trim()}: ${friendlyError(e)}');
       }
     }
-    // bump the register sequence by the number of rows numbered from it
-    if (_selectedRegSeqId != null) {
-      final seq = _regSeqs.firstWhere((s) => s['rns_id'].toString() == _selectedRegSeqId, orElse: () => const {});
-      if (seq.isNotEmpty) {
-        maxSeqNum = _seqNext(seq) + done - 1;
-        try {
-          await AdmissionService.bumpRegSeqCurrent(int.parse(_selectedRegSeqId!), maxSeqNum);
-        } catch (_) {}
-      }
+    // bump the register sequence to the last number actually assigned (only if
+    // auto-numbering was used — all-manual saves don't touch the sequence).
+    if (done > 0 && needsSeq && seq.isNotEmpty) {
+      try {
+        await AdmissionService.bumpRegSeqCurrent(int.parse(seq['seq_id'].toString()), seqN - 1);
+      } catch (_) {}
     }
     if (!mounted) return;
     setState(() => _saving = false);
@@ -238,9 +347,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       }
       setState(() {
         _rows.clear();
-        for (var i = 0; i < 8; i++) {
-          _rows.add(_FastRow());
-        }
+        _rows.add(_FastRow());
         _selectedRegSeqId = null;
       });
       _load();
@@ -271,8 +378,10 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   }
 
   // ── columns ───────────────────────────────────────────────────────
-  static const _wReg = 130.0, _wName = 190.0, _wSex = 80.0, _wCourse = 150.0,
-      _wClass = 120.0, _wType = 130.0, _wBatch = 80.0, _wDob = 115.0, _wAdm = 115.0, _wYear = 90.0, _wDel = 44.0;
+  // All entry columns share one width so the grid reads as uniform cells.
+  static const _wCol = 130.0;
+  static const _wRegNo = _wCol, _wName = _wCol, _wSex = _wCol, _wCourse = _wCol,
+      _wClass = _wCol, _wType = _wCol, _wBatch = _wCol, _wDob = _wCol, _wFather = _wCol, _wFmob = _wCol;
 
   // Page shell per admission-design.md § 1: outer white card with padding,
   // inner bordered table card matches Section Allocation pattern.
@@ -306,30 +415,42 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                       child: _loading
                           ? const Center(child: CircularProgressIndicator())
                           : LayoutBuilder(builder: (ctx, constraints) {
-                              // Scale columns so they fill the inner card
-                              // when viewport is wider than the base width;
-                              // otherwise keep base sizes (allow H scroll).
-                              const baseSum = _wReg + _wName + _wSex + _wCourse + _wClass + _wType + _wBatch + _wDob + _wAdm + _wYear + _wDel + 32;
+                              // Fit all columns to the viewport: scale down so
+                              // every column is visible (no cut-off). Only when
+                              // the screen is very narrow do we stop shrinking
+                              // and allow horizontal scroll (with a visible bar).
+                              const baseSum = _wRegNo + _wName + _wSex + _wCourse + _wClass + _wType + _wBatch + _wDob + _wFather + _wFmob + 32;
                               final viewport = constraints.maxWidth;
-                              final scale = viewport > baseSum ? viewport / baseSum : 1.0;
-                              final tableW = scale > 1 ? viewport : baseSum;
-                              return SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                physics: scale > 1 ? const NeverScrollableScrollPhysics() : null,
-                                child: SizedBox(
-                                  width: tableW,
-                                  child: Column(
-                                    children: [
-                                      _tableHeader(scale),
-                                      Expanded(
-                                        child: FocusTraversalGroup(
-                                          child: ListView.builder(
-                                            itemCount: _rows.length,
-                                            itemBuilder: (_, i) => _rowWidget(i, scale),
+                              final ratio = viewport / baseSum;
+                              final scale = ratio < 0.7 ? 0.7 : ratio;
+                              final tableW = scale * baseSum < viewport ? viewport : scale * baseSum;
+                              return Scrollbar(
+                                controller: _hScroll,
+                                thumbVisibility: tableW > viewport,
+                                child: SingleChildScrollView(
+                                  controller: _hScroll,
+                                  scrollDirection: Axis.horizontal,
+                                  physics: tableW <= viewport ? const NeverScrollableScrollPhysics() : null,
+                                  child: SizedBox(
+                                    width: tableW,
+                                    child: Column(
+                                      children: [
+                                        _tableHeader(scale),
+                                        Expanded(
+                                          child: Scrollbar(
+                                            controller: _vScroll,
+                                            thumbVisibility: true,
+                                            child: FocusTraversalGroup(
+                                              child: ListView.builder(
+                                                controller: _vScroll,
+                                                itemCount: _rows.length,
+                                                itemBuilder: (_, i) => _rowWidget(i, scale),
+                                              ),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               );
@@ -366,32 +487,13 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           SizedBox(width: 10.w),
           _lastRegNoChip(),
           SizedBox(width: 10.w),
-          // Sized to match the Import CSV/Excel button used elsewhere in the
-          // project (compact / expanded responsive).
-          Builder(builder: (context) {
-            final compact = MediaQuery.of(context).size.width <= 1366;
-            final btnHeight = compact ? 30.0 : 40.0;
-            final iconSize = compact ? 12.0 : 16.0;
-            final hPad = compact ? 10.0 : 18.0;
-            final radius = compact ? 6.0 : 10.0;
-            final textSize = compact ? 11.0 : 13.0;
-            return SizedBox(
-              height: btnHeight,
-              child: ElevatedButton.icon(
-                onPressed: _autoNumber,
-                icon: Icon(Icons.format_list_numbered, size: iconSize, color: Colors.white),
-                label: const Text('Fill Admission Nos'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: EdgeInsets.symmetric(horizontal: hPad),
-                  textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-                ),
-              ),
-            );
-          }),
+          OutlinedButton.icon(
+            onPressed: _loading ? null : _load,
+            icon: _loading
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const AppIcon('refresh', size: 16, color: AppColors.primary),
+            label: const Text('Refresh'),
+          ),
         ],
       ),
     );
@@ -408,10 +510,10 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         decoration: _topBarDec(filled: _selectedRegSeqId != null),
         hint: Text('Select Sequence', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
         items: _regSeqs.map((s) => DropdownMenuItem(
-              value: s['rns_id'].toString(),
-              child: Text(s['rnsname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+              value: s['seq_id'].toString(),
+              child: Text(s['seqname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
             )).toList(),
-        selectedItemBuilder: (context) => _regSeqs.map((s) => Align(alignment: Alignment.centerLeft, child: Text(s['rnsname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+        selectedItemBuilder: (context) => _regSeqs.map((s) => Align(alignment: Alignment.centerLeft, child: Text(s['seqname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
         onChanged: (v) => setState(() => _selectedRegSeqId = v),
       );
 
@@ -478,9 +580,9 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
       child: Row(
         children: [
-          c('ADMISSION NO', _wReg), c('STUDENT NAME', _wName), c('SEX', _wSex), c('COURSE', _wCourse),
+          c('REGISTER NO', _wRegNo), c('STUDENT NAME', _wName), c('GENDER', _wSex), c('COURSE', _wCourse),
           c('CLASS', _wClass), c('ADM TYPE', _wType), c('BATCH', _wBatch), c('BIRTH DATE', _wDob),
-          c('JOIN DATE', _wAdm), c('ADM YEAR', _wYear), c('', _wDel),
+          c('FATHER NAME', _wFather), c('FATHER MOBILE', _wFmob),
         ],
       ),
     );
@@ -495,26 +597,23 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         color: i.isEven ? Colors.white : AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.4))),
       ),
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 7.h),
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 13.h),
       child: Row(
         children: [
-          _cell(w(_wReg), _textCell(r.regNo)),
+          _cell(w(_wRegNo), _textCell(r.regNo, hint: 'Reg No')),
           _cell(w(_wName), _textCell(r.name)),
-          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.key)).toList(), (v) => setState(() => r.sex = v), hint: 'Select sex')),
-          _cell(w(_wCourse), _dropCell(r.course, _courses.map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.course = v), hint: 'Select course')),
-          _cell(w(_wClass), _dropCell(r.cls, _classes.map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: 'Select class')),
+          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.key)).toList(), (v) => setState(() => r.sex = v), hint: 'Select gender')),
+          _cell(w(_wCourse), _dropCell(r.course, _courses.map((e) => MapEntry(e, e)).toList(), (v) => setState(() {
+            r.course = v;
+            // Drop a class that no longer belongs to the newly chosen course.
+            if (r.cls != null && !_classNamesFor(v).contains(r.cls)) r.cls = null;
+          }), hint: 'Select course')),
+          _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: 'Select class')),
           _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select type')),
           _cell(w(_wBatch), _textCell(r.batch)),
           _cell(w(_wDob), _dateCell(r.dob, (d) => setState(() => r.dob = d))),
-          _cell(w(_wAdm), _dateCell(r.admDate, (d) => setState(() => r.admDate = d))),
-          _cell(w(_wYear), _textCell(r.admYear)),
-          _cell(w(_wDel), Center(
-            child: InkWell(
-              onTap: () => _removeRow(i),
-              borderRadius: BorderRadius.circular(6.r),
-              child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 15, color: AppColors.error)),
-            ),
-          )),
+          _cell(w(_wFather), _textCell(r.fatherName)),
+          _cell(w(_wFmob), _textCell(r.fatherMobile)),
         ],
       ),
       ),
@@ -527,7 +626,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     final idle = filled ? AppColors.accent : AppColors.border;
     return InputDecoration(
         isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+        contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 16.h),
         filled: true,
         fillColor: Colors.white,
         hintText: hint,
@@ -538,12 +637,12 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       );
   }
 
-  Widget _textCell(TextEditingController c) {
+  Widget _textCell(TextEditingController c, {String? hint}) {
     final filled = c.text.trim().isNotEmpty;
     return TextField(
         controller: c,
         style: TextStyle(fontSize: 11.sp, color: filled ? AppColors.accent : AppColors.textPrimary, fontWeight: filled ? FontWeight.w600 : null),
-        decoration: _cellDec(filled: filled),
+        decoration: _cellDec(filled: filled, hint: hint),
         onChanged: (_) => setState(() {}),
       );
   }

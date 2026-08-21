@@ -36,10 +36,10 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
   // Order matches the spec's primary trio first, then the project-specific
   // extras (Admission Type / Quota).
   static const _tabLabels = [
-    'Community', 'Admission No', 'Concession', 'Admission Type', 'Quota',
+    'Admission Type', 'Quota', 'Community', 'Concession', 'Division', 'Admission No',
   ];
   static const _tabIcons = [
-    'people', 'tag', 'discount-shape', 'user-tick', 'ticket',
+    'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'tag',
   ];
 
   @override
@@ -90,11 +90,12 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
           child: TabBarView(
             controller: _tabController,
             children: const [
-              MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community', icon: 'people', countLabel: 'communities'),
-              _RegNoPanel(),
-              MasterCrudPanel(table: 'concessioncategory', idCol: 'con_id', nameCol: 'condesc', title: 'Concession', icon: 'discount-shape', countLabel: 'concessions', importTabIndex: 6, includeCreatedBy: false),
               MasterCrudPanel(table: 'admissiontype', idCol: 'adm_id', nameCol: 'admname', title: 'Admission Type', icon: 'user-tick', countLabel: 'types', importTabIndex: 0),
               MasterCrudPanel(table: 'quota', idCol: 'quo_id', nameCol: 'quoname', title: 'Quota', icon: 'ticket', countLabel: 'quotas', importTabIndex: 1),
+              MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community', icon: 'people', countLabel: 'communities', importTabIndex: 9),
+              MasterCrudPanel(table: 'concessioncategory', idCol: 'con_id', nameCol: 'condesc', title: 'Concession', icon: 'discount-shape', countLabel: 'concessions', importTabIndex: 6, includeCreatedBy: false),
+              MasterCrudPanel(table: 'division', idCol: 'div_id', nameCol: 'divname', title: 'Division', icon: 'diagram', countLabel: 'divisions'),
+              _RegNoPanel(),
             ],
           ),
         ),
@@ -117,7 +118,9 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   final _start = TextEditingController();
   final _end = TextEditingController();
   final _width = TextEditingController();
-  final _division = TextEditingController();
+  // Division is chosen from the Division master (dropdown), not free text.
+  String? _divisionVal;
+  List<Map<String, dynamic>> _divisionRows = [];
   String? _mode; // null = not chosen (shows 'Select mode' placeholder)
   List<Map<String, dynamic>> _rows = [];
   bool _loading = true;
@@ -134,7 +137,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
 
   @override
   void dispose() {
-    for (final c in [_name, _affix, _start, _end, _width, _division]) {
+    for (final c in [_name, _affix, _start, _end, _width]) {
       c.dispose();
     }
     super.dispose();
@@ -142,10 +145,17 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final rows = await AdmissionService.getMasterRows('regnoseq', 'rns_id');
+    final rows = await AdmissionService.getRegSequences();
+    // Division options come from the Division master. Guard so a missing
+    // division table (migration not yet run) doesn't break the sequence list.
+    List<Map<String, dynamic>> divs = [];
+    try {
+      divs = await AdmissionService.getMasterRows('division', 'div_id');
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _rows = rows;
+      _divisionRows = divs;
       _loading = false;
     });
   }
@@ -163,28 +173,40 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
     final auth = context.read<AuthProvider>();
     setState(() => _saving = true);
     try {
-      final id = await AdmissionService.nextMasterId('regnoseq', 'rns_id');
-      await AdmissionService.addMasterRow('regnoseq', {
-        'rns_id': id,
-        'rnsname': name,
-        'rnsmode': _mode == 'Prefix' ? 'P' : 'S',
-        'rnsaffix': _affix.text.trim().isEmpty ? null : _affix.text.trim(),
-        'rnsstart': _start.text.trim().isEmpty ? 1 : int.tryParse(_start.text.trim()),
-        'rnsend': _end.text.trim().isEmpty ? null : int.tryParse(_end.text.trim()),
-        'rnswidth': _width.text.trim().isEmpty ? 4 : int.tryParse(_width.text.trim()),
-        'rnscurrent': 0,
-        'division': _division.text.trim().isEmpty ? null : _division.text.trim(),
+      // Register sequences live in the shared `sequence` table (actname='REGNO',
+      // fg_id NULL). seq_id is auto-generated; yr_id/yrlabel are NOT NULL there.
+      final year = await AdmissionService.getActiveYear(auth.insId ?? 0);
+      final yrLabel = (year['yrlabel'] as String).isEmpty ? (auth.yearLabel ?? '') : year['yrlabel'] as String;
+      final affix = _affix.text.trim();
+      final width = _width.text.trim().isEmpty ? 4 : (int.tryParse(_width.text.trim()) ?? 4);
+      final start = _start.text.trim().isEmpty ? 1 : (int.tryParse(_start.text.trim()) ?? 1);
+      await AdmissionService.addRegSequence({
         'ins_id': auth.insId,
+        'mod_id': 0,
+        'yr_id': year['yr_id'],
+        'yrlabel': yrLabel,
+        'actname': 'REGNO',
+        'seqname': name,
+        'isprefix': _mode == 'Prefix' ? 'Y' : 'N',
+        'seqprefix': affix, // NOT NULL — empty string when no affix
+        'seqstart': start,
+        'seqwidth': width,
+        'sequid': affix.isEmpty ? 'REG' : affix,
+        'seqcurno': 0,
+        'seqend': _end.text.trim().isEmpty ? null : int.tryParse(_end.text.trim()),
+        'division': _divisionVal,
         'activestatus': 1,
-        'createdby': auth.userName,
       });
-      for (final c in [_name, _affix, _division]) {
+      for (final c in [_name, _affix]) {
         c.clear();
       }
       _start.clear();
       _width.clear();
       _end.clear();
-      setState(() => _mode = null);
+      setState(() {
+        _mode = null;
+        _divisionVal = null;
+      });
       _snack('Register sequence added.', AppColors.success);
       await _load();
     } catch (e) {
@@ -209,7 +231,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
     );
     if (ok != true) return;
     try {
-      await AdmissionService.deleteMasterRow('regnoseq', 'rns_id', id);
+      await AdmissionService.deleteRegSequence(id);
       _snack('Removed.', AppColors.success);
       await _load();
     } catch (e) {
@@ -362,13 +384,40 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
           SizedBox(height: 16.h),
           _lbl('Division'),
           SizedBox(height: 6.h),
-          TextField(
-            controller: _division,
-            style: _fieldTextStyle().copyWith(color: _division.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
-            maxLines: 2,
-            decoration: _filledFieldDec('Division description', filled: _division.text.trim().isNotEmpty),
-            onChanged: (_) => setState(() {}),
-          ),
+          Builder(builder: (context) {
+            final names = _divisionRows
+                .map((d) => (d['divname'] ?? '').toString())
+                .where((s) => s.isNotEmpty)
+                .toList();
+            // Guard against a stale selection not present in the current options.
+            final value = names.contains(_divisionVal) ? _divisionVal : null;
+            return DropdownButtonFormField<String>(
+              initialValue: value,
+              isExpanded: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              elevation: 6,
+              icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+              style: _fieldTextStyle(),
+              decoration: _filledFieldDec(
+                names.isEmpty ? 'No divisions — add in Division tab' : 'Select division',
+                filled: value != null,
+              ),
+              items: names
+                  .map((name) => DropdownMenuItem(
+                        value: name,
+                        child: Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                      ))
+                  .toList(),
+              selectedItemBuilder: (context) => names
+                  .map((name) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(name, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                      ))
+                  .toList(),
+              onChanged: (v) => setState(() => _divisionVal = v),
+            );
+          }),
           SizedBox(height: 18.h),
           SizedBox(
             width: double.infinity,
@@ -432,6 +481,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                     child: Row(
                       children: [
                         Expanded(flex: 3, child: Text('NAME', style: _hStyle())),
+                        Expanded(flex: 2, child: Text('DIVISION', style: _hStyle())),
                         SizedBox(width: 64.w, child: Text('PRE/SUF', style: _hStyle())),
                         SizedBox(width: 64.w, child: Text('AFFIX', style: _hStyle())),
                         SizedBox(width: 56.w, child: Text('START', style: _hStyle())),
@@ -451,20 +501,21 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                                 separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
                                 itemBuilder: (_, i) {
                                   final r = _rows[i];
-                                  final id = r['rns_id'] is int ? r['rns_id'] as int : int.tryParse(r['rns_id'].toString()) ?? 0;
-                                  final name = r['rnsname']?.toString() ?? '';
-                                  final mode = (r['rnsmode']?.toString() ?? 'P') == 'P' ? 'Prefix' : 'Suffix';
+                                  final id = r['seq_id'] is int ? r['seq_id'] as int : int.tryParse(r['seq_id'].toString()) ?? 0;
+                                  final name = r['seqname']?.toString() ?? '';
+                                  final mode = (r['isprefix']?.toString() ?? 'Y') == 'Y' ? 'Prefix' : 'Suffix';
                                   return Container(
                                     color: i.isEven ? Colors.white : AppColors.surface,
                                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 9.h),
                                     child: Row(
                                       children: [
                                         Expanded(flex: 3, child: Text(name, style: _cStyle())),
+                                        Expanded(flex: 2, child: Text(r['division']?.toString() ?? '-', style: _cStyle(), overflow: TextOverflow.ellipsis)),
                                         SizedBox(width: 64.w, child: Text(mode, style: _cStyle())),
-                                        SizedBox(width: 64.w, child: Text(r['rnsaffix']?.toString() ?? '-', style: _cStyle())),
-                                        SizedBox(width: 56.w, child: Text(r['rnsstart']?.toString() ?? '-', style: _cStyle())),
-                                        SizedBox(width: 56.w, child: Text(r['rnsend']?.toString() ?? '-', style: _cStyle())),
-                                        SizedBox(width: 36.w, child: Text(r['rnswidth']?.toString() ?? '-', style: _cStyle())),
+                                        SizedBox(width: 64.w, child: Text((r['seqprefix']?.toString().isEmpty ?? true) ? '-' : r['seqprefix'].toString(), style: _cStyle())),
+                                        SizedBox(width: 56.w, child: Text(r['seqstart']?.toString() ?? '-', style: _cStyle())),
+                                        SizedBox(width: 56.w, child: Text(r['seqend']?.toString() ?? '-', style: _cStyle())),
+                                        SizedBox(width: 36.w, child: Text(r['seqwidth']?.toString() ?? '-', style: _cStyle())),
                                         SizedBox(
                                           width: 44.w,
                                           child: Center(

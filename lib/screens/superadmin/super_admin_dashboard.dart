@@ -250,6 +250,63 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     return '$dd/$mo/${d.year}  ${h12.toString().padLeft(2, '0')}:$mm $ampm';
   }
 
+  /// Resolve each institution's CURRENT-year schema (the year whose date range
+  /// contains today, else the latest active year) in just TWO batched queries
+  /// for ALL institutions — instead of two lookups PER institution. Returns
+  /// insId -> schema name.
+  Future<Map<int, String>> _resolveCurrentSchemas(
+      List<_InstitutionFinanceSummary> summaries) async {
+    final result = <int, String>{};
+    final ids = summaries.map((s) => s.insId).toList();
+    if (ids.isEmpty) return result;
+    final now = DateTime.now();
+    try {
+      final insRows = await SupabaseService.client
+          .from('institution')
+          .select('ins_id, inshortname')
+          .inFilter('ins_id', ids);
+      final shortById = <int, String>{};
+      for (final r in (insRows as List)) {
+        final id = (r['ins_id'] as num?)?.toInt();
+        final sn = (r['inshortname'] as String?)?.toLowerCase();
+        if (id != null && sn != null) shortById[id] = sn;
+      }
+      final yearRows = await SupabaseService.client
+          .from('institutionyear')
+          .select('ins_id, yrlabel, iyrstadate, iyrenddate')
+          .inFilter('ins_id', ids)
+          .eq('activestatus', 1)
+          .order('iyr_id', ascending: false);
+      final yearsById = <int, List<Map<String, dynamic>>>{};
+      for (final r in List<Map<String, dynamic>>.from(yearRows as List)) {
+        final id = (r['ins_id'] as num?)?.toInt();
+        if (id == null) continue;
+        yearsById.putIfAbsent(id, () => []).add(r);
+      }
+      for (final s in summaries) {
+        final sn = shortById[s.insId];
+        final years = yearsById[s.insId];
+        if (sn == null || years == null || years.isEmpty) continue;
+        String? yearLabel;
+        for (final y in years) {
+          final start = DateTime.tryParse(y['iyrstadate']?.toString() ?? '');
+          final end = DateTime.tryParse(y['iyrenddate']?.toString() ?? '');
+          if (start != null && end != null &&
+              !now.isBefore(start) && !now.isAfter(end)) {
+            yearLabel = y['yrlabel']?.toString();
+            break;
+          }
+        }
+        yearLabel ??= years.first['yrlabel']?.toString();
+        if (yearLabel == null) continue;
+        result[s.insId] = '$sn${yearLabel.replaceAll('-', '')}';
+      }
+    } catch (e) {
+      debugPrint('schema resolve error: $e');
+    }
+    return result;
+  }
+
   Future<void> _loadTodayCollections(
       List<_InstitutionFinanceSummary> summaries) async {
     // Try the v2 RPC first — single round-trip aggregation for everything.
@@ -267,15 +324,26 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             byId[r['ins_id'] as int] = Map<String, dynamic>.from(r);
           }
         }
+        bool haveToday = false;
         for (final s in summaries) {
           final r = byId[s.insId];
           if (r == null) continue;
-          s.totalPending = (r['total_pending'] as num?)?.toDouble() ?? s.totalPending;
-          s.totalCollected = (r['total_collected'] as num?)?.toDouble() ?? s.totalCollected;
+          // total_collected / total_pending are already correct from
+          // get_super_admin_dashboard (SUM paidamount / SUM reconbalancedue,
+          // matching the institution-admin cards). v2's versions drift to 0 (it
+          // counts only recon_status='R' payments), so DON'T override them here —
+          // take only pending_approval, which v2 uniquely provides.
           s.pendingApproval = (r['pending_approval'] as num?)?.toDouble() ?? 0;
+          // today_collected is computed server-side (v2 is SECURITY DEFINER) so
+          // it works for the superadmin, which runs as anon and CANNOT read the
+          // tenant payment table directly. Older v2 (no column) → fall back.
+          if (r['today_collected'] != null) {
+            s.todayCollected = (r['today_collected'] as num?)?.toDouble() ?? 0;
+            haveToday = true;
+          }
         }
         if (mounted) setState(() {});
-        await _loadTodayOnly(summaries);
+        if (!haveToday) await _loadTodayOnly(summaries);
         return;
       }
     } catch (e) {
@@ -285,62 +353,44 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final now = DateTime.now();
     final todayStr =
         '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    // paydate is a TIMESTAMP, so match the whole day with a [today, tomorrow)
+    // range — `.eq(paydate, dateStr)` only matched rows stamped at midnight and
+    // so returned 0 for real (timestamped) collections.
+    final tomorrow = DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    final tomorrowStr =
+        '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+    // Resolve every institution's schema up front in 2 batched queries instead
+    // of 2 lookups per institution inside the loop below.
+    final schemas = await _resolveCurrentSchemas(summaries);
     await Future.wait(summaries.map((s) async {
+      final schema = schemas[s.insId];
+      if (schema == null) return;
       try {
-        final insRow = await SupabaseService.client
-            .from('institution')
-            .select('inshortname')
-            .eq('ins_id', s.insId)
-            .maybeSingle();
-        final shortName = (insRow?['inshortname'] as String?)?.toLowerCase();
-        if (shortName == null) return;
-
-        final yearRows = await SupabaseService.client
-            .from('institutionyear')
-            .select('yrlabel, iyrstadate, iyrenddate')
-            .eq('ins_id', s.insId)
-            .eq('activestatus', 1)
-            .order('iyr_id', ascending: false);
-        final years = List<Map<String, dynamic>>.from(yearRows as List);
-        if (years.isEmpty) return;
-
-        String? yearLabel;
-        for (final y in years) {
-          final start = DateTime.tryParse(y['iyrstadate']?.toString() ?? '');
-          final end = DateTime.tryParse(y['iyrenddate']?.toString() ?? '');
-          if (start != null &&
-              end != null &&
-              !now.isBefore(start) &&
-              !now.isAfter(end)) {
-            yearLabel = y['yrlabel']?.toString();
-            break;
-          }
-        }
-        yearLabel ??= years.first['yrlabel']?.toString();
-        if (yearLabel == null) return;
-
-        final schema = '$shortName${yearLabel.replaceAll('-', '')}';
         final rows = await SupabaseService.client
             .schema(schema)
             .from('payment')
             .select('transtotalamount')
-            .eq('paydate', todayStr)
+            .eq('paystatus', 'C')
+            .eq('recon_status', 'R')
+            .gte('paydate', todayStr)
+            .lt('paydate', tomorrowStr)
             .eq('activestatus', 1);
-        final total = (rows as List).fold<double>(
+        s.todayCollected = (rows as List).fold<double>(
             0,
             (sum, r) =>
                 sum + ((r['transtotalamount'] as num?)?.toDouble() ?? 0));
-        s.todayCollected = total;
 
         // Pending Approval = sum of paymentdetails (per-fee allocation)
         // for payments awaiting reconciliation, excluding any FINE rows.
-        final pendingPays = await SupabaseService.client
+        // Paged: institution-wide, so past PostgREST's 1000-row cap.
+        final pendingPays = await SupabaseService.fetchAll(() => SupabaseService
+            .client
             .schema(schema)
             .from('payment')
             .select('pay_id')
             .eq('paystatus', 'C')
             .eq('recon_status', 'P')
-            .eq('activestatus', 1);
+            .eq('activestatus', 1));
         final pendingPayIds = (pendingPays as List)
             .map((r) => r['pay_id'])
             .whereType<int>()
@@ -349,11 +399,12 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         for (int i = 0; i < pendingPayIds.length; i += 200) {
           final chunk = pendingPayIds.sublist(
               i, (i + 200).clamp(0, pendingPayIds.length));
-          final pd = await SupabaseService.client
+          // Paged: a chunk of receipts has many lines each.
+          final pd = await SupabaseService.fetchAll(() => SupabaseService.client
               .schema(schema)
               .from('paymentdetails')
               .select('dem_id, transtotalamount')
-              .inFilter('pay_id', chunk);
+              .inFilter('pay_id', chunk));
           final demIds = (pd as List)
               .map((r) => r['dem_id'])
               .whereType<int>()
@@ -401,50 +452,24 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         .add(const Duration(days: 1));
     final tomorrowStr =
         '${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}';
+    // Two batched lookups resolve all schemas; then one payment query per
+    // institution (was 3 sequential round-trips per institution before).
+    final schemas = await _resolveCurrentSchemas(summaries);
     await Future.wait(summaries.map((s) async {
+      final schema = schemas[s.insId];
+      if (schema == null) return;
       try {
-        final insRow = await SupabaseService.client
-            .from('institution')
-            .select('inshortname')
-            .eq('ins_id', s.insId)
-            .maybeSingle();
-        final shortName = (insRow?['inshortname'] as String?)?.toLowerCase();
-        if (shortName == null) return;
-        final yearRows = await SupabaseService.client
-            .from('institutionyear')
-            .select('yrlabel, iyrstadate, iyrenddate')
-            .eq('ins_id', s.insId)
-            .eq('activestatus', 1)
-            .order('iyr_id', ascending: false);
-        final years = List<Map<String, dynamic>>.from(yearRows as List);
-        if (years.isEmpty) return;
-        String? yearLabel;
-        for (final y in years) {
-          final start = DateTime.tryParse(y['iyrstadate']?.toString() ?? '');
-          final end = DateTime.tryParse(y['iyrenddate']?.toString() ?? '');
-          if (start != null &&
-              end != null &&
-              !now.isBefore(start) &&
-              !now.isAfter(end)) {
-            yearLabel = y['yrlabel']?.toString();
-            break;
-          }
-        }
-        yearLabel ??= years.first['yrlabel']?.toString();
-        if (yearLabel == null) return;
-        final schema = '$shortName${yearLabel.replaceAll('-', '')}';
         final rows = await SupabaseService.client
             .schema(schema)
             .from('payment')
             .select('transtotalamount')
             .eq('paystatus', 'C')
+            .eq('recon_status', 'R')
             .gte('paydate', todayStr)
             .lt('paydate', tomorrowStr)
             .eq('activestatus', 1);
         s.todayCollected = (rows as List).fold<double>(
-            0,
-            (sum, r) =>
-                sum + ((r['transtotalamount'] as num?)?.toDouble() ?? 0));
+            0, (sum, r) => sum + ((r['transtotalamount'] as num?)?.toDouble() ?? 0));
       } catch (e) {
         debugPrint('today-only fetch error for ${s.insName}: $e');
       }
@@ -713,7 +738,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final hPad = collapsed ? 12.0 : 14.0;
 
     return Container(
-      color: AppColors.surfaceSidebar,
+      decoration: const BoxDecoration(
+        // Dark navy sidebar — light foreground on it.
+        color: AppColors.sidebarBg,
+        border: Border(right: BorderSide(color: AppColors.sidebarBorder, width: 1)),
+      ),
       child: Column(
         children: [
           Container(
@@ -723,19 +752,24 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             ),
             child: Row(
               children: [
-                // Larger transparent tile so the E-mark detail is readable
-                // — the previous 36×36 with tinted backdrop dimmed the
-                // navy mark against the navy backdrop.
-                SizedBox(
-                  width: 56,
-                  height: 56,
-                  child: Image.asset(
-                    'assets/images/educore360_logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const AppIcon(
-                      'teacher',
-                      color: AppColors.primary,
-                      size: 18,
+                // White plate behind the logo (same treatment as Login /
+                // Welcome). The mark is dark navy on a transparent PNG, so
+                // without this it sinks into the navy sidebar.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    color: Colors.white,
+                    padding: const EdgeInsets.all(5),
+                    child: Image.asset(
+                      'assets/images/educore360_logo.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const AppIcon(
+                        'teacher',
+                        color: AppColors.primary,
+                        size: 18,
+                      ),
                     ),
                   ),
                 ),
@@ -745,7 +779,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     'EduCore 360',
                     style: TextStyle(
                       fontSize: 17,
-                      color: AppColors.textPrimary,
+                      color: AppColors.sidebarText,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -813,7 +847,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
 
     const selectedBg = AppColors.primary;
     const selectedFg = AppColors.textOnPrimary;
-    const unselectedFg = AppColors.textSecondary;
+    // Navy sidebar — light foreground reads cleanest on it.
+    const unselectedFg = AppColors.sidebarText;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -923,7 +958,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isDesktop ? (MediaQuery.of(context).size.width < 1100 ? 12 : MediaQuery.of(context).size.width < 1400 ? 16 : 24) : 16,
-        vertical: 10,
+        // Matches the admin dashboard header height (dashboard_screen.dart).
+        vertical: 18,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1676,17 +1712,20 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppColors.surface,
+                // Light tinted cell, matching the trust-level summary cards.
+                color: color.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: color.withValues(alpha: 0.28)),
               ),
               child: Row(
                 children: [
                   Container(
                     padding: const EdgeInsets.all(7),
                     decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.12),
+                      // Solid white chip so the icon separates from the tint.
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: color.withValues(alpha: 0.22)),
                     ),
                     child: AppIcon(icon, color: color, size: 14),
                   ),
@@ -1723,30 +1762,32 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         spacing: 10,
         runSpacing: 10,
         children: [
+          // Four distinct hues, matching the app-wide language:
+          // violet = demand, green = collected, teal = today, amber = pending.
           cell(
             icon: 'wallet-1',
-            color: AppColors.accent,
+            color: AppColors.demand,
             value: _formatAmount(s.totalDemand),
             label: 'Total Demand',
             onTap: () => _showCourseWiseDemand(context, s),
           ),
           cell(
             icon: 'tick-circle',
-            color: AppColors.accent,
+            color: AppColors.success,
             value: _formatAmount(s.totalCollected),
             label: 'Total Collection',
             onTap: () => _showCourseWiseCollection(context, s),
           ),
           cell(
             icon: 'calendar',
-            color: AppColors.accent,
+            color: AppColors.today,
             value: _formatAmount(s.todayCollected),
             label: 'Today Collection',
             onTap: () => _showCourseWiseTodayCollection(context, s),
           ),
           cell(
             icon: 'timer',
-            color: AppColors.accent,
+            color: AppColors.warning,
             value: _formatAmount(s.totalPending),
             label: 'Total Pending',
             onTap: () => _showCourseWisePending(context, s),
@@ -1771,13 +1812,15 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       final cols = w < 600 ? 2 : 4;
       final cardWidth = (w - gap * (cols - 1)) / cols;
       final cards = <Widget>[
-        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.accent, _formatAmount(totalDemand), 'Total Demand',
+        // Same four hues as the per-institution cells below, so a figure keeps
+        // its colour whether you read it at trust or institution level.
+        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _formatAmount(totalDemand), 'Total Demand',
             onTap: () => _showAggregateDrilldown(context, 'demand'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.accent, _formatAmount(totalCollection), 'Total Collection',
+        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _formatAmount(totalCollection), 'Total Collection',
             onTap: () => _showAggregateDrilldown(context, 'collection'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.accent, _formatAmount(totalTodayCollection), 'Today Collection',
+        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), 'Today Collection',
             onTap: () => _showAggregateDrilldown(context, 'today_collection'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.accent, _formatAmount(totalPending), 'Total Pending',
+        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _formatAmount(totalPending), 'Total Pending',
             onTap: () => _showAggregateDrilldown(context, 'pending'))),
       ];
       return Wrap(spacing: gap, runSpacing: gap, children: cards);
@@ -1790,17 +1833,21 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        // Light tinted card: a wash of the metric's own accent colour, at a low
+        // alpha so the dark value text stays well above AA contrast.
+        color: iconColor.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: iconColor.withValues(alpha: 0.28)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.1),
+              // Solid white chip so the icon separates from the tint.
+              color: Colors.white,
               borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: iconColor.withValues(alpha: 0.22)),
             ),
             child: AppIcon(icon, color: iconColor, size: 22),
           ),
@@ -1927,13 +1974,15 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             // Adaptive layout: stack vertically on mobile, 2-col on tablet,
             // single row on desktop.
             const gap = 12.0;
-            final demand = _buildFinanceTile('Total Demand', s.totalDemand, AppColors.accent,
+            // Same four hues as the trust-level cards, so a figure keeps its
+            // colour at both levels. (Collection and Today were both green.)
+            final demand = _buildFinanceTile('Total Demand', s.totalDemand, AppColors.demand,
                 icon: 'wallet-1', onTap: () => _showCourseWiseDemand(context, s));
             final collection = _buildFinanceTile('Total Collection', s.totalCollected, AppColors.success,
                 icon: 'tick-circle', onTap: () => _showCourseWiseCollection(context, s));
-            final approval = _buildFinanceTile('Today Collection', s.todayCollected, AppColors.success,
+            final approval = _buildFinanceTile('Today Collection', s.todayCollected, AppColors.today,
                 icon: 'calendar', onTap: () => _showCourseWiseTodayCollection(context, s));
-            final pending = _buildFinanceTile('Total Pending', s.totalPending, AppColors.error,
+            final pending = _buildFinanceTile('Total Pending', s.totalPending, AppColors.warning,
                 icon: 'timer', onTap: () => _showCourseWisePending(context, s));
 
             if (w < 600) {
@@ -2033,19 +2082,24 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final tile = Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        // Light tinted tile in the metric's own colour, matching the trust-level
+        // summary cards above. (This previously hardcoded AppColors.accent for
+        // the icon and ignored `color`, so every tile rendered the same blue.)
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: 0.1),
+              // Solid white chip so the icon separates from the tint.
+              color: Colors.white,
               borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: color.withValues(alpha: 0.22)),
             ),
-            child: AppIcon(icon, color: AppColors.accent, size: 22),
+            child: AppIcon(icon, color: color, size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -2322,7 +2376,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     AppColors.primary.withValues(alpha: 0.08)),
                 columns: const [
                   DataColumn(label: Text('COLLEGE')),
-                  DataColumn(label: Text('PAY NO')),
+                  DataColumn(label: Text('RECEIPT NO')),
                   DataColumn(label: Text('AMOUNT')),
                   DataColumn(label: Text('METHOD')),
                   DataColumn(label: Text('REFERENCE')),
@@ -3014,184 +3068,57 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _loadCollectionFromPayments() async {
-    final schema = await _resolveSchema();
-    if (schema == null) {
+    // Server-side grouping via SECURITY DEFINER RPC — the superadmin runs as
+    // anon and CANNOT read the tenant payment/students tables directly (that's
+    // why the direct-query version returned "No data").
+    try {
+      final rpc = await SupabaseService.client.rpc(
+        'get_superadmin_collection_by_course',
+        params: {
+          'p_ins_id': widget.summary.insId,
+          'p_from': _filterFrom != null ? _dateStr(_filterFrom!) : null,
+          'p_to': _filterTo != null ? _dateStr(_filterTo!) : null,
+        },
+      );
+      final rows = List<Map<String, dynamic>>.from((rpc as List?) ?? const []);
+      _rows = rows
+          .map((r) => {
+                'course': (r['course'] ?? 'Other').toString(),
+                'class': (r['stuclass'] ?? '').toString(),
+                'paid_students': (r['paid_students'] as num?)?.toInt() ?? 0,
+                'collection': (r['collection'] as num?)?.toDouble() ?? 0,
+              })
+          .where((r) => (r['collection'] as double) > 0)
+          .toList();
+    } catch (e) {
+      debugPrint('collection-by-course RPC error: $e');
       _rows = [];
-      return;
     }
-    var q = SupabaseService.client
-        .schema(schema)
-        .from('payment')
-        .select('stu_id, transtotalamount, paydate')
-        .eq('paystatus', 'C')
-        .eq('activestatus', 1);
-    if (_filterFrom != null) q = q.gte('paydate', _dateStr(_filterFrom!));
-    if (_filterTo != null) {
-      q = q.lt('paydate', _dateStr(_filterTo!.add(const Duration(days: 1))));
-    }
-    final payments = await q;
-    final paymentList = List<Map<String, dynamic>>.from(payments as List);
-    final stuIds = paymentList
-        .map((p) => p['stu_id'])
-        .where((id) => id != null)
-        .toSet()
-        .toList();
-    if (stuIds.isEmpty) {
-      _rows = [];
-      return;
-    }
-    final students = await SupabaseService.client
-        .schema(schema)
-        .from('students')
-        .select('stu_id, stuclass, courname')
-        .inFilter('stu_id', stuIds);
-    final stuMap = <int, Map<String, dynamic>>{};
-    for (final s in (students as List)) {
-      final id = s['stu_id'];
-      if (id is int) stuMap[id] = Map<String, dynamic>.from(s as Map);
-    }
-
-    final groups = <String, Map<String, dynamic>>{};
-    for (final p in paymentList) {
-      final stuId = p['stu_id'];
-      final s = stuMap[stuId is int ? stuId : int.tryParse('$stuId')];
-      final course = (s?['courname'] ?? 'Other').toString();
-      final cls = (s?['stuclass'] ?? '').toString();
-      final key = '$course|$cls';
-      final amt = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
-      final g = groups.putIfAbsent(
-          key,
-          () => {
-                'course': course,
-                'class': cls,
-                'collection': 0.0,
-                '_stu_ids': <dynamic>{},
-              });
-      g['collection'] = (g['collection'] as double) + amt;
-      (g['_stu_ids'] as Set).add(stuId);
-    }
-
-    final result = groups.values.map((g) {
-      final paid = (g['_stu_ids'] as Set).length;
-      g.remove('_stu_ids');
-      g['paid_students'] = paid;
-      return g;
-    }).toList()
-      ..sort(
-          (a, b) => (a['course'] as String).compareTo(b['course'] as String));
-    _rows = result
-        .where((r) => ((r['collection'] as num?)?.toDouble() ?? 0) > 0)
-        .toList();
   }
 
   Future<void> _loadApprovalFromPayments() async {
-    final schema = await _resolveSchema();
-    if (schema == null) {
-      _rows = [];
-      return;
-    }
-    final payments = await SupabaseService.client
-        .schema(schema)
-        .from('payment')
-        .select('pay_id, stu_id, transtotalamount')
-        .eq('paystatus', 'C')
-        .eq('recon_status', 'P')
-        .eq('activestatus', 1);
-    final paymentList = List<Map<String, dynamic>>.from(payments as List);
-    if (paymentList.isEmpty) {
-      _rows = [];
-      return;
-    }
-    final payIds = paymentList
-        .map((p) => p['pay_id'])
-        .whereType<int>()
-        .toList();
-    final demFineByPay = <int, double>{};
-    for (int i = 0; i < payIds.length; i += 200) {
-      final chunk = payIds.sublist(i, (i + 200).clamp(0, payIds.length));
-      final pd = await SupabaseService.client
-          .schema(schema)
-          .from('paymentdetails')
-          .select('pay_id, dem_id')
-          .inFilter('pay_id', chunk);
-      final demIds = (pd as List)
-          .map((r) => r['dem_id'])
-          .whereType<int>()
-          .toSet()
+    // Server-side grouping via SECURITY DEFINER RPC — anon can't read the tenant
+    // payment/paymentdetails/feedemand tables (this used to N+1 over them in Dart
+    // and returned "No data" for the superadmin).
+    try {
+      final rpc = await SupabaseService.client.rpc(
+        'get_superadmin_approval_by_course',
+        params: {'p_ins_id': widget.summary.insId},
+      );
+      final rows = List<Map<String, dynamic>>.from((rpc as List?) ?? const []);
+      _rows = rows
+          .map((r) => {
+                'course': (r['course'] ?? 'Other').toString(),
+                'class': (r['stuclass'] ?? '').toString(),
+                'approval_students': (r['approval_students'] as num?)?.toInt() ?? 0,
+                'approval': (r['approval'] as num?)?.toDouble() ?? 0,
+              })
+          .where((r) => (r['approval'] as double) > 0)
           .toList();
-      final demFine = <int, double>{};
-      for (int j = 0; j < demIds.length; j += 200) {
-        final dchunk = demIds.sublist(j, (j + 200).clamp(0, demIds.length));
-        final fd = await SupabaseService.client
-            .schema(schema)
-            .from('feedemand')
-            .select('dem_id, fineamount')
-            .inFilter('dem_id', dchunk);
-        for (final r in (fd as List)) {
-          demFine[r['dem_id'] as int] =
-              (demFine[r['dem_id'] as int] ?? 0) +
-                  ((r['fineamount'] as num?)?.toDouble() ?? 0);
-        }
-      }
-      for (final r in pd) {
-        final pid = r['pay_id'] as int?;
-        final did = r['dem_id'] as int?;
-        if (pid == null) continue;
-        demFineByPay[pid] =
-            (demFineByPay[pid] ?? 0) + (did != null ? (demFine[did] ?? 0) : 0);
-      }
+    } catch (e) {
+      debugPrint('approval-by-course RPC error: $e');
+      _rows = [];
     }
-
-    final stuIds = paymentList
-        .map((p) => p['stu_id'])
-        .where((id) => id != null)
-        .toSet()
-        .toList();
-    final students = await SupabaseService.client
-        .schema(schema)
-        .from('students')
-        .select('stu_id, stuclass, courname')
-        .inFilter('stu_id', stuIds);
-    final stuMap = <int, Map<String, dynamic>>{};
-    for (final s in (students as List)) {
-      final id = s['stu_id'];
-      if (id is int) stuMap[id] = Map<String, dynamic>.from(s as Map);
-    }
-
-    final groups = <String, Map<String, dynamic>>{};
-    for (final p in paymentList) {
-      final stuId = p['stu_id'];
-      final s = stuMap[stuId is int ? stuId : int.tryParse('$stuId')];
-      final course = (s?['courname'] ?? 'Other').toString();
-      final cls = (s?['stuclass'] ?? '').toString();
-      final key = '$course|$cls';
-      final amt = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
-      final pid = p['pay_id'] as int?;
-      final fine = pid != null ? (demFineByPay[pid] ?? 0) : 0;
-      final net = (amt - fine).clamp(0, double.infinity).toDouble();
-      final g = groups.putIfAbsent(
-          key,
-          () => {
-                'course': course,
-                'class': cls,
-                'approval': 0.0,
-                '_stu_ids': <dynamic>{},
-              });
-      g['approval'] = (g['approval'] as double) + net;
-      (g['_stu_ids'] as Set).add(stuId);
-    }
-
-    final result = groups.values.map((g) {
-      final count = (g['_stu_ids'] as Set).length;
-      g.remove('_stu_ids');
-      g['approval_students'] = count;
-      return g;
-    }).toList()
-      ..sort(
-          (a, b) => (a['course'] as String).compareTo(b['course'] as String));
-    _rows = result
-        .where((r) => ((r['approval'] as num?)?.toDouble() ?? 0) > 0)
-        .toList();
   }
 
   Future<void> _computeStudentCounts() async {
@@ -4315,10 +4242,13 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
         // DB trigger hashes plaintext on UPDATE.
         updates['usepassword'] = _newPwdCtrl.text;
       }
-      await SupabaseService.client
-          .from('institutionusers')
-          .update(updates)
-          .eq('use_id', useId);
+      // Session-gated via server-side password re-verification (the super admin
+      // has no session token). Lets anon UPDATE on institutionusers be revoked.
+      await SupabaseService.client.rpc('update_super_admin_self', params: {
+        'p_username': loginId,
+        'p_current_password': _currentPwdCtrl.text,
+        'p_updates': updates,
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -4743,7 +4673,9 @@ class _AggregateDrilldownPage extends StatelessWidget {
         ? summaries.where((s) => s.activeStatus).toList()
         : summaries.where((s) => _value(s) > 0).toList();
     if (mode != 'active') {
-      filtered.sort((a, b) => _value(b).compareTo(_value(a)));
+      // Order institutions by ins_id (KC01, KC02, KC03 ...) rather than by
+      // the metric value.
+      filtered.sort((a, b) => a.insId.compareTo(b.insId));
     }
     final aggregate = mode == 'active'
         ? filtered.length.toString()

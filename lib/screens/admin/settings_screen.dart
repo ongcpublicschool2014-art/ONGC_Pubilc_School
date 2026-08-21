@@ -747,7 +747,8 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
   List<Map<String, dynamic>> _feeGroups = [];
   List<Map<String, dynamic>> _sequences = [];
   final _widthController = TextEditingController(text: '5');
-  final Map<int, String> _editedPrefixes = {};
+  final _prefixController = TextEditingController();
+  String? _selectedFgId; // fee group being configured in the create form
 
   @override
   bool get wantKeepAlive => true;
@@ -761,6 +762,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
   @override
   void dispose() {
     _widthController.dispose();
+    _prefixController.dispose();
     super.dispose();
   }
 
@@ -781,7 +783,8 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
           .order('fgdesc');
       final seqResult = await SupabaseService.fromSchema('sequence')
           .select()
-          .eq('ins_id', insId);
+          .eq('ins_id', insId)
+          .neq('actname', 'REGNO'); // exclude register-number sequences
       if (mounted) {
         setState(() {
           _feeGroups = List<Map<String, dynamic>>.from(fgResult);
@@ -827,7 +830,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
       final yrId = yearResult?['yr_id'] ?? 0;
       final yrLabel = yearResult?['yrlabel']?.toString() ?? '';
 
-      await SupabaseService.fromSchema('sequence').insert({
+      await SupabaseService.saveSchemaRow('sequence', {
         'ins_id': insId,
         'mod_id': 0,
         'yr_id': yrId,
@@ -865,171 +868,227 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
 
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
+    if (_feeGroups.isEmpty) {
+      return Padding(
+        padding: EdgeInsets.all(24.w),
+        child: Center(child: Text('No fee groups found. Import fee groups first in Master Data.', style: TextStyle(color: AppColors.textPrimary))),
+      );
+    }
+
     return Padding(
       padding: EdgeInsets.only(top: 8.h),
-      child: Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: SingleChildScrollView(
-      padding: EdgeInsets.zero,
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-            // Header
+          SizedBox(width: 340.w, child: _form()),
+          SizedBox(width: 16.w),
+          Expanded(child: _list()),
+        ],
+      ),
+    );
+  }
+
+  /// Fee group's initials, max 3 chars — the suggested prefix.
+  String _autoPrefix(String fgDesc) {
+    final initials = fgDesc.split(' ').where((w) => w.isNotEmpty).map((w) => w[0]).join().toUpperCase();
+    return initials.isEmpty ? '' : initials.substring(0, initials.length.clamp(0, 3));
+  }
+
+  Widget _lbl(String t) => Text(t, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
+
+  void _snack(String m, Color c) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
+  }
+
+  // Matches _filledFieldDec used by the other Fee Master tabs so every master
+  // form field is the same size.
+  InputDecoration _dec(String hint, {bool filled = false}) {
+    final compact = MediaQuery.of(context).size.width <= 1366;
+    final textSize = compact ? 11.0 : 14.0;
+    final hPad = compact ? 8.0 : 14.0;
+    final vPad = compact ? 5.0 : 14.0;
+    final radius = compact ? 5.0 : 8.0;
+    final idle = filled ? AppColors.accent : AppColors.border;
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
+      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+      filled: true,
+      fillColor: Colors.white,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
+    );
+  }
+
+  Future<void> _createFromForm() async {
+    final fgId = int.tryParse(_selectedFgId ?? '');
+    if (fgId == null) { _snack('Select a fee group.', AppColors.warning); return; }
+    final prefix = _prefixController.text.trim();
+    if (prefix.isEmpty) { _snack('Enter a prefix.', AppColors.warning); return; }
+    final fg = _feeGroups.firstWhere((g) => g['fg_id'] == fgId, orElse: () => const {});
+    await _saveSequenceForFg(fgId, fg['fgdesc']?.toString() ?? '', prefix);
+    if (mounted) setState(() { _selectedFgId = null; _prefixController.clear(); });
+  }
+
+  /// Left panel — create form (Fee Group + Prefix + Width), mirroring the
+  /// Admission Number Sequencing panel.
+  Widget _form() {
+    // Only fee groups without a sequence yet can be configured.
+    final available = _feeGroups.where((fg) => _getSequenceForFg(fg['fg_id'] as int) == null).toList();
+    final width = int.tryParse(_widthController.text.trim()) ?? 4;
+    final preview = '${_prefixController.text.trim()}${'1'.padLeft(width, '0')}';
+    final safeFg = available.any((fg) => fg['fg_id'].toString() == _selectedFgId) ? _selectedFgId : null;
+    return Container(
+      padding: EdgeInsets.all(20.w),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      child: FocusTraversalGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              Icon(Icons.receipt_long_rounded, color: AppColors.accent, size: 20.sp),
+              SizedBox(width: 8.w),
+              Expanded(child: Text('Payment Sequence', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary))),
+            ]),
+            SizedBox(height: 4.h),
+            Text('set up the receipt-number sequence for a fee group', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+            SizedBox(height: 20.h),
+            _lbl('Fee Group *'),
+            SizedBox(height: 6.h),
+            DropdownButtonFormField<String>(
+              initialValue: safeFg,
+              isExpanded: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+              decoration: _dec(available.isEmpty ? 'All fee groups configured' : 'Select fee group', filled: safeFg != null),
+              items: available.map((fg) => DropdownMenuItem(value: fg['fg_id'].toString(), child: Text(fg['fgdesc']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
+              onChanged: available.isEmpty ? null : (v) => setState(() {
+                _selectedFgId = v;
+                final fg = available.firstWhere((g) => g['fg_id'].toString() == v, orElse: () => const {});
+                _prefixController.text = _autoPrefix(fg['fgdesc']?.toString() ?? '');
+              }),
+            ),
+            SizedBox(height: 16.h),
+            _lbl('Prefix *'),
+            SizedBox(height: 6.h),
+            TextField(
+              controller: _prefixController,
+              textCapitalization: TextCapitalization.characters,
+              onChanged: (_) => setState(() {}),
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _prefixController.text.trim().isNotEmpty ? AppColors.accent : null),
+              decoration: _dec('e.g. TF', filled: _prefixController.text.trim().isNotEmpty),
+            ),
+            SizedBox(height: 16.h),
+            _lbl('Number Width'),
+            SizedBox(height: 6.h),
+            TextField(
+              controller: _widthController,
+              keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() {}),
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _widthController.text.trim().isNotEmpty ? AppColors.accent : null),
+              decoration: _dec('5', filled: _widthController.text.trim().isNotEmpty),
+            ),
+            SizedBox(height: 12.h),
             Container(
-              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
-              child: Row(
-                children: [
-                  Icon(Icons.receipt_long_rounded, color: AppColors.accent, size: 20.sp),
-                  SizedBox(width: 8.w),
-                  Text('Payment Sequence', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  Text('Number Width:', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  SizedBox(width: 8.w),
-                  SizedBox(
-                    width: 60.w,
-                    height: 34,
-                    child: TextFormField(
-                      controller: _widthController,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: '4',
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 8.h),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: _widthController.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: _widthController.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-                        isDense: true,
-                      ),
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _widthController.text.trim().isNotEmpty ? AppColors.accent : null),
-                    ),
-                  ),
-                  SizedBox(width: 6.w),
-                  Text('(e.g. 4 = 0001)', style: TextStyle(fontSize: 11.sp, color: AppColors.textPrimary)),
-                ],
+              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+              decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.accent.withValues(alpha: 0.25))),
+              child: Row(children: [
+                Text('Preview:  ', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                Expanded(child: Text(_prefixController.text.trim().isEmpty ? '—' : preview, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.accent), overflow: TextOverflow.ellipsis)),
+              ]),
+            ),
+            SizedBox(height: 18.h),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: (_isSaving || available.isEmpty) ? null : _createFromForm,
+                icon: _isSaving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.add, size: 16),
+                label: const Text('Create'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
               ),
             ),
-            // Table
-            if (_feeGroups.isEmpty)
-              Padding(
-                padding: EdgeInsets.all(24.w),
-                child: Center(
-                  child: Text('No fee groups found. Import fee groups first in Master Data.', style: TextStyle(color: AppColors.textPrimary)),
-                ),
-              )
-            else
-              Padding(
-                padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.w),
-                child: Container(
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8.r),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: FocusTraversalGroup(
-                      child: DataTable(
-                dividerThickness: 1,
-                headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                headingTextStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.sp, color: AppColors.textPrimary, letterSpacing: 0.3),
-                dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                columnSpacing: 24,
-                horizontalMargin: 20,
-                headingRowHeight: 44.h,
-                dataRowMinHeight: 43.h,
-                // dataRowMaxHeight set to double.infinity so the editable prefix
-                // TextFormField can grow; without this, Flutter's default max
-                // (48px) clashes with `dataRowMinHeight` once ScreenUtil scales
-                // 43.h above 48 and triggers a NOT NORMALIZED constraint error.
-                dataRowMaxHeight: double.infinity,
-                columns: const [
-                  DataColumn(label: Text('S NO.')),
-                  DataColumn(label: Text('FEE GROUP')),
-                  DataColumn(label: Text('PREFIX')),
-                  DataColumn(label: Text('PREVIEW')),
-                  DataColumn(label: Text('CURRENT')),
-                  DataColumn(label: Text('ACTION')),
-                ],
-                rows: List.generate(_feeGroups.length, (idx) {
-                  final fg = _feeGroups[idx];
-                  final fgId = fg['fg_id'] as int;
-                  final fgDesc = fg['fgdesc']?.toString() ?? '';
-                  final seq = _getSequenceForFg(fgId);
-                  final hasSeq = seq != null;
-                  final width = int.tryParse(_widthController.text.trim()) ?? 4;
-
-                  final autoPrefix = fgDesc.split(' ').map((w) => w.isNotEmpty ? w[0] : '').join().toUpperCase().substring(0, fgDesc.split(' ').map((w) => w.isNotEmpty ? w[0] : '').join().length.clamp(0, 3));
-
-                  final prefix = hasSeq ? (seq['seqprefix']?.toString() ?? '') : autoPrefix;
-                  final curNo = hasSeq ? (seq['seqcurno'] ?? 0) : 0;
-                  final preview = '$prefix${'1'.padLeft(width, '0')}';
-
-                  return DataRow(
-                    color: WidgetStateProperty.all(idx.isEven ? Colors.white : AppColors.surface),
-                    cells: [
-                      DataCell(Text('${idx + 1}', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                      DataCell(Text(fgDesc, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                      DataCell(
-                        hasSeq
-                            ? Text(prefix, style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.primary))
-                            : SizedBox(
-                                width: 100.w,
-                                height: 32.h,
-                                child: Builder(builder: (context) {
-                                  final prefixFilled = (_editedPrefixes[fgId] ?? autoPrefix).trim().isNotEmpty;
-                                  return TextFormField(
-                                  initialValue: autoPrefix,
-                                  textCapitalization: TextCapitalization.characters,
-                                  decoration: InputDecoration(
-                                    hintText: 'Prefix',
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 6.h),
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r), borderSide: BorderSide(color: prefixFilled ? AppColors.accent : AppColors.border, width: 1.5)),
-                                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r), borderSide: BorderSide(color: prefixFilled ? AppColors.accent : AppColors.border, width: 1.5)),
-                                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-                                    isDense: true,
-                                  ),
-                                  style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: prefixFilled ? AppColors.accent : AppColors.textPrimary),
-                                  onChanged: (v) => setState(() => _editedPrefixes[fgId] = v.trim().toUpperCase()),
-                                  );
-                                }),
-                              ),
-                      ),
-                      DataCell(Text(preview, style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w600))),
-                      DataCell(Text('$curNo', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                      DataCell(
-                        hasSeq
-                            ? Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20.sp)
-                            : ElevatedButton(
-                                onPressed: _isSaving
-                                    ? null
-                                    : () => _saveSequenceForFg(fgId, fgDesc, _editedPrefixes[fgId] ?? autoPrefix),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.accent,
-                                  foregroundColor: Colors.white,
-                                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
-                                  minimumSize: Size.zero,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6.r)),
-                                ),
-                                child: Text('Create', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                              ),
-                      ),
-                    ],
-                  );
-                }),
-                    ),
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Right panel — configured payment sequences.
+  Widget _list() {
+    final rows = _sequences.where((s) => s['fg_id'] != null).toList();
+    final fgName = { for (final g in _feeGroups) g['fg_id']: g['fgdesc']?.toString() ?? '' };
+    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            child: Row(children: [
+              Icon(Icons.receipt_long_rounded, color: AppColors.accent, size: 18.sp),
+              SizedBox(width: 8.w),
+              Text('Payment Sequences', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              SizedBox(width: 10.w),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
+                child: Text('${rows.length} sequences', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+              ),
+              const Spacer(),
+            ]),
+          ),
+          Expanded(
+            child: Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.border)),
+              child: Column(
+                children: [
+                  Container(
+                    color: AppColors.tableHeadBg,
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                    child: Row(children: [
+                      Expanded(flex: 3, child: Text('FEE GROUP', style: h())),
+                      SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
+                      SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
+                      SizedBox(width: 80.w, child: Text('CURRENT', style: h())),
+                    ]),
+                  ),
+                  Expanded(
+                    child: rows.isEmpty
+                        ? Center(child: Text('No payment sequences yet', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                        : ListView.separated(
+                            itemCount: rows.length,
+                            separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+                            itemBuilder: (_, i) {
+                              final s = rows[i];
+                              final prefix = s['seqprefix']?.toString() ?? '';
+                              final width = (s['seqwidth'] as num?)?.toInt() ?? 4;
+                              final preview = '$prefix${'1'.padLeft(width, '0')}';
+                              return Container(
+                                color: i.isEven ? Colors.white : AppColors.surface,
+                                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                                child: Row(children: [
+                                  Expanded(flex: 3, child: Text(fgName[s['fg_id']] ?? s['actname']?.toString() ?? '', style: c(), overflow: TextOverflow.ellipsis)),
+                                  SizedBox(width: 90.w, child: Text(prefix, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.primary))),
+                                  SizedBox(width: 120.w, child: Text(preview, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                                  SizedBox(width: 80.w, child: Text('${s['seqcurno'] ?? 0}', style: c())),
+                                ]),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1198,9 +1257,9 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
 
     try {
       if (_editingId != null) {
-        await SupabaseService.fromSchema('finerule').update(data).eq('fr_id', _editingId!);
+        await SupabaseService.saveSchemaRow('finerule', data, pkCol: 'fr_id', pkVal: _editingId!);
       } else {
-        await SupabaseService.fromSchema('finerule').insert(data);
+        await SupabaseService.saveSchemaRow('finerule', data);
       }
       _clearForm();
       _loadRules();
@@ -1215,8 +1274,21 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
   }
 
   Future<void> _deleteRule(int frId) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+        title: const Text('Delete Fine Rule'),
+        content: const Text('Are you sure you want to delete this fine rule?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
+        ],
+      ),
+    );
+    if (ok != true) return;
     try {
-      await SupabaseService.fromSchema('finerule').update({'activestatus': 0}).eq('fr_id', frId);
+      await SupabaseService.deleteSchemaRow('finerule', 'fr_id', frId);
       _loadRules();
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rule deleted'), backgroundColor: AppColors.success));
     } catch (e) {
@@ -1568,7 +1640,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                                                     r['to_days'] !=
                                                             null
                                                         ? '${r['to_days']}'
-                                                        : 'âˆž',
+                                                        : '∞',
                                                     style: TextStyle(
                                                         fontSize:
                                                             13.sp,
@@ -1707,19 +1779,17 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
     );
   }
 
+  // Plain icon button - matches the other Fee Master tabs (MasterCrudPanel):
+  // no tinted background box, just the icon.
   Widget _actionBtn({required String iconName, required Color color, required String tooltip, required VoidCallback onTap}) {
     return Tooltip(
       message: tooltip,
-      child: Material(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8.r),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8.r),
-          child: Padding(
-            padding: EdgeInsets.all(7.w),
-            child: AppIcon.linear(iconName, size: 14, color: color),
-          ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6.r),
+        child: Padding(
+          padding: EdgeInsets.all(4.w),
+          child: AppIcon(iconName, size: 16, color: color),
         ),
       ),
     );

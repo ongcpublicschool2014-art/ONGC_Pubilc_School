@@ -21,9 +21,19 @@ class StudentModel {
   final int? courId;
   final String? courname;
   final int? conId;
+  final String? stucondesc;
   final String? admname;
   final String? quoname;
   final String? batch;
+  final String? admittyear;
+  final String? medium;
+  final String? aadharno;
+  final String? community;
+  final String? caste;
+  final String? religion;
+  final String? nationality;
+  final String? transportmode;
+  final String? hostel;
   final String stuserId;
   final int activestatus;
   final DateTime createdon;
@@ -50,9 +60,19 @@ class StudentModel {
     this.courId,
     this.courname,
     this.conId,
+    this.stucondesc,
     this.admname,
     this.quoname,
     this.batch,
+    this.admittyear,
+    this.medium,
+    this.aadharno,
+    this.community,
+    this.caste,
+    this.religion,
+    this.nationality,
+    this.transportmode,
+    this.hostel,
     required this.stuserId,
     this.activestatus = 1,
     required this.createdon,
@@ -89,9 +109,19 @@ class StudentModel {
       courId: json['cour_id'] as int?,
       courname: json['courname']?.toString(),
       conId: json['con_id'] as int?,
+      stucondesc: json['stucondesc']?.toString(),
       admname: json['admname']?.toString(),
       quoname: json['quoname']?.toString(),
       batch: json['batch']?.toString(),
+      admittyear: json['admittyear']?.toString(),
+      medium: json['medium']?.toString(),
+      aadharno: json['aadharno']?.toString(),
+      community: json['community']?.toString(),
+      caste: json['caste']?.toString(),
+      religion: json['religion']?.toString(),
+      nationality: json['nationality']?.toString(),
+      transportmode: json['transportmode']?.toString(),
+      hostel: json['hostel']?.toString(),
       stuserId: json['stuser_id'] ?? '',
       activestatus: json['activestatus'] ?? 1,
       createdon: json['createdon'] != null

@@ -842,7 +842,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
       // Insert notice and capture its id so the child notifications can
       // carry notice_id — the cleanup sweep uses that link to delete
       // every related inbox entry when the notice expires.
-      final insertedNotice = await SupabaseService.fromSchema('notice').insert({
+      final newNoticeId = await SupabaseService.saveSchemaRow('notice', {
         'ins_id': insId,
         'noticetitle': title,
         'noticedesc': desc,
@@ -854,8 +854,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
         'noticefromdate': _fromDate?.toIso8601String().split('T').first,
         'noticetodate': _toDate?.toIso8601String().split('T').first,
         'activestatus': 1,
-      }).select('notice_id').single();
-      final newNoticeId = insertedNotice['notice_id'] as int?;
+      }, pkCol: 'notice_id');
 
       // Send notification to targeted audience
       List<Map<String, dynamic>> targetStudents = [];

@@ -1,0 +1,3 @@
+pay_id,ins_id,inscode,stu_id,yr_id,yrlabel,paynumber,paydate,transtotalamount,transcurrency,paystatus,paymethod,payreference,paychequeno,paychequedate,paybankname,ban_id,recon_status,reconciled_by,reconciled_date,bank_reference,bank_date,tender_amount,refund_amount,payorderid,paygwresponse,payitems,createdby,createdat,activestatus,voidedby,voideddate
+1001,1,KCET,5,3,2026-2027,REC0001,2026-07-15 10:30:00,15000.00,INR,C,Cash,,,,,,P,,,,,15000.00,0,,,,admin,2026-07-15 10:30:00,1,,
+1002,1,KCET,8,3,2026-2027,REC0002,2026-07-16 11:05:00,20000.00,INR,C,Cheque,,123456,2026-07-16,HDFC Bank,,P,,,,,20000.00,0,,,,admin,2026-07-16 11:05:00,1,,

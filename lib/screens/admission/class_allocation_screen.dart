@@ -30,7 +30,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   bool _loading = true;
   bool _saving = false;
 
-  static const _orderOptions = ['Admission No', 'Student Name', 'Sex + Student Name'];
+  static const _orderOptions = ['Admission No', 'Student Name', 'Gender + Student Name'];
 
   @override
   void initState() {
@@ -97,7 +97,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       switch (_orderBy) {
         case 'Student Name':
           return a.stuname.toLowerCase().compareTo(b.stuname.toLowerCase());
-        case 'Sex + Student Name':
+        case 'Gender + Student Name':
           final s = a.stugender.compareTo(b.stugender);
           return s != 0 ? s : a.stuname.toLowerCase().compareTo(b.stuname.toLowerCase());
         default: // Admission No
@@ -280,7 +280,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         children: [
           const AppIcon('book-1', size: 20, color: AppColors.primary),
           SizedBox(width: 10.w),
-          Text('Section Allocation',
+          Text('Class Allocation',
               style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
           SizedBox(width: 10.w),
           Text('Admitted — pending allocation',
@@ -341,7 +341,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
       style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
       decoration: _dec(filled: _selectedCourse != null),
-      hint: Text('Select Standard', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
+      hint: Text('Select Course', style: TextStyle(fontSize: 13.sp, color: AppColors.textLight)),
       items: _courseNames.map((e) => DropdownMenuItem(
             value: e,
             child: Text(e, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
@@ -386,7 +386,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         children: [
           SizedBox(width: 140.w, child: Text('REG. NO', style: s())),
           Expanded(flex: 3, child: Text('STUDENT NAME', style: s())),
-          SizedBox(width: 80.w, child: Text('SEX', style: s())),
+          SizedBox(width: 80.w, child: Text('GENDER', style: s())),
           Expanded(flex: 2, child: Text('COURSE', style: s())),
           SizedBox(width: 220.w, child: Text('CLASS', style: s())),
         ],

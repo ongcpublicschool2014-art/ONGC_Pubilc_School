@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admission_model.dart';
 import 'supabase_service.dart';
 
@@ -55,6 +56,17 @@ class AdmissionService {
 
   /// Insert a new admission — returns the new adm_id.
   static Future<int> addAdmission(Map<String, dynamic> data) async {
+    final token = SupabaseService.sessionToken;
+    if (token != null) {
+      try {
+        final res = await SupabaseService.client.rpc('save_admission', params: {
+          'p_token': token, 'p_data': data, 'p_adm_id': null,
+        });
+        return (res as num).toInt();
+      } on PostgrestException catch (e) {
+        if (!SupabaseService.isMissingRpc(e)) rethrow; // not deployed yet → fallback
+      }
+    }
     final response = await SupabaseService.client
         .from(_table)
         .insert(data)
@@ -68,6 +80,17 @@ class AdmissionService {
 
   /// Update an existing admission.
   static Future<void> updateAdmission(int admId, Map<String, dynamic> data) async {
+    final token = SupabaseService.sessionToken;
+    if (token != null) {
+      try {
+        await SupabaseService.client.rpc('save_admission', params: {
+          'p_token': token, 'p_data': data, 'p_adm_id': admId,
+        });
+        return;
+      } on PostgrestException catch (e) {
+        if (!SupabaseService.isMissingRpc(e)) rethrow;
+      }
+    }
     await SupabaseService.client.from(_table).update(data).eq('adm_id', admId);
   }
 
@@ -113,22 +136,71 @@ class AdmissionService {
   }
 
   static Future<void> addMasterRow(String table, Map<String, dynamic> data) async {
-    await SupabaseService.fromSchema(table).insert(data);
+    await SupabaseService.saveSchemaRow(table, data);
   }
 
   static Future<void> deleteMasterRow(String table, String idCol, int id) async {
-    await SupabaseService.fromSchema(table).update({'activestatus': 0}).eq(idCol, id);
+    await SupabaseService.deleteSchemaRow(table, idCol, id);
   }
 
   static Future<void> updateMasterRow(String table, String idCol, int id, Map<String, dynamic> data) async {
-    await SupabaseService.fromSchema(table).update(data).eq(idCol, id);
+    await SupabaseService.saveSchemaRow(table, data, pkCol: idCol, pkVal: id);
+  }
+
+  // ── register-number sequences ────────────────────────────────────────────
+  // These live as rows in the shared `sequence` table (discriminated by
+  // actname='REGNO' / fg_id NULL), NOT a separate regnoseq table anymore.
+
+  /// Active register-number sequences (actname='REGNO'), oldest first.
+  static Future<List<Map<String, dynamic>>> getRegSequences() async {
+    try {
+      final res = await SupabaseService.fromSchema('sequence')
+          .select('*')
+          .eq('actname', 'REGNO')
+          .eq('activestatus', 1)
+          .order('seq_id', ascending: true);
+      return List<Map<String, dynamic>>.from(res as List);
+    } catch (e) {
+      debugPrint('getRegSequences error: $e');
+      return [];
+    }
+  }
+
+  /// Insert a register-number sequence (seq_id is auto-generated — do not set it).
+  static Future<void> addRegSequence(Map<String, dynamic> data) async {
+    await SupabaseService.saveSchemaRow('sequence', data);
+  }
+
+  /// Soft-delete a register-number sequence by its seq_id.
+  static Future<void> deleteRegSequence(int seqId) async {
+    await SupabaseService.deleteSchemaRow('sequence', 'seq_id', seqId);
   }
 
   /// Advance a register-number sequence's running counter after it's used.
-  static Future<void> bumpRegSeqCurrent(int rnsId, int newCurrent) async {
-    await SupabaseService.fromSchema('regnoseq')
-        .update({'rnscurrent': newCurrent})
-        .eq('rns_id', rnsId);
+  static Future<void> bumpRegSeqCurrent(int seqId, int newCurrent) async {
+    await SupabaseService.saveSchemaRow('sequence', {'seqcurno': newCurrent},
+        pkCol: 'seq_id', pkVal: seqId);
+  }
+
+  /// The institution's active academic year as {yr_id, yrlabel} (newest first),
+  /// or {0, ''} if none — used to fill the sequence row's NOT NULL year columns.
+  static Future<Map<String, dynamic>> getActiveYear(int insId) async {
+    try {
+      final row = await SupabaseService.fromSchema('year')
+          .select('yr_id, yrlabel')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1)
+          .order('yr_id', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      return {
+        'yr_id': row?['yr_id'] ?? 0,
+        'yrlabel': row?['yrlabel']?.toString() ?? '',
+      };
+    } catch (e) {
+      debugPrint('getActiveYear error: $e');
+      return {'yr_id': 0, 'yrlabel': ''};
+    }
   }
 
   /// Allocate a class and move the admission into the institution schema's
@@ -143,7 +215,27 @@ class AdmissionService {
     if (schema == null || schema.isEmpty) {
       throw Exception('No institution schema is set — cannot allocate.');
     }
-    final result = await SupabaseService.client.rpc(
+    dynamic result;
+    final token = SupabaseService.sessionToken;
+    if (token != null) {
+      try {
+        // Token-gated wrapper — verifies the admission is ours and derives the
+        // schema server-side (client can't pass an arbitrary p_schema).
+        result = await SupabaseService.client.rpc(
+          'allocate_admission_secure',
+          params: {
+            'p_token': token,
+            'p_adm_id': admId,
+            'p_class': className,
+            'p_stuadmno': stuadmno,
+            'p_allocatedby': allocatedBy,
+          },
+        );
+      } on PostgrestException catch (e) {
+        if (!SupabaseService.isMissingRpc(e)) rethrow;
+      }
+    }
+    result ??= await SupabaseService.client.rpc(
       'allocate_admission_to_student',
       params: {
         'p_adm_id': admId,

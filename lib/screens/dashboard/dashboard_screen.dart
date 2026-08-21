@@ -3,29 +3,34 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/app_menu.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../students/students_screen.dart';
 import '../fees/fee_collection_screen.dart';
+import '../admin/master_import_screen.dart';
 import '../fees/student_fee_collection_screen.dart';
 import '../fees/student_ledger_screen.dart';
 import '../transactions/failed_transactions_screen.dart';
 import '../admin/admin_creation_screen.dart';
+import '../admin/roles_access_screen.dart';
 import '../admin/bank_details_screen.dart';
 import '../notices/notices_screen.dart';
 import '../notifications/notification_screen.dart';
 import '../fees/fee_demand_screen.dart';
 import '../fees/fee_demand_approval_screen.dart';
 import '../admin/master_data_screen.dart';
+import '../admin/utilities_screen.dart';
 import '../fees/bank_reconciliation_screen.dart';
 import '../fees/reports_screen.dart';
 import '../fees/fee_master_screen.dart';
 import '../fees/fee_concession_screen.dart';
+import '../fees/fee_refund_screen.dart';
 import '../admission/admission_screen.dart';
 import '../admission/fast_admission_screen.dart';
-import '../admission/class_allocation_screen.dart';
+import '../admission/class_allocation_tabs_screen.dart';
 import '../admission/admission_master_screen.dart';
 
 
@@ -44,6 +49,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedSubIndex = 0;
   int? _expandedNavIndex;
   bool _sidebarCollapsed = false;
+  // Which sidebar sections are expanded (accordion). Empty = all collapsed,
+  // so the menu opens showing just Dashboard + the group headers.
+  final Set<String> _expandedSections = {};
+
+  // Section header icon + display label for the collapsible menu groups.
+  // MAIN MENU has no header — its items (Dashboard) render standalone at top.
+  // Section icons/labels come from kSectionMeta in lib/utils/app_menu.dart.
 
   // Notification unread count
   int _unreadNotifCount = 0;
@@ -56,6 +68,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _navMoreBelow = false;
   bool _navMoreAbove = false;
 
+  // Bumped by the header Refresh button. It's the key of the content subtree,
+  // so incrementing it re-mounts the current screen from scratch — re-running
+  // its initState and therefore reloading its data.
+  int _refreshTick = 0;
+  bool _refreshing = false;
+
   // Global search
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -65,37 +83,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<StudentModel> _searchResults = [];
 
 
-  static const List<_NavItem> _allNavItems = [
-    _NavItem('element-3', 'Dashboard', section: 'MAIN MENU'),
-    _NavItem('document-upload', 'Master Data', section: 'ADMIN', adminOnly: true),
-    _NavItem('bank', 'Bank Accounts', section: 'ADMIN', adminOnly: true),
-    _NavItem('security-user', 'User Creation', section: 'ADMIN', adminOnly: true),
-    _NavItem('category', 'Admission Master', section: 'ADMISSION', adminOnly: true),
-    _NavItem('profile-add', 'Admission', section: 'ADMISSION', adminOnly: true),
-    _NavItem('flash', 'Fast Admission', section: 'ADMISSION', adminOnly: true),
-    _NavItem('task-square', 'Class Allocation', section: 'ADMISSION', adminOnly: true),
-    _NavItem('people', 'Student', section: 'STUDENTS', adminOnly: true),
-    _NavItem('book-1', 'Student Ledger', section: 'STUDENTS'),
-    _NavItem('receipt-discount', 'Fee Master', section: 'FEES', accountantOnly: true),
-    _NavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
-    _NavItem('discount-shape', 'Fee Concession', section: 'FEES', accountantOnly: true),
-    _NavItem('receipt-edit', 'Fee Demand', section: 'FEES'),
-    _NavItem('tick-square', 'Fee Demand Approval', section: 'FEES', adminOnly: true),
-    _NavItem('bank', 'Bank Reconciliation', section: 'FEES', adminOnly: true),
-    _NavItem('receipt-2', 'Transactions', section: 'FEES'),
-    _NavItem('notification', 'Notices', section: 'GENERAL'),
-    _NavItem('notification-bing', 'Notifications', section: 'GENERAL'),
-    _NavItem('chart-1', 'Reports', section: 'GENERAL', unselectedIcon: 'chart'),
-  ];
+  late List<AppNavItem> _navItems;
 
-  late List<_NavItem> _navItems;
+  /// Menus this user's role is allowed to open, loaded from rolemenuaccess.
+  /// null = never configured for this role -> fall back to the built-in
+  /// defaults below, so existing installs behave exactly as before.
+  Set<String>? _allowedMenus;
 
-  List<_NavItem> _getNavItems(BuildContext context) {
+  /// Load the Roles & Access grants for the logged-in user's role.
+  Future<void> _loadMenuAccess() async {
+    final auth = context.read<AuthProvider>();
+    final insId = auth.insId;
+    final urId = auth.currentUser?.urId;
+    if (insId == null || urId == null) return;
+    final access = await SupabaseService.getRoleMenuAccess(insId);
+    if (!mounted) return;
+    final allowed = access[urId];
+    if (allowed == null || allowed.isEmpty) return; // unconfigured -> defaults
+    setState(() => _allowedMenus = allowed);
+  }
+
+  /// Full refresh from the header button: reload the shell's own state (year,
+  /// unread notifications, role access) and re-mount the current screen so its
+  /// data re-fetches. Bumping [_refreshTick] changes the content subtree's key,
+  /// which disposes the old screen and builds a fresh one (re-running initState).
+  Future<void> _refreshApp() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      await Future.wait([
+        _loadUnreadNotifCount(),
+        _loadAcademicYear(),
+        _loadMenuAccess(),
+      ]);
+    } catch (_) {
+      // Shell reloads are best-effort; the screen re-mount below still happens.
+    }
+    if (!mounted) return;
+    setState(() {
+      _refreshTick++;
+      _refreshing = false;
+    });
+  }
+
+  List<AppNavItem> _getNavItems(BuildContext context) {
     final auth = context.read<AuthProvider>();
     final isAdmin = auth.currentUser?.urname == 'Admin';
     final isAccountant = auth.currentUser?.urname == 'Accountant';
-    if (isAdmin) return _allNavItems.where((item) => !item.accountantOnly).toList();
-    return _allNavItems.where((item) {
+
+    // A role has been configured in Roles & Access — that list wins over the
+    // defaults. For Admin the never-revocable menus are forced back in, so an
+    // Admin can slim their own sidebar but never lock every Admin out.
+    final allowed = _allowedMenus;
+    if (allowed != null) {
+      final effective = isAdmin ? {...allowed, ...kAlwaysAllowedForAdmin} : allowed;
+      return kAppNavItems
+          .where((item) => item.label == 'Dashboard' || effective.contains(item.label))
+          .toList();
+    }
+
+    // Never configured — Admin sees everything except accountant-only screens.
+    if (isAdmin) return kAppNavItems.where((item) => !item.accountantOnly).toList();
+
+    // Never configured — built-in defaults.
+    return kAppNavItems.where((item) {
       if (item.adminOnly) return false;
       if (item.accountantOnly && !isAccountant) return false;
       if (item.hideForAccountant && isAccountant) return false;
@@ -108,6 +159,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _loadUnreadNotifCount();
     _loadAcademicYear();
+    _loadMenuAccess();
     _navScrollCtrl.addListener(_updateNavMoreBelow);
     _searchFocusNode.addListener(() {
       if (!_searchFocusNode.hasFocus) {
@@ -471,7 +523,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (isDesktop || isTablet)
             AnimatedContainer(
               duration: const Duration(milliseconds: 250),
-              width: _sidebarCollapsed ? 78 : (isDesktop ? (size.width < 1100 ? 170 : size.width < 1400 ? 200 : 240) : 78),
+              width: _sidebarCollapsed ? 78 : (isDesktop ? (size.width < 1100 ? 200 : size.width < 1400 ? 230 : 270) : 78),
               // Keep the sidebar out of keyboard Tab traversal so tabbing
               // through a form's fields doesn't jump into the nav menu between
               // rows. Items remain mouse-clickable.
@@ -494,15 +546,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 // independent of any surrounding chrome (sidebar / top bar).
                 Expanded(
                   child: FocusTraversalGroup(
-                    child: _isFullHeightScreen()
-                        ? Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: _buildDashboardContent(context, isDesktop),
-                          )
-                        : SingleChildScrollView(
-                            padding: const EdgeInsets.all(16),
-                            child: _buildDashboardContent(context, isDesktop),
-                          ),
+                    // Keyed on _refreshTick so the header Refresh button can
+                    // re-mount the whole content subtree (fresh initState +
+                    // data reload) just by incrementing the tick.
+                    child: KeyedSubtree(
+                      key: ValueKey('content-$_refreshTick'),
+                      child: _isFullHeightScreen()
+                          ? Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: _buildDashboardContent(context, isDesktop),
+                            )
+                          : SingleChildScrollView(
+                              padding: const EdgeInsets.all(16),
+                              child: _buildDashboardContent(context, isDesktop),
+                            ),
+                    ),
                   ),
                 ),
               ],
@@ -534,7 +592,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : (MediaQuery.of(context).size.width < 1100 ? 10.w : 14.w);
 
     return Container(
-      color: AppColors.surfaceSidebar,
+      decoration: const BoxDecoration(
+        // Dark navy sidebar — light foreground; selected items go Royal Blue
+        // for the active-page accent.
+        color: AppColors.sidebarBg,
+        border: Border(right: BorderSide(color: AppColors.sidebarBorder, width: 1)),
+      ),
       child: Column(
         children: [
           // Logo area
@@ -547,15 +610,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             child: Row(
               children: [
-                SizedBox(
-                  width: collapsed ? 46 : 56.w,
-                  height: collapsed ? 46 : 56.h,
-                  child: Image.asset(
-                    'assets/images/educore360_logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => AppIcon('teacher',
-                      color: AppColors.primary,
-                      size: 16,
+                // White plate behind the logo (same treatment as Login /
+                // Welcome). The mark is dark navy on a transparent PNG, so
+                // without this it sinks into the navy sidebar.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
+                  child: Container(
+                    width: collapsed ? 46 : 56.w,
+                    height: collapsed ? 46 : 56.h,
+                    color: Colors.white,
+                    padding: EdgeInsets.all(collapsed ? 4 : 5),
+                    child: Image.asset(
+                      'assets/images/educore360_logo.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => AppIcon('teacher',
+                        color: AppColors.primary,
+                        size: 16,
+                      ),
                     ),
                   ),
                 ),
@@ -568,7 +639,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 16.sp,
-                        color: AppColors.textPrimary,
+                        color: AppColors.sidebarText,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -591,27 +662,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: EdgeInsets.symmetric(horizontal: hPad),
                 children: [
                   for (var s = 0; s < orderedSections.length; s++) ...[
-                    if (!collapsed)
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: s == 0 ? 4.h : 18.h,
-                          bottom: 8.h,
-                          left: 10.w,
-                        ),
-                        child: Text(
-                          orderedSections[s],
-                          style: TextStyle(
-                            fontSize: 11.sp,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: AppColors.accent,
-                          ),
-                        ),
-                      )
-                    else
+                    if (collapsed) ...[
+                      // Icon-only sidebar: keep the flat grouped layout.
                       SizedBox(height: s == 0 ? 4.h : 18.h),
-                    for (final idx in groupedIndices[orderedSections[s]]!)
-                      _buildNavTile(context, idx, collapsed),
+                      for (final idx in groupedIndices[orderedSections[s]]!)
+                        _buildNavTile(context, idx, collapsed),
+                    ] else if (orderedSections[s] == 'MAIN MENU' ||
+                        groupedIndices[orderedSections[s]]!.length < 2) ...[
+                      // Standalone items — no group header. Applies to MAIN MENU
+                      // (Dashboard) and to any section holding a single item:
+                      // wrapping one item in a collapsible group of the same
+                      // name just makes the user expand "Reports" to reach
+                      // "Reports".
+                      SizedBox(height: 4.h),
+                      for (final idx in groupedIndices[orderedSections[s]]!)
+                        _buildNavTile(context, idx, collapsed),
+                      SizedBox(height: 4.h),
+                    ] else ...[
+                      // Collapsible group: header toggles its items.
+                      _buildSectionHeader(context, orderedSections[s]),
+                      if (_expandedSections.contains(orderedSections[s]))
+                        for (final idx in groupedIndices[orderedSections[s]]!)
+                          _buildNavTile(context, idx, collapsed),
+                    ],
                   ],
                   SizedBox(height: 16.h),
                 ],
@@ -700,6 +773,76 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// Collapsible section header (Admin / Admission / Students / Fees / General).
+  /// Tapping toggles the group's items. Highlights when it holds the active
+  /// page but is collapsed, so the user still sees where they are.
+  Widget _buildSectionHeader(BuildContext context, String section) {
+    final meta = kSectionMeta[section];
+    final icon = meta != null ? meta[0] : 'category';
+    final label = meta != null ? meta[1] : section;
+    final expanded = _expandedSections.contains(section);
+    final containsSelected = _navItems[_selectedNavIndex].section == section;
+    final highlight = containsSelected && !expanded;
+    return Padding(
+      padding: EdgeInsets.only(bottom: 10.h),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12.r),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expandedSections.remove(section);
+            } else {
+              // Single-open accordion: opening a group collapses the others.
+              _expandedSections
+                ..clear()
+                ..add(section);
+            }
+          }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
+            decoration: BoxDecoration(
+              // On the navy sidebar: a filled blue pill marks the group holding
+              // the active page; an open group gets a subtle translucent chip.
+              color: highlight
+                  ? AppColors.primary
+                  : (expanded ? Colors.white.withValues(alpha: 0.18) : Colors.transparent),
+              borderRadius: BorderRadius.circular(12.r),
+            ),
+            child: Row(
+              children: [
+                AppIcon.bold(icon, size: 20.sp, color: highlight ? Colors.white : AppColors.sidebarText),
+                SizedBox(width: 12.w),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13.sp,
+                      fontWeight: FontWeight.w700,
+                      color: highlight ? Colors.white : AppColors.sidebarText,
+                    ),
+                  ),
+                ),
+                AnimatedRotation(
+                  turns: expanded ? -0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  // Same caret the form dropdowns use (Icons.arrow_drop_down),
+                  // so "this opens" reads the same everywhere in the app.
+                  child: Icon(
+                    Icons.arrow_drop_down,
+                    size: 24,
+                    color: highlight ? Colors.white : AppColors.sidebarText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildNavTile(BuildContext context, int index, bool collapsed) {
     final item = _navItems[index];
     final isSelected = _selectedNavIndex == index;
@@ -711,13 +854,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     const selectedBg = AppColors.primary;
     const selectedFg = AppColors.textOnPrimary;
-    const unselectedFg = AppColors.textSecondary;
+    // Navy sidebar — light foreground reads cleanest on it.
+    const unselectedFg = AppColors.sidebarText;
 
     final iconSize =
         MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp;
 
     final tile = Padding(
-      padding: EdgeInsets.only(bottom: 4.h),
+      padding: EdgeInsets.only(bottom: 10.h),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -857,11 +1001,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : tile;
   }
 
-  Widget _buildSubMenu(BuildContext context, int parentIndex, _NavItem item) {
+  Widget _buildSubMenu(BuildContext context, int parentIndex, AppNavItem item) {
     // Selected sub-item mirrors a selected main nav item (Admission Master):
-    // a filled navy pill with white icon/text.
+    // a filled blue pill with white icon/text; unselected is light on navy.
     const selectedFg = AppColors.textOnPrimary;
-    const unselectedFg = AppColors.textSecondary;
+    const unselectedFg = AppColors.sidebarText;
     final isParentSelected = _selectedNavIndex == parentIndex;
 
     return Padding(
@@ -930,7 +1074,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isDesktop ? (MediaQuery.of(context).size.width < 1100 ? 12 : MediaQuery.of(context).size.width < 1400 ? 16 : 24) : 16,
-        vertical: 10,
+        vertical: 18,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1031,6 +1175,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
 
           SizedBox(width: 12.w),
+
+          // Refresh: reloads the current screen's data + the shell state.
+          Tooltip(
+            message: 'Refresh',
+            child: _softIconButton(
+              icon: 'refresh',
+              spinning: _refreshing,
+              onTap: _refreshing ? null : _refreshApp,
+            ),
+          ),
+          SizedBox(width: 14.w),
 
           // Notification bell (primary-colored)
           Stack(
@@ -1164,7 +1319,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required String icon,
     bool iconLinear = false,
     bool filled = false,
-    required VoidCallback onTap,
+    bool spinning = false,
+    required VoidCallback? onTap,
   }) {
     final bg = filled ? AppColors.primary : Colors.white;
     final fg = filled ? Colors.white : AppColors.textSecondary;
@@ -1172,6 +1328,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final size = compact ? 36.0 : 44.0;
     final iconSize = compact ? 22.0 : 28.0;
     final radius = compact ? 10.0 : 12.0;
+    Widget iconWidget = iconLinear
+        ? AppIcon.linear(icon, size: iconSize, color: fg)
+        : AppIcon(icon, size: iconSize, color: fg);
+    // Continuous spin while a refresh is in flight.
+    if (spinning) {
+      iconWidget = _SpinningIcon(child: iconWidget);
+    }
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(radius),
@@ -1189,9 +1352,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             borderRadius: BorderRadius.circular(radius),
           ),
           alignment: Alignment.center,
-          child: iconLinear
-              ? AppIcon.linear(icon, size: iconSize, color: fg)
-              : AppIcon(icon, size: iconSize, color: fg),
+          child: iconWidget,
         ),
       ),
     );
@@ -1200,12 +1361,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Screens that manage their own scroll and need full bounded height
   bool _isFullHeightScreen() {
     final label = _navItems[_selectedNavIndex].label;
-    return label == 'Dashboard' || label == 'Student' || label == 'Fee Demand' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'User Creation' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession';
+    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Fee Refund' || label == 'Fee Collection Import' || label == 'Roles & Access';
   }
 
   Widget _buildDashboardContent(BuildContext context, bool isDesktop) {
     final selectedMenu = _navItems[_selectedNavIndex].label;
-    if (selectedMenu == 'Student') {
+    if (selectedMenu == 'Students') {
       final student = _navigateToStudent;
       _navigateToStudent = null;
       return StudentsScreen(key: student != null ? ValueKey(student.stuId) : null, initialStudent: student);
@@ -1221,6 +1382,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         },
       );
     }
+    if (selectedMenu == 'Fee Collection Import') {
+      // Reuses the master-import card layout; opens directly at the (hidden) Fee
+      // Collection tab so it looks exactly like the other import screens.
+      return const MasterImportScreen(initialTabIndex: 10, showInternalTabs: false);
+    }
     if (selectedMenu == 'Student Ledger') {
       return const StudentLedgerScreen();
     }
@@ -1230,8 +1396,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Fee Demand Approval') {
       return const FeeDemandApprovalScreen();
     }
-    if (selectedMenu == 'User Creation') {
+    if (selectedMenu == 'Users') {
       return const AdminCreationScreen();
+    }
+    if (selectedMenu == 'Roles & Access') {
+      return const RolesAccessScreen();
     }
     if (selectedMenu == 'Notices') {
       return const NoticesScreen();
@@ -1258,7 +1427,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return const FastAdmissionScreen();
     }
     if (selectedMenu == 'Class Allocation') {
-      return const ClassAllocationScreen();
+      return const ClassAllocationTabsScreen();
     }
     if (selectedMenu == 'Admission Master') {
       return const AdmissionMasterScreen();
@@ -1269,28 +1438,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Fee Concession') {
       return const FeeConcessionScreen();
     }
-    // Dashboard shows Fee Collection screen
+    if (selectedMenu == 'Fee Refund') {
+      return const FeeRefundScreen();
+    }
+    if (selectedMenu == 'Utilities') {
+      return const UtilitiesScreen();
+    }
+    // Dashboard landing page: the class-wise / date-wise collection summary.
     return const FeeCollectionScreen();
   }
 
 }
 
-class _NavItem {
-  final String icon;
-  final String? unselectedIcon;
-  final String label;
-  final String section;
-  final bool adminOnly;
-  final bool accountantOnly;
-  final bool hideForAccountant;
-  final List<_NavSubItem> subItems;
-  const _NavItem(this.icon, this.label, {this.section = 'MAIN', this.adminOnly = false, this.accountantOnly = false, this.hideForAccountant = false, this.unselectedIcon, this.subItems = const []});
+// NOTE: the nav catalog (AppNavItem / kAppNavItems / kSectionMeta) now lives in
+// lib/utils/app_menu.dart so the Roles & Access screen renders the same list
+// the sidebar does. Don't reintroduce a local copy here — it would drift.
+
+/// Spins its [child] continuously — used on the header Refresh icon while a
+/// refresh is in flight.
+class _SpinningIcon extends StatefulWidget {
+  final Widget child;
+  const _SpinningIcon({required this.child});
+
+  @override
+  State<_SpinningIcon> createState() => _SpinningIconState();
 }
 
-class _NavSubItem {
-  final String icon;
-  final String label;
-  const _NavSubItem(this.icon, this.label);
+class _SpinningIconState extends State<_SpinningIcon> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RotationTransition(turns: _ctrl, child: widget.child);
 }
 
 class _DashedLinePainter extends CustomPainter {

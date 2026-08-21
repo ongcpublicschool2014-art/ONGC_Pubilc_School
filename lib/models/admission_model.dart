@@ -41,6 +41,8 @@ class AdmissionModel {
   final String? stucondesc;
   final String? batch;
   final String? admittyear;
+  final String? medium;
+  final String? paremail;
 
   // demographics / facilities
   final String? community;
@@ -109,6 +111,8 @@ class AdmissionModel {
     this.stucondesc,
     this.batch,
     this.admittyear,
+    this.medium,
+    this.paremail,
     this.community,
     this.caste,
     this.religion,
@@ -178,6 +182,8 @@ class AdmissionModel {
       stucondesc: j['stucondesc']?.toString(),
       batch: j['batch']?.toString(),
       admittyear: j['admittyear']?.toString(),
+      medium: j['medium']?.toString(),
+      paremail: j['paremail']?.toString(),
       community: j['community']?.toString(),
       caste: j['caste']?.toString(),
       religion: j['religion']?.toString(),

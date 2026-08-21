@@ -83,14 +83,16 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 8, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 7));
+    // 10 tabs: 9 master-data tabs shown in the pill bar + a hidden Fee Collection
+    // import tab (index 9), reached only via the "Fee Collection Import" menu.
+    _tabCtrl = TabController(length: 11, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 10));
   }
 
   @override
   void didUpdateWidget(covariant MasterImportScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialTabIndex != oldWidget.initialTabIndex) {
-      final i = widget.initialTabIndex.clamp(0, 7);
+      final i = widget.initialTabIndex.clamp(0, 10);
       if (_tabCtrl.index != i) _tabCtrl.animateTo(i);
     }
   }
@@ -112,8 +114,8 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
             listenable: _tabCtrl,
             builder: (context, _) {
               final selected = _tabCtrl.index;
-              final tabLabels = ['Admission Type', 'Quota', 'Course', 'Class', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand'];
-              final tabIcons = ['teacher', 'book-1', 'category-2', 'receipt-1', 'receipt-discount', 'note-2', 'user-tick', 'ticket'];
+              final tabLabels = ['Admission Type', 'Quota', 'Course', 'Class', 'Fee Group', 'Fee Type', 'Concession', 'Class Fee Demand', 'Semester', 'Community'];
+              final tabIcons = ['teacher', 'book-1', 'category-2', 'receipt-1', 'receipt-discount', 'note-2', 'user-tick', 'ticket', 'calendar-1', 'people'];
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: SingleChildScrollView(
@@ -153,6 +155,9 @@ class _MasterImportScreenState extends State<MasterImportScreen> with SingleTick
                 _FeeTypeTab(),
                 _ConcessionTab(),
                 _ClassFeeDemandTab(),
+                _SemesterTab(),
+                _CommunityTab(),
+                _FeeCollectionImportTab(),
               ],
             ),
           ),
@@ -838,13 +843,13 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
       try {
         final courId = int.tryParse(row[0].toString().trim());
         if (courId == null) { _skipped++; _errors.add('Row with name ${row[1]}: invalid Course ID'); continue; }
-        await SupabaseService.fromSchema('course').upsert({
+        await SupabaseService.importSchemaRows('course', [{
           'cour_id': courId,
           'courname': row[1].toString().trim(),
           'ordid': row.length > 2 ? int.tryParse(row[2].toString().trim()) : null,
           'ins_id': insId,
           'activestatus': 1,
-        }, onConflict: 'cour_id');
+        }], conflictCol: 'cour_id');
         _imported++;
       } catch (e) {
         _skipped++;
@@ -1059,7 +1064,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
         final courRaw = row.length > 3 ? row[3].toString().trim() : '';
         final succRaw = row.length > 4 ? row[4].toString().trim() : '';
         final ordRaw  = row.length > 5 ? row[5].toString().trim() : '';
-        await SupabaseService.fromSchema('class').upsert({
+        await SupabaseService.importSchemaRows('class', [{
           'cla_id': claId,
           'claname': row[1].toString().trim(),
           'cour_id': courRaw.isEmpty ? null : int.tryParse(courRaw),
@@ -1067,7 +1072,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
           'ordid': ordRaw.isEmpty ? null : int.tryParse(ordRaw),
           'ins_id': insId,
           'activestatus': actRaw.isEmpty ? 1 : (int.tryParse(actRaw) ?? 1),
-        }, onConflict: 'cla_id');
+        }], conflictCol: 'cla_id');
         _imported++;
       } catch (e) {
         _skipped++;
@@ -1124,7 +1129,9 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Fee Group ID *', 'Group Name *', 'Year *'];
+  // Year is NOT imported - it's auto-set to the institution's active year by
+  // process_master_import.
+  static const _headers = ['Fee Group ID *', 'Group Name *'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
 
@@ -1145,7 +1152,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
     try {
       final groups = await SupabaseService.getFeeGroups(insId);
       if (mounted) setState(() {
-        _existingRows = groups.map((g) => [g['fgdesc'] ?? '', g['yrlabel'] ?? '']).toList();
+        _existingRows = groups.map((g) => [g['fgdesc'] ?? '']).toList();
         _isLoadingExisting = false;
       });
     } catch (e) {
@@ -1207,7 +1214,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     try {
-      final result = await _stagingImport(insId: insId, impType: 'FEEGROUP', rows: _rows, colCount: 3);
+      final result = await _stagingImport(insId: insId, impType: 'FEEGROUP', rows: _rows, colCount: 2);
       _imported = result['imported'] ?? 0;
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'FEEGROUP');
@@ -1231,10 +1238,10 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Fee Group', _headers),
       onSampleDownload: () => _exportSampleData('Fee Group', _headers, [
-        ['1', 'SCHOOL FEES', '2025-2026'],
-        ['2', 'VAN FEES', '2025-2026'],
-        ['3', 'HOSTEL FEES', '2025-2026'],
-        ['4', 'EXAM FEES', '2025-2026'],
+        ['1', 'SCHOOL FEES'],
+        ['2', 'VAN FEES'],
+        ['3', 'HOSTEL FEES'],
+        ['4', 'EXAM FEES'],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1242,7 +1249,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Group Name', 'Year'],
+      existingHeaders: const ['Group Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1270,13 +1277,16 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Fee ID *', 'Fee Name *', 'Short Name *', 'Fee Group *', 'Year *', 'Fine Applicable *'];
+  // Year is NOT imported - it's auto-set to the institution's active year by
+  // process_master_import.
+  static const _headers = ['Fee ID *', 'Fee Name *', 'Short Name *', 'Fee Group *', 'Fine Applicable *', 'FeeType Order', 'Type'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
   // Lowercased fee-group names for the current institution - used by _validate
   // to flag rows whose Fee Group doesn't exist (otherwise the server import
   // silently skips them).
   Set<String> _fgNames = {};
+  Set<int> _fgIdSet = {}; // valid fee group IDs — the import also accepts fg_id in the Fee Group column
 
   @override
   bool get wantKeepAlive => true;
@@ -1312,11 +1322,12 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
             t['feedesc'] ?? '',
             t['feeshort'] ?? '',
             fgNameMap[t['fg_id']] ?? '',
-            t['yrlabel'] ?? '',
             fineLabels['${t['feefineapplicable'] ?? 0}'] ?? 'No',
+            t['type'] ?? '',
           ];
         }).toList();
         _fgNames = fgNameSet;
+        _fgIdSet = fgIds.toSet();
         _isLoadingExisting = false;
       });
     } catch (e) {
@@ -1355,6 +1366,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
     for (int i = 0; i < _rows.length; i++) {
       final missing = <String>[];
       for (int j = 0; j < labels.length; j++) {
+        if (!_headers[j].contains('*')) continue; // optional column (FeeType Order, Type)
         final val = _rows[i].length > j ? _rows[i][j]?.toString().trim() ?? '' : '';
         if (val.isEmpty) missing.add(labels[j]);
       }
@@ -1362,11 +1374,16 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
         rowErrs[i] = 'Missing: ${missing.join(', ')}';
         continue;
       }
-      // Fee Group must already exist for this institution. Otherwise the
-      // server-side join in process_master_import drops the row silently.
-      final fg = (_rows[i].length > 3 ? _rows[i][3]?.toString().trim() ?? '' : '').toLowerCase();
-      if (fg.isNotEmpty && _fgNames.isNotEmpty && !_fgNames.contains(fg)) {
-        rowErrs[i] = 'Fee Group "${_rows[i][3]}" not found - import it first';
+      // Fee Group must already exist for this institution. The column accepts
+      // either the fee group ID (e.g. 1) or the group name — matching the
+      // server-side resolution in process_master_import.
+      final fgRaw = _rows[i].length > 3 ? _rows[i][3]?.toString().trim() ?? '' : '';
+      final asId = int.tryParse(fgRaw);
+      final validById = asId != null && _fgIdSet.contains(asId);
+      final validByName = _fgNames.contains(fgRaw.toLowerCase());
+      final haveMaster = _fgIdSet.isNotEmpty || _fgNames.isNotEmpty;
+      if (fgRaw.isNotEmpty && haveMaster && !validById && !validByName) {
+        rowErrs[i] = 'Fee Group "$fgRaw" not found - import it first';
       }
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
@@ -1388,15 +1405,16 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       const fineMap = {'yes': '1', 'y': '1', 'true': '1', '1': '1', 'no': '0', 'n': '0', 'false': '0', '0': '0', '': '0'};
       final mappedRows = _rows.map((row) {
         final mapped = List<dynamic>.from(row);
-        while (mapped.length < 6) {
+        while (mapped.length < 7) {
           mapped.add('');
         }
-        // Fine Applicable is col 6 (index 5) after Fee ID, Name, Short, Group, Year.
-        final fine = mapped[5].toString().trim().toLowerCase();
-        mapped[5] = fineMap[fine] ?? mapped[5];
+        // Fine Applicable is col 5 (index 4) after Fee ID, Name, Short, Group.
+        // col 6 = FeeType Order (positional alignment only), col 7 = Type.
+        final fine = mapped[4].toString().trim().toLowerCase();
+        mapped[4] = fineMap[fine] ?? mapped[4];
         return mapped;
       }).toList();
-      final result = await _stagingImport(insId: insId, impType: 'FEETYPE', rows: mappedRows, colCount: 6);
+      final result = await _stagingImport(insId: insId, impType: 'FEETYPE', rows: mappedRows, colCount: 7);
       _imported = result['imported'] ?? 0;
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'FEETYPE');
@@ -1420,10 +1438,10 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Fee Type', _headers),
       onSampleDownload: () => _exportSampleData('Fee Type', _headers, [
-        ['1', 'SCHOOL FEES', 'SCH', 'SCHOOL FEES', '2025-2026', 'Yes'],
-        ['2', 'VAN FEES', 'VAN', 'VAN FEES', '2025-2026', 'No'],
-        ['3', 'TUITION FEES', 'TUI', 'SCHOOL FEES', '2025-2026', 'Yes'],
-        ['4', 'BOOK FEES', 'BK', 'SCHOOL FEES', '2025-2026', 'No'],
+        ['1', 'SCHOOL FEES', 'SCH', 'SCHOOL FEES', 'Yes', '0', 'COL'],
+        ['2', 'VAN FEES', 'VAN', 'VAN FEES', 'No', '0', 'COL'],
+        ['3', 'TUITION FEES', 'TUI', 'SCHOOL FEES', 'Yes', '0', 'COL'],
+        ['4', 'BOOK FEES', 'BK', 'SCHOOL FEES', 'No', '0', 'COL'],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1431,7 +1449,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Fee Name', 'Short Name', 'Fee Group', 'Year', 'Fine Applicable'],
+      existingHeaders: const ['Fee Name', 'Short Name', 'Fee Group', 'Fine Applicable', 'Type'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1603,9 +1621,10 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
   List<String> _errors = [];
   Map<int, String> _rowErrors = {};
   Map<int, Set<int>> _cellErrors = {};
-  static const _headers = ['Class *', 'Semester *', 'Fee Type *', 'Amount *', 'Due Date *', 'Admission Type *'];
+  static const _headers = ['Class *', 'Semester *', 'Feetype *', 'AdmissionType *', 'Class Fee Amount *', 'Due Date *', 'App. To All', 'Class Id', 'Semester Id', 'Fee Id', 'Admission Type Id', 'Class Fee Id'];
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
+  Map<String, int> _admIdByName = {}; // admission type name (upper) -> adm_id
 
   @override
   bool get wantKeepAlive => true;
@@ -1623,7 +1642,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     setState(() => _isLoadingExisting = true);
     try {
       final results = await Future.wait([
-        SupabaseService.fromSchema('classfeedemand').select('*'),
+        SupabaseService.fromSchema('classfeedemand').select('*').eq('activestatus', 1),
         SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.fromSchema('class').select('claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.fromSchema('course').select('cour_id, courname').eq('ins_id', insId),
@@ -1633,6 +1652,11 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       final classRows = results[2] as List;
       final courseRows = results[3] as List;
       final admMap = { for (final a in admRows) a['adm_id'].toString(): (a['admname'] ?? '').toString() };
+      _admIdByName = {
+        for (final a in admRows)
+          if (a['adm_id'] != null && (a['admname']?.toString().trim() ?? '').isNotEmpty)
+            a['admname'].toString().trim().toUpperCase(): (a['adm_id'] as num).toInt(),
+      };
       final courseById = <String, String>{
         for (final c in courseRows) c['cour_id'].toString(): (c['courname'] ?? '').toString(),
       };
@@ -1716,7 +1740,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
 
   void _validate() {
     final rowErrs = <int, String>{};
-    final labels = ['Class', 'Semester', 'Fee Type', 'Amount', 'Due Date', 'Admission Type'];
+    final labels = ['Class', 'Semester', 'Feetype', 'AdmissionType', 'Class Fee Amount', 'Due Date'];
     for (int i = 0; i < _rows.length; i++) {
       final missing = <String>[];
       for (int j = 0; j < labels.length; j++) {
@@ -1735,38 +1759,107 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
 
   void _close() { setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; }); }
 
+  // Normalise a due date to ISO yyyy-MM-dd so Postgres never mis-parses it
+  // (files often use DD-MM-YYYY, which Postgres reads as month=31 and rejects).
+  // Returns null for empty/unparseable so a bad date doesn't fail the batch.
+  static String? _dueDateIso(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    final parts = t.split(RegExp(r'[/\-.]'));
+    if (parts.length == 3) {
+      final p0 = int.tryParse(parts[0]), p1 = int.tryParse(parts[1]), p2 = int.tryParse(parts[2]);
+      if (p0 != null && p1 != null && p2 != null) {
+        int y, m, d;
+        if (parts[0].length == 4) { y = p0; m = p1; d = p2; }            // YYYY-MM-DD
+        else { d = p0; m = p1; y = p2 < 100 ? p2 + 2000 : p2; }          // DD-MM-YYYY
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+          return '${y.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+        }
+      }
+    }
+    final dt = DateTime.tryParse(t);
+    return dt == null ? null : '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
+    int generated = 0;
     try {
-      final mappedRows = _rows.asMap().entries.map((entry) {
-        final i = entry.key;
-        var row = entry.value;
-        // Backwards-compat: legacy template included a leading CF ID. If the
-        // row has 7 cells and the first is numeric, drop it.
-        if (row.length >= 7 && int.tryParse(row[0].toString().trim()) != null) {
-          row = row.sublist(1);
+      // File column order (matches the export template):
+      //   0 Class, 1 Semester, 2 Feetype, 3 AdmissionType, 4 Class Fee Amount,
+      //   5 Due Date, 6 App. To All (collectible), 7 Class Id, 8 Semester Id,
+      //   9 Fee Id, 10 Admission Type Id, 11 Class Fee Id.
+      // Class/Semester/Fee Type stored as names; admissiontype from the Admission
+      // Type Id (or resolved from the name); App. To All -> collectible; due date
+      // normalised to ISO so DD-MM-YYYY isn't mis-read. cf_id is trigger-assigned.
+      const truthy = {'Y', 'YES', 'TRUE', '1', 'ALL'};
+      final records = <Map<String, dynamic>>[];
+      for (final row in _rows) {
+        String cell(int j) => j < row.length ? row[j].toString().trim() : '';
+        final className = cell(0);
+        final feetype = cell(2);
+        if (className.isEmpty || feetype.isEmpty) { _skipped++; continue; }
+        int? admId = int.tryParse(cell(10)); // Admission Type Id wins
+        if (admId == null && cell(3).isNotEmpty) admId = _admIdByName[cell(3).toUpperCase()];
+        records.add({
+          'cfclass': className,
+          'cfterm': cell(1).isEmpty ? null : cell(1),
+          'cffeetype': feetype,
+          'cfamount': double.tryParse(cell(4).replaceAll(',', '')),
+          'cfdduedate': _dueDateIso(cell(5)),
+          'admissiontype': admId,
+          'collectible': truthy.contains(cell(6).toUpperCase()),
+          'cla_id': int.tryParse(cell(7)),
+          'sem_id': int.tryParse(cell(8)),
+          'fee_id': int.tryParse(cell(9)),
+          'activestatus': 1,
+        });
+      }
+      for (int i = 0; i < records.length; i += 500) {
+        final batch = records.sublist(i, (i + 500).clamp(0, records.length));
+        try {
+          await SupabaseService.importSchemaRows('classfeedemand',
+              List<Map<String, dynamic>>.from(batch));
+          _imported += batch.length;
+        } catch (_) {
+          for (final rec in batch) {
+            try {
+              await SupabaseService.importSchemaRows('classfeedemand',
+                  [Map<String, dynamic>.from(rec as Map)]);
+              _imported++;
+            } catch (e) {
+              _skipped++;
+              _errors.add('${rec['cfclass']} / ${rec['cffeetype']}: ${_friendlyError(e.toString())}');
+            }
+          }
         }
-        final mapped = List<dynamic>.from(row);
-        while (mapped.length < 6) mapped.add('');
-        // Admission Type passes through as a name (e.g. "MANAGEMENT QUOTA");
-        // the SQL staging-promote looks up admissiontype.adm_id by admname.
-        // Prepend a placeholder col1 (row number) - real cf_id is assigned
-        // server-side by the set_cf_id trigger.
-        return [(i + 1).toString(), ...mapped];
-      }).toList();
-      final result = await _stagingImport(insId: insId, impType: 'CLASSFEEDEMAND', rows: mappedRows, colCount: 7);
-      _imported = result['imported'] ?? 0;
-      _skipped = result['skipped'] ?? 0;
-      if (_skipped > 0) _errors = await _getImportErrors(insId, 'CLASSFEEDEMAND');
+      }
+      // Generate the actual student demands from the (updated) template — one
+      // server-side set-based INSERT into tempfeedemand (pending approval).
+      try {
+        final gen = await SupabaseService.client.rpc('generate_feedemand_from_template', params: {'p_ins_id': insId});
+        generated = (gen is num) ? gen.toInt() : (int.tryParse(gen?.toString() ?? '') ?? 0);
+      } catch (e) {
+        _errors.add('Templates imported, but demand generation failed: ${_friendlyError(e.toString())}');
+      }
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors.add('Import failed: ${_friendlyError(e.toString())}');
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {
+        _loadExisting();
+        if (generated > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Generated $generated fee demand(s) — review & approve in Fee Demand Approval.'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 5),
+          ));
+        }
+      });
     }
   }
 
@@ -1781,10 +1874,10 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Class Fee Demand', _headers),
       onSampleDownload: () => _exportSampleData('Class Fee Demand', _headers, [
-        ['I',   'I TERM', 'SCHOOL FEES',  '10080', '2025-05-31', 'MANAGEMENT QUOTA'],
-        ['I',   'JUNE',   'TUITION FEES', '700',   '2025-06-30', 'MANAGEMENT QUOTA'],
-        ['XII', 'I TERM', 'SCHOOL FEES',  '15410', '2025-05-31', 'GOVERNMENT QUOTA'],
-        ['XII', 'JUNE',   'VAN FEES',     '810',   '2025-06-30', 'GOVERNMENT QUOTA'],
+        ['I',   'I TERM', 'SCHOOL FEES',  'MANAGEMENT QUOTA', '10080', '2025-05-31', 'Y', '', '', '', '', ''],
+        ['I',   'JUNE',   'TUITION FEES', 'MANAGEMENT QUOTA', '700',   '2025-06-30', 'N', '', '', '', '', ''],
+        ['XII', 'I TERM', 'SCHOOL FEES',  'GOVERNMENT QUOTA', '15410', '2025-05-31', 'Y', '', '', '', '', ''],
+        ['XII', 'JUNE',   'VAN FEES',     'GOVERNMENT QUOTA', '810',   '2025-06-30', 'N', '', '', '', '', ''],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1814,6 +1907,7 @@ Future<Map<String, int>> _directLookupImport({
   required List<List<dynamic>> rows,
   required bool hasInsId,
   required List<String> errorsOut,
+  String? createdBy,
 }) async {
   int imported = 0;
   int skipped = 0;
@@ -1834,7 +1928,8 @@ Future<Map<String, int>> _directLookupImport({
         'activestatus': 1,
       };
       if (hasInsId) record['ins_id'] = insId;
-      await SupabaseService.fromSchema(table).upsert(record, onConflict: idCol);
+      if (createdBy != null && createdBy.trim().isNotEmpty) record['createdby'] = createdBy.trim();
+      await SupabaseService.importSchemaRows(table, [record], conflictCol: idCol);
       imported++;
     } catch (e) {
       skipped++;
@@ -1934,7 +2029,7 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
     final errs = <String>[];
     final result = await _directLookupImport(
       insId: insId, table: 'admissiontype', idCol: 'adm_id', nameCol: 'admname',
-      rows: _rows, hasInsId: true, errorsOut: errs,
+      rows: _rows, hasInsId: true, errorsOut: errs, createdBy: auth.userName,
     );
     _imported = result['imported'] ?? 0;
     _skipped = result['skipped'] ?? 0;
@@ -1967,6 +2062,138 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
       isValidated: _isValidated,
       existingRows: _existingRows,
       existingHeaders: const ['Admission Name'],
+      isLoadingExisting: _isLoadingExisting,
+      rowErrors: _rowErrors,
+      cellErrors: _cellErrors,
+    );
+  }
+}
+
+class _CommunityTab extends StatefulWidget {
+  const _CommunityTab();
+  @override
+  State<_CommunityTab> createState() => _CommunityTabState();
+}
+
+class _CommunityTabState extends State<_CommunityTab> with AutomaticKeepAliveClientMixin {
+  List<List<dynamic>> _rows = [];
+  String? _fileName;
+  bool _saving = false;
+  bool _isValidated = false;
+  int _imported = 0, _skipped = 0;
+  List<String> _errors = [];
+  Map<int, String> _rowErrors = {};
+  Map<int, Set<int>> _cellErrors = {};
+  static const _headers = ['Com ID *', 'Community Name *'];
+  List<List<dynamic>> _existingRows = [];
+  bool _isLoadingExisting = false;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() { super.initState(); _loadExisting(); }
+
+  Future<void> _loadExisting() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    if (auth.insId == null) return;
+    setState(() => _isLoadingExisting = true);
+    try {
+      final rows = await SupabaseService.fromSchema('community').select('com_id, comname').eq('activestatus', 1).order('com_id', ascending: true);
+      if (mounted) setState(() {
+        _existingRows = (rows as List).map((r) => [r['comname']?.toString() ?? '']).toList();
+        _isLoadingExisting = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingExisting = false);
+    }
+  }
+
+  Future<void> _browse() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls', 'csv']);
+    if (result == null) return;
+    List<List<dynamic>> parsed;
+    try {
+      parsed = _parseExcel(result.files.single.path!);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not read file. ${friendlyError(e)}'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+    if (parsed.length < 2) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File has no data rows. Add at least one row below the header.'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+    setState(() { _fileName = result.files.single.name; _rows = parsed.sublist(1); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+  }
+
+  void _validate() {
+    final errs = <int, String>{};
+    for (int i = 0; i < _rows.length; i++) {
+      final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
+      final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
+      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { errs[i] = 'Invalid Com ID'; continue; }
+      if (name.isEmpty) { errs[i] = 'Missing Community Name'; }
+    }
+    setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
+      backgroundColor: errs.isEmpty ? Colors.green : Colors.red,
+    ));
+  }
+
+  void _close() { setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; }); }
+
+  Future<void> _save() async {
+    if (_rows.isEmpty) return;
+    setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final insId = auth.insId ?? 0;
+    final errs = <String>[];
+    final result = await _directLookupImport(
+      insId: insId, table: 'community', idCol: 'com_id', nameCol: 'comname',
+      rows: _rows, hasInsId: true, errorsOut: errs, createdBy: auth.userName,
+    );
+    _imported = result['imported'] ?? 0;
+    _skipped = result['skipped'] ?? 0;
+    _errors = errs;
+    setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+    if (mounted) {
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return _buildImportCard(
+      title: 'Import Communities',
+      headers: _headers,
+      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
+      onBrowse: _browse,
+      onSave: _rows.isNotEmpty && _isValidated ? _save : null,
+      onTemplate: () => _exportTemplate('Community', _headers),
+      onSampleDownload: () => _exportSampleData('Community', _headers, [
+        ['1', 'BC'],
+        ['2', 'MBC'],
+        ['3', 'SC'],
+        ['4', 'ST'],
+        ['5', 'OC'],
+      ]),
+      saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
+      onDismissResult: () {},
+      onValidate: _rows.isNotEmpty ? _validate : null,
+      onClose: _close,
+      isValidated: _isValidated,
+      existingRows: _existingRows,
+      existingHeaders: const ['Community Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -2065,7 +2292,7 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
     final errs = <String>[];
     final result = await _directLookupImport(
       insId: insId, table: 'quota', idCol: 'quo_id', nameCol: 'quoname',
-      rows: _rows, hasInsId: true, errorsOut: errs,
+      rows: _rows, hasInsId: true, errorsOut: errs, createdBy: auth.userName,
     );
     _imported = result['imported'] ?? 0;
     _skipped = result['skipped'] ?? 0;
@@ -2106,3 +2333,447 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// SEMESTER TAB
+// ═══════════════════════════════════════════════════════════════════
+
+class _SemesterTab extends StatefulWidget {
+  const _SemesterTab();
+  @override
+  State<_SemesterTab> createState() => _SemesterTabState();
+}
+
+class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClientMixin {
+  List<List<dynamic>> _rows = [];
+  String? _fileName;
+  bool _saving = false;
+  bool _isValidated = false;
+  int _imported = 0, _skipped = 0;
+  List<String> _errors = [];
+  Map<int, String> _rowErrors = {};
+  Map<int, Set<int>> _cellErrors = {};
+  static const _headers = ['Semester ID *', 'Semester Name *', 'Semester Short', 'Semester Type', 'Semester Order'];
+  List<List<dynamic>> _existingRows = [];
+  bool _isLoadingExisting = false;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExisting();
+  }
+
+  // Semester Type free-text → the stored code: S(emester) / M(onthly) / Y(early).
+  static String _semType(String raw) {
+    final t = raw.trim().toUpperCase();
+    if (t.isEmpty) return 'S';
+    if (t.startsWith('M')) return 'M';
+    if (t.startsWith('Y') || t.startsWith('A')) return 'Y';
+    return 'S';
+  }
+
+  Future<void> _loadExisting() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final insId = auth.insId;
+    if (insId == null) return;
+    setState(() => _isLoadingExisting = true);
+    try {
+      final rows = await SupabaseService.fromSchema('semester').select('*').eq('ins_id', insId).eq('activestatus', 1);
+      final sorted = List<Map<String, dynamic>>.from(rows.cast<Map<String, dynamic>>())
+        ..sort((a, b) {
+          final oa = (a['ordid'] is num) ? (a['ordid'] as num).toInt() : (a['sem_id'] is num ? (a['sem_id'] as num).toInt() : 1 << 30);
+          final ob = (b['ordid'] is num) ? (b['ordid'] as num).toInt() : (b['sem_id'] is num ? (b['sem_id'] as num).toInt() : 1 << 30);
+          return oa.compareTo(ob);
+        });
+      if (mounted) setState(() {
+        _existingRows = sorted.map((r) => [
+          r['semname'] ?? '',
+          r['semshort'] ?? '',
+          r['semtype'] ?? '',
+        ]).toList();
+        _isLoadingExisting = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _isLoadingExisting = false);
+    }
+  }
+
+  Future<void> _browse() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls', 'csv']);
+    if (result == null) return;
+    List<List<dynamic>> parsed;
+    try {
+      parsed = _parseExcel(result.files.single.path!);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not read file. ${friendlyError(e)}'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+    if (parsed.length < 2) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File has no data rows. Add at least one row below the header.'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+    setState(() { _fileName = result.files.single.name; _rows = parsed.sublist(1); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+  }
+
+  void _validate() {
+    final rowErrs = <int, String>{};
+    for (int i = 0; i < _rows.length; i++) {
+      final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
+      final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
+      if (idRaw.isEmpty || int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Semester ID'; continue; }
+      if (name.isEmpty) rowErrs[i] = 'Missing: Semester Name';
+    }
+    setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
+    if (rowErrs.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors'), backgroundColor: Colors.red));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: Colors.green));
+    }
+  }
+
+  void _close() {
+    setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; });
+  }
+
+  Future<void> _save() async {
+    if (_rows.isEmpty) return;
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final insId = auth.insId ?? 0;
+    setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    for (final row in _rows) {
+      if (row.length < 2 || row[1].toString().trim().isEmpty) { _skipped++; continue; }
+      try {
+        final semId = int.tryParse(row[0].toString().trim());
+        if (semId == null) { _skipped++; _errors.add('Row with name ${row[1]}: invalid Semester ID'); continue; }
+        final short = row.length > 2 ? row[2].toString().trim() : '';
+        final type = row.length > 3 ? _semType(row[3].toString()) : 'S';
+        final order = row.length > 4 ? int.tryParse(row[4].toString().trim()) : null;
+        await SupabaseService.importSchemaRows('semester', [{
+          'sem_id': semId,
+          'semname': row[1].toString().trim(),
+          'semshort': short.isEmpty ? null : short,
+          'semtype': type,
+          'ordid': order,
+          'ins_id': insId,
+          'activestatus': 1,
+        }], conflictCol: 'sem_id');
+        _imported++;
+      } catch (e) {
+        _skipped++;
+        _errors.add('${row[1]}: ${_friendlyError(e.toString())}');
+      }
+    }
+    setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return _buildImportCard(
+      title: 'Import Semester',
+      headers: _headers,
+      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
+      onBrowse: _browse,
+      onSave: _rows.isNotEmpty && _isValidated ? _save : null,
+      onTemplate: () => _exportTemplate('Semester', _headers),
+      onSampleDownload: () => _exportSampleData('Semester', _headers, [
+        ['1', 'I TERM',  'IT',   'S', '1'],
+        ['2', 'II TERM', 'IIT',  'S', '2'],
+        ['3', 'JUNE',    'JUN',  'M', '3'],
+      ]),
+      saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
+      onDismissResult: () {},
+      onValidate: _rows.isNotEmpty ? _validate : null,
+      onClose: _close,
+      isValidated: _isValidated,
+      existingRows: _existingRows,
+      existingHeaders: const ['Semester', 'Short', 'Type'],
+      isLoadingExisting: _isLoadingExisting,
+      rowErrors: _rowErrors,
+      cellErrors: _cellErrors,
+    );
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// FEE COLLECTION (PAYMENT) IMPORT TAB
+// ═══════════════════════════════════════════════════════════════════
+// Uses the shared _buildImportCard look. Not shown in the internal pill bar
+// (master-data only) — reached via the "Fee Collection Import" menu, which opens
+// MasterImportScreen at this tab with showInternalTabs:false. Records each
+// receipt via the import_payment RPC and decrements the paid demands' balances.
+
+class _FeeCollectionImportTab extends StatefulWidget {
+  const _FeeCollectionImportTab();
+  @override
+  State<_FeeCollectionImportTab> createState() => _FeeCollectionImportTabState();
+}
+
+class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with AutomaticKeepAliveClientMixin {
+  List<List<dynamic>> _rows = [];
+  String? _fileName;
+  bool _saving = false;
+  bool _isValidated = false;
+  int _imported = 0, _skipped = 0;
+  List<String> _errors = [];
+  Map<int, String> _rowErrors = {};
+  Map<int, Set<int>> _cellErrors = {};
+  List<List<dynamic>> _existingRows = [];
+  bool _isLoadingExisting = false;
+
+  // Template column order (positional). Roll No / Demand No / Paid Amount required.
+  // Type (REGULAR/ARREAR) + Year appended at the end so existing positions 0-6
+  // stay stable; they disambiguate which demand a Demand No refers to.
+  static const _headers = ['Receipt No', 'Pay Date', 'Roll No *', 'Demand No *', 'Paid Amount *', 'Pay Method', 'Reference', 'Type', 'Year'];
+  static const _order = ['receiptno', 'paydate', 'stuadmno', 'demno', 'amount', 'method', 'reference', 'type', 'year'];
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExisting();
+  }
+
+  static String? _mapHeader(String h) {
+    final k = h.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    const m = {
+      'receiptno': 'receiptno', 'receipt': 'receiptno', 'paynumber': 'receiptno', 'receiptnumber': 'receiptno', 'billno': 'receiptno', 'rcptno': 'receiptno',
+      'paydate': 'paydate', 'date': 'paydate', 'paymentdate': 'paydate', 'collectiondate': 'paydate', 'receiptdate': 'paydate',
+      'rollno': 'stuadmno', 'roll': 'stuadmno', 'admno': 'stuadmno', 'admissionno': 'stuadmno', 'stuadmno': 'stuadmno', 'registerno': 'stuadmno', 'regno': 'stuadmno',
+      'demandno': 'demno', 'demno': 'demno', 'demand': 'demno', 'docno': 'demno',
+      'paidamount': 'amount', 'amount': 'amount', 'paid': 'amount', 'collectedamount': 'amount', 'payamount': 'amount', 'amountpaid': 'amount',
+      'paymethod': 'method', 'method': 'method', 'mode': 'method', 'paymode': 'method', 'paymentmode': 'method', 'paymentmethod': 'method',
+      'reference': 'reference', 'ref': 'reference', 'payreference': 'reference', 'transactionid': 'reference', 'txnno': 'reference', 'chequeno': 'reference', 'referenceno': 'reference',
+      'type': 'type', 'demseqtype': 'type', 'seqtype': 'type', 'demandtype': 'type',
+      'year': 'year', 'yr': 'year', 'academicyear': 'year', 'feeyear': 'year', 'demandyear': 'year', 'demfeeyear': 'year',
+    };
+    return m[k];
+  }
+
+  static String? _iso(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    final parts = t.split(RegExp(r'[/\-.]'));
+    if (parts.length >= 3) {
+      final p0 = int.tryParse(parts[0]), p1 = int.tryParse(parts[1]), p2 = int.tryParse(parts[2].split(' ').first);
+      if (p0 != null && p1 != null && p2 != null) {
+        int y, m, d;
+        if (parts[0].length == 4) { y = p0; m = p1; d = p2; } else { d = p0; m = p1; y = p2 < 100 ? p2 + 2000 : p2; }
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return '${y.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+      }
+    }
+    final dt = DateTime.tryParse(t);
+    return dt == null ? null : dt.toIso8601String().split('T').first;
+  }
+
+  Future<void> _loadExisting() async {
+    final insId = Provider.of<AuthProvider>(context, listen: false).insId;
+    if (insId == null) return;
+    setState(() => _isLoadingExisting = true);
+    try {
+      final rows = await SupabaseService.fromSchema('payment')
+          .select('paynumber, paydate, transtotalamount, paymethod')
+          .eq('ins_id', insId).eq('activestatus', 1)
+          .order('pay_id', ascending: false).limit(200);
+      if (mounted) setState(() {
+        _existingRows = (rows as List).map((r) => [
+          r['paynumber'] ?? '',
+          (r['paydate']?.toString() ?? '').split('T').first,
+          r['transtotalamount']?.toString() ?? '',
+          r['paymethod'] ?? '',
+        ]).toList();
+        _isLoadingExisting = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _isLoadingExisting = false);
+    }
+  }
+
+  Future<void> _browse() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls', 'csv']);
+    if (result == null) return;
+    List<List<dynamic>> parsed;
+    try {
+      parsed = _parseExcel(result.files.single.path!);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not read file. ${friendlyError(e)}'), backgroundColor: Colors.red));
+      return;
+    }
+    if (parsed.length < 2) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File has no data rows.'), backgroundColor: Colors.orange));
+      return;
+    }
+    final headerCells = parsed.first.map((e) => e.toString()).toList();
+    final keyIdx = <String, int>{};
+    for (int i = 0; i < headerCells.length; i++) {
+      final k = _mapHeader(headerCells[i]);
+      if (k != null) keyIdx.putIfAbsent(k, () => i);
+    }
+    final rows = parsed.sublist(1).map((r) {
+      return _order.map((k) {
+        final idx = keyIdx[k];
+        return (idx != null && idx < r.length) ? (r[idx]?.toString().trim() ?? '') : '';
+      }).toList();
+    }).where((r) => r.any((c) => c.toString().trim().isNotEmpty)).toList();
+    setState(() { _fileName = result.files.single.name; _rows = rows; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+  }
+
+  void _validate() {
+    final rowErrs = <int, String>{};
+    const req = {2: 'Roll No', 3: 'Demand No', 4: 'Paid Amount'};
+    for (int i = 0; i < _rows.length; i++) {
+      final missing = <String>[];
+      req.forEach((j, label) {
+        final v = _rows[i].length > j ? _rows[i][j]?.toString().trim() ?? '' : '';
+        if (v.isEmpty) missing.add(label);
+      });
+      if (missing.isNotEmpty) rowErrs[i] = 'Missing: ${missing.join(', ')}';
+    }
+    setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(rowErrs.isEmpty ? 'Validation passed! Click Save to import.' : '${rowErrs.length} row(s) have errors'),
+      backgroundColor: rowErrs.isEmpty ? Colors.green : Colors.red));
+  }
+
+  void _close() => setState(() { _rows = []; _fileName = null; _isValidated = false; _errors = []; _rowErrors = {}; _cellErrors = {}; });
+
+  Future<void> _save() async {
+    if (_rows.isEmpty) return;
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final insId = auth.insId ?? 0;
+    setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    try {
+      final years = await SupabaseService.getYears(insId);
+      final yr = years.isNotEmpty ? years.first : null;
+      final yrId = yr?['yr_id'] ?? 0;
+      final yrLabel = yr?['yrlabel']?.toString() ?? '';
+
+      final stuList = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('students').select('stu_id, stuadmno').eq('ins_id', insId).eq('activestatus', 1));
+      final stuMap = <String, int>{};
+      for (final s in stuList) {
+        final a = s['stuadmno']?.toString().trim() ?? '';
+        final id = s['stu_id'] as int?;
+        if (a.isNotEmpty && id != null) { stuMap.putIfAbsent(a, () => id); stuMap.putIfAbsent(a.toLowerCase(), () => id); }
+      }
+      final demList = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('feedemand').select('dem_id, demno, demseqtype, demfeeyear').eq('activestatus', 1));
+      // Match a demand by Demand No + Type (REGULAR/ARREAR): the same demno can
+      // exist as both a regular and an arrear demand. Progressive keys — most
+      // specific (demno|type|year) first, then (demno|type), then demno alone.
+      final demByNoTypeYear = <String, int>{};
+      final demByNoType = <String, int>{};
+      final demByNo = <String, int>{};
+      for (final d in demList) {
+        final dn = d['demno']?.toString().trim() ?? '';
+        final id = (d['dem_id'] as num?)?.toInt();
+        if (dn.isEmpty || id == null) continue;
+        final t = (d['demseqtype']?.toString().trim().toUpperCase() == 'ARREAR') ? 'ARREAR' : 'REGULAR';
+        final y = d['demfeeyear']?.toString().trim() ?? '';
+        demByNoTypeYear.putIfAbsent('$dn|$t|$y', () => id);
+        demByNoType.putIfAbsent('$dn|$t', () => id);
+        demByNo.putIfAbsent(dn, () => id);
+      }
+
+      String cell(List r, int j) => j < r.length ? (r[j]?.toString().trim() ?? '') : '';
+      final groups = <String, List<List<dynamic>>>{};
+      var auto = 0;
+      for (final r in _rows) {
+        final rc = cell(r, 0);
+        groups.putIfAbsent(rc.isNotEmpty ? rc : '__auto_${auto++}', () => []).add(r);
+      }
+
+      for (final entry in groups.entries) {
+        final rcpt = entry.key.startsWith('__auto_') ? '' : entry.key;
+        final rows = entry.value;
+        final label = rcpt.isEmpty ? '(no receipt no)' : rcpt;
+        final admno = cell(rows.first, 2);
+        final stuId = stuMap[admno] ?? stuMap[admno.toLowerCase()];
+        if (stuId == null) { _skipped++; _errors.add('Receipt $label: Roll No "$admno" not found'); continue; }
+        final items = <Map<String, dynamic>>[];
+        for (final r in rows) {
+          final dn = cell(r, 3);
+          final amt = double.tryParse(cell(r, 4).replaceAll(',', '')) ?? 0;
+          final typeCell = cell(r, 7).toUpperCase();
+          final rowType = typeCell == 'ARREAR' ? 'ARREAR' : (typeCell == 'REGULAR' ? 'REGULAR' : '');
+          final rowYear = cell(r, 8);
+          int? demId;
+          if (rowType.isNotEmpty) {
+            demId = demByNoTypeYear['$dn|$rowType|$rowYear'] ?? demByNoType['$dn|$rowType'];
+          }
+          demId ??= demByNo[dn];
+          if (demId == null) {
+            _errors.add('Receipt $label: Demand No "$dn"${typeCell.isEmpty ? '' : ' ($typeCell)'} not found');
+            continue;
+          }
+          items.add({'dem_id': demId, 'amount': amt});
+        }
+        if (items.isEmpty) { _skipped++; continue; }
+        final method = cell(rows.first, 5);
+        final reference = cell(rows.first, 6);
+        try {
+          await SupabaseService.client.rpc('import_payment', params: {
+            'p_ins_id': insId, 'p_inscode': auth.inscode ?? '', 'p_stu_id': stuId,
+            'p_yr_id': yrId, 'p_yrlabel': yrLabel,
+            'p_paynumber': rcpt.isEmpty ? null : rcpt,
+            'p_paydate': _iso(cell(rows.first, 1)),
+            'p_method': method.isEmpty ? 'cash' : method,
+            'p_reference': reference.isEmpty ? null : reference,
+            'p_created_by': auth.userName, 'p_items': items,
+          });
+          _imported++;
+        } catch (e) {
+          _skipped++;
+          _errors.add('Receipt $label: ${_friendlyError(e.toString())}');
+        }
+      }
+    } catch (e) {
+      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+    }
+    setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return _buildImportCard(
+      title: 'Import Fee Collections',
+      headers: _headers,
+      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
+      onBrowse: _browse,
+      onSave: _rows.isNotEmpty && _isValidated ? _save : null,
+      onTemplate: () => _exportTemplate('Fee Collection', _headers),
+      onSampleDownload: () => _exportSampleData('Fee Collection', _headers, [
+        ['R0001', '2026-06-05', '20252617', 'DM00001', '5000', 'cash', ''],
+        ['R0001', '2026-06-05', '20252617', 'DM00002', '2000', 'cash', ''],
+        ['R0002', '2026-06-06', '20252619', 'DM00003', '7000', 'upi', 'UPI-88213'],
+      ]),
+      saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
+      onDismissResult: () {},
+      onValidate: _rows.isNotEmpty ? _validate : null,
+      onClose: _close,
+      isValidated: _isValidated,
+      existingRows: _existingRows,
+      existingHeaders: const ['Receipt No', 'Pay Date', 'Amount', 'Method'],
+      isLoadingExisting: _isLoadingExisting,
+      rowErrors: _rowErrors,
+      cellErrors: _cellErrors,
+      rightAlignCols: const {4},
+    );
+  }
+}

@@ -39,6 +39,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   final _emailController = TextEditingController();
   final _accNoController = TextEditingController();
   final _accHolderController = TextEditingController();
+  final _paytmMidController = TextEditingController();
 
   int? _editingBanId;
   // When non-null, the right column shows the bank detail drilldown
@@ -93,6 +94,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _emailController.dispose();
     _accNoController.dispose();
     _accHolderController.dispose();
+    _paytmMidController.dispose();
     super.dispose();
   }
 
@@ -108,7 +110,11 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   }
 
   void _resetForm() {
-    _formKey.currentState?.reset();
+    // Clear the controllers FIRST, then reset the form. Clearing a controller
+    // fires a change that re-marks its field as "interacted", which with
+    // AutovalidateMode.onUserInteraction would light up every field red with
+    // "Required" on the freshly-emptied form. Calling reset() LAST clears those
+    // interaction flags, so the blank form shows no validation errors.
     _nameController.clear();
     _branchController.clear();
     _ifscController.clear();
@@ -119,6 +125,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _emailController.clear();
     _accNoController.clear();
     _accHolderController.clear();
+    _paytmMidController.clear();
+    _formKey.currentState?.reset();
     setState(() => _editingBanId = null);
   }
 
@@ -133,6 +141,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _emailController.text = b['banemail']?.toString() ?? '';
     _accNoController.text = b['banaccno']?.toString() ?? '';
     _accHolderController.text = b['banaccholder']?.toString() ?? '';
+    _paytmMidController.text = b['paytm_mid']?.toString() ?? '';
     setState(() => _editingBanId = b['ban_id'] as int?);
   }
 
@@ -151,6 +160,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       'banemail': _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
       'banaccno': _accNoController.text.trim(),
       'banaccholder': _accHolderController.text.trim(),
+      'paytm_mid': _paytmMidController.text.trim().isEmpty ? null : _paytmMidController.text.trim(),
       'activestatus': 1,
     };
 
@@ -339,6 +349,20 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               Expanded(child: _labelledField('Address Line 2', _addr2Controller, validator: _vAddrOpt)),
               SizedBox(width: 16.w),
               Expanded(child: _labelledField('Address Line 3', _addr3Controller, validator: _vAddrOpt)),
+            ]),
+            SizedBox(height: 16.h),
+            // Paytm MID: the online-payment merchant that settles to THIS bank
+            // account. Fee groups mapped to this bank route their Paytm payment
+            // to this MID. Leave blank to use the app's default MID.
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: _labelledField('Paytm MID (online settlement)', _paytmMidController,
+                hint: 'e.g. rJWzOr10770674724816 — blank = default',
+                inputFormatters: [
+                  LengthLimitingTextInputFormatter(40),
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+                ])),
+              SizedBox(width: 16.w),
+              const Expanded(child: SizedBox.shrink()),
             ]),
             SizedBox(height: 24.h),
 

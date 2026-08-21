@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -28,6 +29,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   // Form controllers
   final _formKey = GlobalKey<FormState>();
   final _admNoController = TextEditingController();
+  // Debounces the roll-no → class lookup so it doesn't hit the DB per keystroke.
+  Timer? _lookupDebounce;
   final _feeAmountController = TextEditingController();
   final _conAmountController = TextEditingController();
   DateTime? _dueDate;
@@ -82,35 +85,59 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
 
+  // Horizontal scroll for the wide import preview grid (17 columns).
+  final _importHScroll = ScrollController();
+
   static const _importFieldKeys = [
     'demno',
+    'demseqtype',
     'stuadmno',
     'stuclass',
-    'courname',
+    'demfeeterm',
     'demfeetype',
     'yr_id',
-    'demfeeterm',
-    'con_id',
     'feeamount',
+    'con_id',
     'conamount',
     'duedate',
+    'cla_id',
+    'sem_id',
+    'fee_id',
+    'cf_id',
+    'arrearclass',
   ];
 
   static const Map<String, String> _importFieldLabels = {
     'demno': 'Demand No',
+    'demseqtype': 'Type',
     'stuadmno': 'Roll No',
     'stuclass': 'Class',
-    'courname': 'Course',
+    'demfeeterm': 'Semester',
     'demfeetype': 'Fee Type',
     'yr_id': 'Fee Year',
-    'demfeeterm': 'Semester',
-    'con_id': 'Concession',
-    'feeamount': 'Fee Amount',
+    'feeamount': 'Due Amount',
+    'con_id': 'Con. Category',
     'conamount': 'Concession Amount',
     'duedate': 'Due Date',
+    'cla_id': 'Class Id',
+    'sem_id': 'Semester id',
+    'fee_id': 'Fee Id',
+    'cf_id': 'Class Fee Id',
+    'arrearclass': 'Arrear Class',
   };
 
   static const _requiredFields = {'stuadmno', 'stuclass', 'demfeetype', 'yr_id', 'demfeeterm', 'feeamount', 'duedate'};
+
+  // Fixed column widths for the import preview grid. The grid scrolls
+  // horizontally (17 columns don't fit an Expanded/flex layout — long headers
+  // like "Arrear Class" overflowed the container), so header + data cells share
+  // these exact widths and _gridTotalW is their sum (+ slack for the error icon).
+  static const double _wSno = 60, _wDemno = 120, _wType = 90, _wRoll = 130,
+      _wClass = 120, _wSem = 110, _wFeeType = 150, _wYear = 100, _wDueAmt = 100,
+      _wConCat = 100, _wConAmt = 100, _wDueDate = 120, _wClaId = 85,
+      _wSemId = 75, _wFeeId = 75, _wCfId = 75, _wArrear = 130;
+  // Sum of the 17 column widths above (1740) + slack for the data-row error icon.
+  static const double _gridTotalW = 1800;
 
   @override
   void initState() {
@@ -121,12 +148,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   @override
   void dispose() {
+    _lookupDebounce?.cancel();
     _admNoController.dispose();
     _feeAmountController.dispose();
     _conAmountController.dispose();
 
     _feeTermController.dispose();
     _searchController.dispose();
+    _importHScroll.dispose();
     super.dispose();
   }
 
@@ -339,6 +368,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     }
   }
 
+  /// Debounces the roll-no lookup (~350ms) so a DB round-trip fires only after
+  /// the user pauses typing, not on every character.
+  void _onAdmNoChanged(String admNo) {
+    _lookupDebounce?.cancel();
+    if (admNo.isEmpty) return;
+    _lookupDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _lookupStudentClass(admNo);
+    });
+  }
+
   Future<void> _lookupStudentClass(String admNo) async {
     if (admNo.isEmpty) return;
     final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -389,16 +428,26 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final h = header.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
     const aliases = {
       'demno': 'demno', 'demandno': 'demno', 'demandnumber': 'demno', 'docno': 'demno',
+      // "Type" = demand sequence type (ARREAR / DEMAND / REGULAR), NOT the fee type.
+      'type': 'demseqtype', 'demseqtype': 'demseqtype', 'demandtype': 'demseqtype', 'seqtype': 'demseqtype',
       'admissionno': 'stuadmno', 'admno': 'stuadmno', 'stuadmno': 'stuadmno', 'admissionnumber': 'stuadmno', 'rollno': 'stuadmno', 'roll': 'stuadmno', 'rollnumber': 'stuadmno',
       'class': 'stuclass', 'stuclass': 'stuclass',
+      // "Arrear Class" = the original class the arrear was raised under (differs from current Class).
+      'arrearclass': 'arrearclass',
       'course': 'courname', 'courname': 'courname', 'coursename': 'courname',
-      'feetype': 'demfeetype', 'demfeetype': 'demfeetype', 'type': 'demfeetype',
-      'feeyear': 'yr_id', 'yrid': 'yr_id', 'year': 'yr_id',
+      'feetype': 'demfeetype', 'demfeetype': 'demfeetype',
+      'feeyear': 'yr_id', 'yrid': 'yr_id', 'year': 'yr_id', 'arrearyear': 'yr_id',
       'feeterm': 'demfeeterm', 'demfeeterm': 'demfeeterm', 'term': 'demfeeterm', 'semester': 'demfeeterm', 'sem': 'demfeeterm',
       'concession': 'con_id', 'conid': 'con_id', 'concessioncategory': 'con_id', 'con': 'con_id',
-      'feeamount': 'feeamount', 'amount': 'feeamount', 'fee': 'feeamount', 'feeamt': 'feeamount', 'fee amount': 'feeamount', 'fee amt': 'feeamount',
+      'feeamount': 'feeamount', 'amount': 'feeamount', 'fee': 'feeamount', 'feeamt': 'feeamount', 'fee amount': 'feeamount', 'fee amt': 'feeamount', 'dueamount': 'feeamount', 'dueamt': 'feeamount',
       'concessionamount': 'conamount', 'conamount': 'conamount', 'conamt': 'conamount', 'con amt': 'conamount', 'con. amt': 'conamount', 'concession amount': 'conamount',
+      'concategory': 'con_id', 'concessioncat': 'con_id',
+      'balanceamount': 'balancedue', 'balance': 'balancedue', 'balancedue': 'balancedue', 'balamount': 'balancedue', 'baldue': 'balancedue', 'balanceamt': 'balancedue',
       'duedate': 'duedate', 'due': 'duedate',
+      'classid': 'cla_id', 'claid': 'cla_id',
+      'semesterid': 'sem_id', 'semid': 'sem_id',
+      'feeid': 'fee_id',
+      'classfeeid': 'cf_id', 'cfid': 'cf_id', 'cffeeid': 'cf_id',
     };
     return aliases[h];
   }
@@ -463,10 +512,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (insId == null) return;
     String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
     try {
-      final rows = await SupabaseService.fromSchema('students')
+      // Paged: the full student roster passes 1000 as the college grows,
+      // and a silent truncation here would mis-map imported rows.
+      final rows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('students')
           .select('stuadmno, stuclass, courname')
           .eq('ins_id', insId)
-          .eq('activestatus', 1);
+          .eq('activestatus', 1));
       final map = <String, Map<String, String>>{};
       for (final s in (rows as List)) {
         final adm = (s['stuadmno']?.toString() ?? '').trim();
@@ -492,6 +544,11 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       if (colIdx < 0 || colIdx >= row.length || row[colIdx].toString().trim().isEmpty) {
         errors[reqKey] = 'Required';
       }
+    }
+    // Due date must parse to a real calendar date (accepts DD-MM-YYYY etc.).
+    final dueRaw = _cellByKey(row, 'duedate');
+    if (dueRaw != null && _parseDate(dueRaw) == null) {
+      errors['duedate'] = 'Invalid Due Date "$dueRaw" (use YYYY-MM-DD or DD-MM-YYYY)';
     }
     final ft = _cellByKey(row, 'demfeetype');
     if (ft != null && _feeTypes.isNotEmpty) {
@@ -552,6 +609,39 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     return v.isEmpty ? null : v;
   }
 
+  /// Parse a date string in common formats (ISO, DD-MM-YYYY, MM-DD-YYYY).
+  /// Excel due dates are often typed as "30-07-2026" (DD-MM-YYYY), which
+  /// Postgres rejects when sent raw to a `date` column, so normalise here.
+  static DateTime? _parseDate(String? s) {
+    if (s == null || s.trim().isEmpty) return null;
+    final t = s.trim();
+    // yyyy-MM-dd (ISO format)
+    try { return DateTime.parse(t); } catch (_) {}
+    final parts = t.split(RegExp(r'[/\-.]'));
+    if (parts.length == 3) {
+      final a = int.tryParse(parts[0]);
+      final b = int.tryParse(parts[1]);
+      final c = int.tryParse(parts[2]);
+      if (a != null && b != null && c != null) {
+        // Try MM-DD-YYYY or MM-DD-YY (US format)
+        if (a >= 1 && a <= 12 && b >= 1 && b <= 31) {
+          final year = c < 100 ? (c > 50 ? c + 1900 : c + 2000) : c;
+          return DateTime(year, a, b);
+        }
+        // Try DD-MM-YYYY or DD-MM-YY (Indian format)
+        if (b >= 1 && b <= 12 && a >= 1 && a <= 31) {
+          final year = c < 100 ? (c > 50 ? c + 1900 : c + 2000) : c;
+          return DateTime(year, b, a);
+        }
+        // Try YYYY-MM-DD where first part is year
+        if (a > 1900 && b >= 1 && b <= 12 && c >= 1 && c <= 31) {
+          return DateTime(a, b, c);
+        }
+      }
+    }
+    return null;
+  }
+
   Future<void> _startImport() async {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId ?? 1;
@@ -582,18 +672,36 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       _importErrors = [];
     });
 
+    // Clear already-processed staging rows (activestatus=9) so re-importing the
+    // same Demand No isn't blocked by the tempfeedemand.demno unique constraint.
+    // Those demands already live in feedemand; approving the new staging rows
+    // updates them in place (fn_approve_tempfeedemand dedup) instead of adding.
+    try {
+      await SupabaseService.fromSchema('tempfeedemand')
+          .delete()
+          .eq('ins_id', insId)
+          .eq('activestatus', 9);
+    } catch (e) {
+      debugPrint('tempfeedemand cleanup failed: $e');
+    }
+
     // 1. Pre-fetch all student admno -> stu_id mappings.
     // Index under multiple normalisations because Excel often loses
     // leading zeros and adds whitespace to admission numbers.
-    final stuList = await SupabaseService.fromSchema('students')
-        .select('stu_id, stuadmno')
+    // Paged: see above — a truncated roster silently drops import matches.
+    final stuList = await SupabaseService.fetchAll(() => SupabaseService
+        .fromSchema('students')
+        .select('stu_id, stuadmno, courname')
         .eq('ins_id', insId)
-        .eq('activestatus', 1);
+        .eq('activestatus', 1));
     final stuMap = <String, int>{};
+    final stuCourse = <int, String>{}; // stu_id -> course name (for the demand)
     for (final s in stuList) {
       final raw = s['stuadmno']?.toString().trim() ?? '';
       final id  = s['stu_id'] as int?;
       if (raw.isEmpty || id == null) continue;
+      final cn = s['courname']?.toString().trim() ?? '';
+      if (cn.isNotEmpty) stuCourse[id] = cn;
       // Original, lowercase, leading-zero stripped, leading-zero stripped+lower.
       stuMap.putIfAbsent(raw, () => id);
       stuMap.putIfAbsent(raw.toLowerCase(), () => id);
@@ -612,6 +720,70 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       if (desc.isNotEmpty && id != null) conMap[desc] = id;
     }
 
+    // 2b. Pre-fetch classfeedemand cf_id -> collectible, so an imported demand
+    // inherits the collectible flag of its class-fee template row (Class Fee Id).
+    final cfCollectible = <int, bool>{};
+    try {
+      final cfRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('classfeedemand')
+          .select('cf_id, collectible'));
+      for (final c in cfRows) {
+        final id = c['cf_id'] as int?;
+        if (id != null) cfCollectible[id] = c['collectible'] == true;
+      }
+    } catch (_) {/* classfeedemand may be empty — demands default to collectible */}
+
+    // 2c. Pre-fetch cla_id -> course name (class.cour_id -> course.courname), so
+    // an imported demand's course is derived from its Class Id.
+    final claCourse = <int, String>{};
+    try {
+      final classRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('class').select('cla_id, cour_id').eq('ins_id', insId));
+      final courseRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('course').select('cour_id, courname').eq('ins_id', insId));
+      final courseById = <int, String>{
+        for (final c in courseRows)
+          if (c['cour_id'] is int) (c['cour_id'] as int): (c['courname']?.toString().trim() ?? ''),
+      };
+      for (final cl in classRows) {
+        final claId = cl['cla_id'] as int?;
+        final courId = cl['cour_id'] as int?;
+        final cn = courId == null ? null : courseById[courId];
+        if (claId != null && cn != null && cn.isNotEmpty) claCourse[claId] = cn;
+      }
+    } catch (_) {/* class/course masters may be missing */}
+
+    // 2d. Pre-fetch valid Fee Type ids. A row whose Fee Id isn't one of these is
+    // REJECTED (not imported) — the file's ids must match this institution's
+    // masters. A blank Fee Id is allowed (resolved from the name on insert).
+    final feeIds = <int>{};
+    try {
+      final ftRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('feetype').select('fee_id').eq('activestatus', 1));
+      for (final f in ftRows) {
+        final id = f['fee_id'] as int?;
+        if (id != null) feeIds.add(id);
+      }
+    } catch (_) {/* feetype missing — skip the check */}
+
+    // 2e. Existing demands' paid amount, keyed by stu_id|feetype|term|yr_id, so a
+    // re-import's Due Amount can be validated to cover what's already collected +
+    // concession (a demand can't be reduced below its collections).
+    final paidByDemand = <String, double>{};
+    try {
+      final fdRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('feedemand')
+          .select('stu_id, demfeetype, demfeeterm, yr_id, paidamount')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1));
+      for (final f in fdRows) {
+        final sid = f['stu_id'] as int?;
+        if (sid == null) continue;
+        paidByDemand['$sid|${f['demfeetype'] ?? ''}|${f['demfeeterm'] ?? ''}|${f['yr_id'] ?? ''}'] =
+            (f['paidamount'] as num?)?.toDouble() ?? 0;
+      }
+    } catch (_) {/* no existing demands */}
+
     // 3. Build all rows in memory
     final batch = <Map<String, dynamic>>[];
     for (int i = 0; i < _rows.length; i++) {
@@ -626,6 +798,19 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       try {
         final feeAmount = double.tryParse(_cellByKey(row, 'feeamount') ?? '0') ?? 0;
         final conAmount = double.tryParse(_cellByKey(row, 'conamount') ?? '0') ?? 0;
+        // Balance column removed from the import: balance is always the full due
+        // amount on a first import; re-import recomputes it from payments made.
+        final balAmount = feeAmount;
+        final cfId = int.tryParse(_cellByKey(row, 'cf_id') ?? '');
+        final claId = int.tryParse(_cellByKey(row, 'cla_id') ?? '');
+        // Reject a row whose Fee Id doesn't exist in this College's Fee Types
+        // (blank is fine — it's resolved from the fee-type name on insert).
+        final feeId = int.tryParse(_cellByKey(row, 'fee_id') ?? '');
+        if (feeId != null && feeIds.isNotEmpty && !feeIds.contains(feeId)) {
+          _skipped++;
+          _importErrors.add('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Fee Id $feeId not found in Fee Types — fix the file');
+          continue;
+        }
 
         final yrRaw = _cellByKey(row, 'yr_id');
         int? yrId;
@@ -662,13 +847,11 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             yrLabel = byPartial['yrlabel']?.toString();
           }
         }
-        // Final fallback: if there's exactly one year configured, use it.
-        // This handles Excel files where yr_id is missing or has values like
-        // '2025', 'Year 1', etc. that don't match anything in the year table.
-        if (yrId == null && _years.isNotEmpty) {
-          yrId = _years.first['yr_id'] as int?;
-          yrLabel = _years.first['yrlabel']?.toString();
-        }
+        // If the provided Fee/Arrear Year isn't in the year master, LEAVE yr_id
+        // NULL (stored as null) and keep the raw label in demfeeyear — never
+        // silently assign the wrong year. yr_id is nullable in feedemand /
+        // tempfeedemand (add_feedemand_yrid_nullable.sql). The exact/partial
+        // matches above still resolve close variants like "2025" -> "2025-2026".
 
         final admNoRaw = _cellByKey(row, 'stuadmno')?.trim() ?? '';
         // Try direct, lowercase, and leading-zero-stripped variants
@@ -685,20 +868,44 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           continue;
         }
 
+        // Re-import guard: Due Amount must cover what's already paid on this
+        // demand + its concession (else the balance would go negative / a demand
+        // would be reduced below collections). First imports have paid = 0.
+        final demType = _cellByKey(row, 'demfeetype') ?? '';
+        final demTerm = _cellByKey(row, 'demfeeterm') ?? '';
+        final existingPaid = paidByDemand['$stuId|$demType|$demTerm|${yrId ?? ''}'] ?? 0;
+        if (feeAmount + 0.005 < existingPaid + conAmount) {
+          _skipped++;
+          _importErrors.add('Adm $admNoRaw: Due Amount ${feeAmount.toStringAsFixed(0)} is less than paid (${existingPaid.toStringAsFixed(0)}) + concession (${conAmount.toStringAsFixed(0)})');
+          continue;
+        }
+
         final conName = _cellByKey(row, 'con_id');
         int? conId;
         if (conName != null && conName.isNotEmpty) {
           conId = int.tryParse(conName) ?? conMap[conName.toUpperCase()];
         }
 
+        // Normalise the due date to ISO (yyyy-MM-dd). Excel commonly stores it
+        // as "30-07-2026" (DD-MM-YYYY), which Postgres rejects raw.
+        final dueRaw = _cellByKey(row, 'duedate');
+        final dueParsed = _parseDate(dueRaw);
+        if (dueRaw != null && dueParsed == null) {
+          _skipped++;
+          _importErrors.add('Row ${i + 2}: Invalid Due Date "$dueRaw" (use YYYY-MM-DD or DD-MM-YYYY)');
+          continue;
+        }
+
         final data = {
           'ins_id': insId,
           'inscode': auth.inscode ?? '',
           'demno': _cellByKey(row, 'demno'),
+          // ARREAR / DEMAND. Null (regular import) -> feedemand trigger defaults to 'DEMAND'.
+          'demseqtype': _cellByKey(row, 'demseqtype'),
           'stuadmno': admNoRaw,
           'stu_id': stuId,
           'stuclass': _cellByKey(row, 'stuclass'),
-          'courname': _cellByKey(row, 'courname'),
+          'courname': (claId != null ? claCourse[claId] : null) ?? stuCourse[stuId] ?? _cellByKey(row, 'courname'),
           'demfeetype': _cellByKey(row, 'demfeetype'),
           'yr_id': yrId,
           'demfeeyear': yrLabel ?? yrRaw ?? '',
@@ -706,8 +913,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           'con_id': conId,
           'feeamount': feeAmount,
           'conamount': conAmount,
-          'balancedue': feeAmount,
-          'duedate': _cellByKey(row, 'duedate'),
+          'balancedue': balAmount,
+          'duedate': dueParsed?.toIso8601String().split('T').first,
+          'cla_id': claId,
+          'sem_id': int.tryParse(_cellByKey(row, 'sem_id') ?? ''),
+          'fee_id': int.tryParse(_cellByKey(row, 'fee_id') ?? ''),
+          'cf_id': cfId,
+          // Original class for an arrear demand (differs from current stuclass).
+          'arrearclass': _cellByKey(row, 'arrearclass'),
+          // collectible follows the class-fee template row (by Class Fee Id).
+          'collectible': cfId != null ? (cfCollectible[cfId] ?? true) : true,
           'activestatus': 1,
           'createdat': now,
           'createdby': auth.userName,
@@ -1003,7 +1218,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                       decoration: _inputDecoration('Enter admission number', filled: _admNoController.text.trim().isNotEmpty),
                       style: TextStyle(fontSize: 13.sp, color: _admNoController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: _admNoController.text.trim().isNotEmpty ? FontWeight.w600 : null),
                       validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
-                      onChanged: (v) { setState(() {}); _lookupStudentClass(v.trim()); },
+                      onChanged: (v) { setState(() {}); _onAdmNoChanged(v.trim()); },
                     ),
                     SizedBox(height: 16.h),
 
@@ -1413,6 +1628,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   Expanded(child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                   Expanded(child: Text('STUDENTS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
                   Expanded(child: Text('TOTAL DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text('CONCESSION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                   Expanded(child: Text('COLLECTED', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                   Expanded(child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                   Expanded(child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
@@ -1430,6 +1646,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   final className = s['stuclass']?.toString() ?? '-';
                   final studentCount = (s['student_count'] as num?)?.toInt() ?? 0;
                   final totalDemand = (s['total_demand'] as num?)?.toDouble() ?? 0;
+                  final totalConcession = (s['total_concession'] as num?)?.toDouble() ?? 0;
                   final totalPaid = (s['total_paid'] as num?)?.toDouble() ?? 0;
                   final totalFine = (s['total_fine'] as num?)?.toDouble() ?? 0;
                   final totalPending = (s['total_pending'] as num?)?.toDouble() ?? 0;
@@ -1445,6 +1662,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                           Expanded(child: Text(className, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                           Expanded(child: Text('$studentCount', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.center)),
                           Expanded(child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
+                          Expanded(child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
                           Expanded(child: Text('${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right)),
                           Expanded(child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right)),
                           Expanded(child: Text('${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.warning), textAlign: TextAlign.right)),
@@ -1470,6 +1688,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   const Expanded(child: SizedBox.shrink()),
                   Expanded(child: Text('${summaries.fold<int>(0, (sum, s) => sum + ((s['student_count'] as num?)?.toInt() ?? 0))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.center)),
                   Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_demand'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_concession'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
                   Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_paid'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.success), textAlign: TextAlign.right)),
                   Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_fine'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.orange), textAlign: TextAlign.right)),
                   Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_pending'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.warning), textAlign: TextAlign.right)),
@@ -1538,6 +1757,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                     Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('CONCESSION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('PAID', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
@@ -1556,6 +1776,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final admNo = s['stuadmno']?.toString() ?? '-';
                     final name = s['stuname']?.toString() ?? '';
                     final totalDemand = (s['total_demand'] as double?) ?? 0;
+                    final totalConcession = (s['total_concession'] as double?) ?? 0;
                     final totalPaid = (s['total_paid'] as double?) ?? 0;
                     final totalFine = (s['total_fine'] as double?) ?? 0;
                     final totalPending = (s['total_pending'] as double?) ?? 0;
@@ -1592,6 +1813,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                             Expanded(
                               flex: 1,
                               child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
+                            ),
+                            Expanded(
+                              flex: 1,
+                              child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
@@ -1673,9 +1898,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       );
     }
 
-    double totalAmt = 0, totalPaid = 0, totalFine = 0, totalBal = 0;
+    double totalAmt = 0, totalConcession = 0, totalPaid = 0, totalFine = 0, totalBal = 0;
     for (final d in demands) {
       totalAmt += (d['feeamount'] as num?)?.toDouble() ?? 0;
+      totalConcession += (d['conamount'] as num?)?.toDouble() ?? 0;
       final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
       final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
       final status = d['paidstatus']?.toString() ?? 'U';
@@ -1697,10 +1923,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         child: Builder(builder: (context) {
           // Fixed pixel widths: S No. stays narrow; every other column is an
           // equal fixed width. The 40 is the 20px row padding on each side.
-          const widths = <double>[70, 200, 200, 200, 200, 200, 200, 200, 200];
+          const widths = <double>[70, 200, 200, 200, 200, 200, 200, 200, 200, 200];
           final tableWidth = widths.reduce((a, b) => a + b) + 40;
           const headers = <String>[
-            'S No.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'PAID',
+            'S No.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'CONCESSION', 'PAID',
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
           ];
           final hStyle = TextStyle(
@@ -1716,8 +1942,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               fontWeight: FontWeight.w700,
               fontSize: 14.sp,
               color: AppColors.textPrimary);
-          // AMOUNT/PAID/FINE/BALANCE are right-aligned.
-          bool rightAlign(int i) => i >= 3 && i <= 6;
+          // AMOUNT/CONCESSION/PAID/FINE/BALANCE are right-aligned.
+          bool rightAlign(int i) => i >= 3 && i <= 7;
           Widget cell(int i, Widget child) => SizedBox(
                 width: widths[i],
                 child: Padding(
@@ -1764,6 +1990,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final term = d['demfeeterm']?.toString() ?? '-';
                     final feeType = d['demfeetype']?.toString() ?? '-';
                     final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
+                    final con = (d['conamount'] as num?)?.toDouble() ?? 0;
                     final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
                     final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
                     final status = d['paidstatus']?.toString() ?? 'U';
@@ -1786,10 +2013,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                             Text('${_formatAmount(amt)}', style: cStyle)),
                         cell(
                             4,
-                            Text('${_formatAmount(paid)}',
+                            Text(con > 0 ? '${_formatAmount(con)}' : '-',
                                 style: cStyle)),
                         cell(
                             5,
+                            Text('${_formatAmount(paid)}',
+                                style: cStyle)),
+                        cell(
+                            6,
                             Text(
                                 fineDisplay > 0
                                     ? '${_formatAmount(fineDisplay)}'
@@ -1801,12 +2032,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                         color: Colors.orange)
                                     : cStyle)),
                         cell(
-                            6,
+                            7,
                             Text('${_formatAmount(bal)}',
                                 style: cStyle)),
-                        cell(7, Text(formattedDueDate, style: cStyle)),
+                        cell(8, Text(formattedDueDate, style: cStyle)),
                         cell(
-                            8,
+                            9,
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 3),
@@ -1844,20 +2075,22 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   cell(2, Text('Total', style: tStyle)),
                   cell(3, Text('${_formatAmount(totalAmt)}',
                       style: tStyle)),
+                  cell(4, Text('${_formatAmount(totalConcession)}',
+                      style: tStyle)),
                   cell(
-                      4,
+                      5,
                       Text('${_formatAmount(totalPaid)}',
                           style: tStyle.copyWith(
                               color: AppColors.success))),
                   cell(
-                      5,
+                      6,
                       Text('${_formatAmount(totalFine)}',
                           style: tStyle.copyWith(
                               color: AppColors.warning))),
-                  cell(6, Text('${_formatAmount(totalBal)}',
+                  cell(7, Text('${_formatAmount(totalBal)}',
                       style: tStyle)),
-                  cell(7, const SizedBox()),
                   cell(8, const SizedBox()),
+                  cell(9, const SizedBox()),
                 ]),
               ),
             ],
@@ -1982,7 +2215,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 border: Border.all(color: AppColors.border),
                 borderRadius: BorderRadius.circular(8.r),
               ),
-              child: Column(
+              clipBehavior: Clip.hardEdge,
+              child: Scrollbar(
+                controller: _importHScroll,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                controller: _importHScroll,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: _gridTotalW,
+                  child: Column(
                 children: [
                   // Header row
                   Container(
@@ -1995,29 +2237,23 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     ),
                     child: Row(
                       children: [
-                        _gridHeaderCell('S.No', width: 60, center: true),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Demand No', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Roll No *', flex: 3),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Course', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Class *', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Fee Type *', flex: 3),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Year *', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Semester *', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Concession', flex: 2),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Fee Amt *', flex: 2, center: true),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Con. Amt', flex: 2, center: true),
-                        _gridHeaderDivider(),
-                        _gridHeaderCell('Due Date *', flex: 3, center: true),
+                        _gridHeaderCell('S.No', width: _wSno, center: true),
+                        _gridHeaderCell('Demand No', width: _wDemno),
+                        _gridHeaderCell('Type', width: _wType),
+                        _gridHeaderCell('Roll No *', width: _wRoll),
+                        _gridHeaderCell('Class *', width: _wClass),
+                        _gridHeaderCell('Semester *', width: _wSem),
+                        _gridHeaderCell('Fee Type *', width: _wFeeType),
+                        _gridHeaderCell('Year *', width: _wYear),
+                        _gridHeaderCell('Due Amt *', width: _wDueAmt, center: true),
+                        _gridHeaderCell('Con. Cat', width: _wConCat),
+                        _gridHeaderCell('Con. Amt', width: _wConAmt, center: true),
+                        _gridHeaderCell('Due Date *', width: _wDueDate, center: true),
+                        _gridHeaderCell('Class Id', width: _wClaId, center: true),
+                        _gridHeaderCell('Sem Id', width: _wSemId, center: true),
+                        _gridHeaderCell('Fee Id', width: _wFeeId, center: true),
+                        _gridHeaderCell('CF Id', width: _wCfId, center: true),
+                        _gridHeaderCell('Arrear Class', width: _wArrear),
                       ],
                     ),
                   ),
@@ -2043,11 +2279,11 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                               final isEven = index % 2 == 0;
                               final cellErrs = _cellErrors[index] ?? const <String>{};
                               final rowTooltip = _rowErrors[index] ?? '';
-                              Widget cell(String key, int flex, {bool center = false}) {
-                                final w = _gridDataCell(_mappedCell(row, key), flex: flex, center: center);
-                                if (!cellErrs.contains(key)) return w;
-                                return Expanded(
-                                  flex: flex,
+                              Widget cell(String key, double w, {bool center = false}) {
+                                final cellW = _gridDataCell(_mappedCell(row, key), width: w, center: center);
+                                if (!cellErrs.contains(key)) return cellW;
+                                return SizedBox(
+                                  width: w,
                                   child: Tooltip(
                                     message: rowTooltip,
                                     child: Container(
@@ -2064,22 +2300,27 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                 );
                               }
                               return Container(
-                                padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
+                                padding: EdgeInsets.symmetric(vertical: 12.h),
                                 color: isEven ? Colors.white : AppColors.surface,
                                 child: Row(
                                   children: [
-                                    _gridDataCell('${index + 1}', width: 60, center: true),
-                                    cell('demno', 2),
-                                    cell('stuadmno', 3),
-                                    cell('courname', 2),
-                                    cell('stuclass', 2),
-                                    cell('demfeetype', 3),
-                                    cell('yr_id', 2),
-                                    cell('demfeeterm', 2),
-                                    cell('con_id', 2),
-                                    cell('feeamount', 2, center: true),
-                                    cell('conamount', 2, center: true),
-                                    cell('duedate', 3, center: true),
+                                    _gridDataCell('${index + 1}', width: _wSno, center: true),
+                                    cell('demno', _wDemno),
+                                    cell('demseqtype', _wType),
+                                    cell('stuadmno', _wRoll),
+                                    cell('stuclass', _wClass),
+                                    cell('demfeeterm', _wSem),
+                                    cell('demfeetype', _wFeeType),
+                                    cell('yr_id', _wYear),
+                                    cell('feeamount', _wDueAmt, center: true),
+                                    cell('con_id', _wConCat),
+                                    cell('conamount', _wConAmt, center: true),
+                                    cell('duedate', _wDueDate, center: true),
+                                    cell('cla_id', _wClaId, center: true),
+                                    cell('sem_id', _wSemId, center: true),
+                                    cell('fee_id', _wFeeId, center: true),
+                                    cell('cf_id', _wCfId, center: true),
+                                    cell('arrearclass', _wArrear),
                                     if (cellErrs.isNotEmpty)
                                       Padding(
                                         padding: EdgeInsets.only(left: 8.w),
@@ -2095,6 +2336,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                           ),
                   ),
                 ],
+              ),
+              ),
+              ),
               ),
             ),
           ),
@@ -2165,19 +2409,18 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final child = Container(
       padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 12.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: AppColors.border)),
+      ),
       child: Text(
         text.toUpperCase(),
         maxLines: 1,
         softWrap: false,
-        overflow: TextOverflow.visible,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3.w),
       ),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
-  }
-
-  Widget _gridHeaderDivider() {
-    return Container(width: 1, height: 36, color: AppColors.border);
   }
 
   Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = false}) {
@@ -2273,15 +2516,18 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final headers = [
       'Demand No',
       'Roll No *',
-      'Course',
       'Class *',
+      'Semester *',
       'Fee Type *',
       'Fee Year *',
-      'Semester *',
-      'Concession',
-      'Fee Amount *',
+      'Due Amount *',
+      'Con. Category',
       'Concession Amount',
       'Due Date *',
+      'Class Id',
+      'Semester id',
+      'Fee Id',
+      'Class Fee Id',
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2290,7 +2536,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       bold: true,
     );
 
-    const columnWidths = [16.0, 18.0, 12.0, 18.0, 14.0, 12.0, 16.0, 16.0, 16.0, 20.0, 16.0];
+    const columnWidths = [16.0, 18.0, 14.0, 14.0, 16.0, 12.0, 14.0, 16.0, 18.0, 14.0, 10.0, 12.0, 10.0, 12.0];
 
     for (int i = 0; i < headers.length; i++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
@@ -2332,12 +2578,15 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final sheet = excel['Fee Demands'];
     excel.delete('Sheet1');
 
-    final headers = ['Demand No', 'Roll No *', 'Course', 'Class *', 'Fee Type *', 'Fee Year *', 'Semester *', 'Concession', 'Fee Amount *', 'Concession Amount', 'Due Date *'];
+    // Supports BOTH formats. Regular rows: leave "Type"/"Arrear Class" blank
+    // (Type defaults to DEMAND). Arrear rows: Type = ARREAR + the original
+    // class in "Arrear Class" (differs from the student's current "Class").
+    final headers = ['Demand No', 'Type', 'Roll No *', 'Class *', 'Semester *', 'Fee Type *', 'Fee Year *', 'Due Amount *', 'Con. Category', 'Concession Amount', 'Due Date *', 'Class Id', 'Semester id', 'Fee Id', 'Class Fee Id', 'Arrear Class'];
     final sampleRows = [
-      ['', 'CS001', 'BSC-CS', 'I Year', 'SCHOOL FEES', '2026-2027', 'I TERM', 'GENERAL', '10080', '0', '2026-05-31'],
-      ['', 'CS001', 'BSC-CS', 'I Year', 'TUITION FEES', '2026-2027', 'JUNE', 'GENERAL', '700', '0', '2026-06-30'],
-      ['', 'BBA001', 'BBA', 'II Year', 'SCHOOL FEES', '2026-2027', 'I TERM', 'GENERAL', '10080', '2000', '2026-05-31'],
-      ['', 'MCA001', 'MCA', 'I Year', 'SCHOOL FEES', '2026-2027', 'I TERM', 'GENERAL', '6500', '0', '2026-05-31'],
+      ['', 'DEMAND', 'CS001',  'I Year',  'I TERM', 'SCHOOL FEES',  '2026-2027', '10080', 'GENERAL', '0',    '2026-05-31', '', '', '', '', ''],
+      ['', 'DEMAND', 'CS001',  'I Year',  'JUNE',   'TUITION FEES', '2026-2027', '700',   'GENERAL', '0',    '2026-06-30', '', '', '', '', ''],
+      ['', 'DEMAND', 'BBA001', 'II Year', 'I TERM', 'SCHOOL FEES',  '2026-2027', '10080', 'GENERAL', '2000', '2026-05-31', '', '', '', '', ''],
+      ['', 'ARREAR', 'MCA001', 'II Year', 'I TERM', 'TUITION FEES', '2022-2023', '6500',  'GENERAL', '0',    '2026-05-31', '', '', '', '', 'I Year'],
     ];
 
     final headerStyle = xl.CellStyle(

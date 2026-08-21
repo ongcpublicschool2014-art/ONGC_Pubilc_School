@@ -3,69 +3,82 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
-  // Primary - Deep Navy (sidebars, headers, primary buttons)
-  static const Color primary = Color(0xFF002147);
-  static const Color primaryLight = Color(0xFFE4EAF2);
-  static const Color primaryDark = Color(0xFF001834);
-  static const Color primaryHover = Color(0xFF003069);
+  // Primary - Royal Blue (headers, primary buttons, active states)
+  static const Color primary = Color(0xFF2563EB);      // Royal Blue
+  static const Color primaryLight = Color(0xFFDBEAFE);  // Blue-100 tint (selected fills, chips)
+  static const Color primaryDark = Color(0xFF0F2D5C);   // Navy (deep accents / sidebar family)
+  static const Color primaryHover = Color(0xFF1D4ED8);  // Hover Blue
 
-  // Accent - Burnished Amber (alerts, active files)
-  static const Color accent = Color(0xFFD2913C);
-  static const Color accentLight = Color(0xFFF3DCB5);
-  static const Color accentDark = Color(0xFFA5711E);
+  // Accent - maps to the blue family (palette has no separate accent hue)
+  static const Color accent = Color(0xFF2563EB);        // Royal Blue
+  static const Color accentLight = Color(0xFFDBEAFE);
+  static const Color accentDark = Color(0xFF1D4ED8);    // Hover Blue
 
-  // Secondary - Brushed Silver (icons, secondary borders)
-  static const Color secondary = Color(0xFFBFC1C2);
-  static const Color secondaryLight = Color(0xFFD9DBDC);
+  // Secondary - Slate border family (icons, secondary borders)
+  static const Color secondary = Color(0xFFCBD5E1);      // Slate-300 — visible on white
+  static const Color secondaryLight = Color(0xFFE2E8F0);
 
   // Surfaces
-  static const Color surface = Color(0xFFF9F8F4); // Bone White workspace
-  static const Color surfaceCard = Color(0xFFFFFFFF);
-  static const Color surfaceSidebar = Color(0xFFFFFFFF);
-  static const Color surfaceDark = Color(0xFF002147);
+  static const Color surface = Color(0xFFF8FAFC);       // Background Light Gray
+  static const Color surfaceCard = Color(0xFFFFFFFF);   // Card White
+  static const Color surfaceSidebar = Color(0xFF0F2D5C); // Dark Sidebar Navy
+  static const Color surfaceDark = Color(0xFF0F2D5C);   // Navy
 
   // Feedback colors
-  static const Color success = Color(0xFF22C55E);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color error = Color(0xFFEF4444);
-  static const Color info = Color(0xFF38BDF8);
+  static const Color success = Color(0xFF22C55E);       // Success Green
+  static const Color warning = Color(0xFFF59E0B);       // Warning Orange
+  static const Color error = Color(0xFFEF4444);         // Error Red
+  static const Color info = Color(0xFF3B82F6);          // Blue-500 (info, fits theme)
 
-  // Text
-  static const Color textPrimary = Color(0xFF1A1A1A);   // Deep Charcoal
-  static const Color textSecondary = Color(0xFF4A5568); // Slate Navy
-  static const Color textLight = Color(0xFF9CA3AF);
-  static const Color textOnPrimary = Color(0xFFFFFFFF); // Pure White on navy
-  static const Color textAccent = Color(0xFF002147);    // Navy Shade — links, section heads
+  // Metric hues for KPI/summary cards. `accent` is now the same blue as
+  // `primary`, so cards tinted with it would be indistinguishable — these give
+  // each figure its own hue, used consistently across every dashboard:
+  //   primary = collection · today = today's collection
+  //   demand  = demand/outstanding · success = collected · warning = pending
+  static const Color demand = Color(0xFF8B5CF6);        // Violet — demand / outstanding
+  static const Color today = Color(0xFF14B8A6);         // Teal — today's figures
 
-  // Tab pill (Reports) — Deep Navy selected, Slate Navy unselected
-  static const Color tabSelected = Color(0xFF002147);
-  static const Color tabUnselected = Color(0xFF4A5568);
+  // Text — three AA-compliant tiers so titles read stronger than content.
+  static const Color textPrimary = Color(0xFF1E293B);   // Dark Slate — titles, key values (~13:1)
+  static const Color textSecondary = Color(0xFF475569); // Slate-600 — body/content (~7:1, AA/AAA)
+  static const Color textLight = Color(0xFF64748B);     // Slate-500 — labels/captions/hints (~4.6:1, AA)
+  static const Color textOnPrimary = Color(0xFFFFFFFF); // White on blue/navy
+  static const Color textAccent = Color(0xFF2563EB);    // Royal Blue — links, section heads
 
-  // Borders & Dividers — Brushed Silver
-  static const Color border = Color(0xFFBFC1C2);
-  static const Color cardBorder = Color(0xFFE5E5E5);
-  static const Color divider = Color(0xFFBFC1C2);
+  // Sidebar (dark navy chrome) — light foreground so items read on navy.
+  static const Color sidebarBg = Color(0xFF0F2D5C);     // Dark Sidebar Navy
+  static const Color sidebarBorder = Color(0xFF1E3A66); // Lighter navy divider
+  static const Color sidebarText = Color(0xFFE2E8F0);   // Light text/icons on navy
 
-  // Table head — warm stone, coheres with Bone White surface
-  static const Color tableHeadBg = Color(0xFFEFEAD8);
+  // Tab pill — Royal Blue selected, Slate unselected
+  static const Color tabSelected = Color(0xFF2563EB);
+  static const Color tabUnselected = Color(0xFF64748B);
 
-  // Gradient
+  // Borders & Dividers
+  static const Color border = Color(0xFFCBD5E1);      // Slate-300 — structural edges (inputs, cards) that read clearly on white
+  static const Color cardBorder = Color(0xFFE2E8F0);  // Slate-200 — softer inner card edges
+  static const Color divider = Color(0xFFE2E8F0);     // Slate-200 — subtle inner dividers
+
+  // Table head — cool slate, clearly stronger than the white body rows
+  static const Color tableHeadBg = Color(0xFFEEF2F8);
+
+  // Gradient — blue family
   static const LinearGradient primaryGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF6C8EEF), Color(0xFF4A6CD4)],
+    colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
   );
 
   static const LinearGradient accentGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF6C8EEF), Color(0xFF4A6CD4)],
+    colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
   );
 
   static const LinearGradient splashGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [Color(0xFF6C8EEF), Color(0xFF4A6CD4), Color(0xFF2D3A5F)],
+    colors: [Color(0xFF2563EB), Color(0xFF1D4ED8), Color(0xFF0F2D5C)],
   );
 }
 
@@ -103,13 +116,20 @@ class AppCard {
     return BoxDecoration(
       color: color ?? AppColors.surfaceCard,
       borderRadius: BorderRadius.circular(borderRadius ?? radius),
-      border: Border.all(color: AppColors.secondary, width: 1),
+      border: Border.all(color: AppColors.border, width: 1),
       boxShadow: const [
-        // Whisper-soft drop
+        // Two-layer elevation: a crisp contact shadow + a soft ambient lift,
+        // so cards read as raised surfaces against the light-gray workspace.
         BoxShadow(
-          color: Color.fromRGBO(0, 0, 0, 0.02),
-          offset: Offset(0, 2),
-          blurRadius: 10,
+          color: Color.fromRGBO(16, 24, 40, 0.04),
+          offset: Offset(0, 1),
+          blurRadius: 2,
+        ),
+        BoxShadow(
+          color: Color.fromRGBO(16, 24, 40, 0.05),
+          offset: Offset(0, 8),
+          blurRadius: 20,
+          spreadRadius: -6,
         ),
       ],
     );
@@ -129,6 +149,11 @@ class AppTheme {
         error: AppColors.error,
       ),
       scaffoldBackgroundColor: AppColors.surface,
+      // Default popup/menu background for legacy DropdownButton, ContextMenu,
+      // etc. Setting this white globally ensures `DropdownButtonFormField`
+      // popups (the most-used pattern in this app) inherit the white,
+      // rounded popup look from the Fee Group Assignments dropdown.
+      canvasColor: Colors.white,
       textTheme: GoogleFonts.plusJakartaSansTextTheme().copyWith(
         displayLarge: GoogleFonts.plusJakartaSans(
           fontSize: 34.sp,
@@ -224,43 +249,49 @@ class AppTheme {
         filled: false,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-        // Form-field border standard: 1.5px in every state (only the colour
-        // changes on focus). See docs/forms-focus-and-borders.md Part 2.
+        // Form-field border standard: 1.4px at rest, 2px on focus so the
+        // focused field reads clearly. See docs/forms-focus-and-borders.md.
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.border, width: 1.4),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.border, width: 1.4),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.primary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.error, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.error, width: 1.4),
         ),
+        // Kept (the reference dropped this): without it a focused field in
+        // the error state loses its red border and reads as valid.
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.error, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.error, width: 2),
         ),
         hintStyle: GoogleFonts.plusJakartaSans(
           color: AppColors.textLight,
           fontSize: 14.sp,
         ),
+        // Labels sit at the stronger body tier + semibold for clear legibility.
         labelStyle: GoogleFonts.plusJakartaSans(
           color: AppColors.textSecondary,
           fontSize: 14.sp,
+          fontWeight: FontWeight.w600,
         ),
       ),
       cardTheme: CardThemeData(
-        elevation: 0,
-        shadowColor: const Color(0xFF0F172A).withValues(alpha: 0.04),
+        elevation: 1,
+        shadowColor: const Color(0xFF0F172A).withValues(alpha: 0.08),
         color: AppColors.surfaceCard,
+        surfaceTintColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppCard.radius),
+          side: const BorderSide(color: AppColors.cardBorder),
         ),
       ),
       // Soft accent-tinted hover used by DropdownButton menu items, list

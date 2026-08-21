@@ -5,6 +5,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
+import 'utils/app_token_http_client.dart';
 import 'utils/app_theme.dart';
 import 'utils/app_routes.dart';
 import 'utils/auth_provider.dart';
@@ -20,10 +21,13 @@ void main() async {
     debugPrint = (String? message, {int? wrapWidth}) {};
   }
 
-  // Initialize Supabase
+  // Initialize Supabase. A custom http client attaches the app session token as
+  // an `x-app-token` header on every request so the server's db-pre-request hook
+  // can enforce per-tenant reads via RLS (see read_lockdown_foundation.sql).
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
+    httpClient: AppTokenHttpClient(),
   );
 
   runApp(
@@ -64,8 +68,16 @@ class SchoolAdminApp extends StatelessWidget {
             // Inline ElevatedButton.styleFrom() calls in screens still win
             // (they don't inherit theme), but every "stock" button picks
             // this up without per-call MediaQuery checks.
-            final compact = MediaQuery.of(context).size.width <= 1366;
-            if (compact) {
+            final screenW = MediaQuery.of(context).size.width;
+            final compact = screenW <= 1366;
+            if (screenW < 1200) {
+              // Small screens / windows: below the 1366 tier there was no
+              // baseline, so the 1607 design shrank the whole UI to ~60% on a
+              // ~1000px window. Track the width to hold a readable ~85% scale
+              // (clamped so tiny/odd sizes stay sensible).
+              final dw = (screenW / 0.85).clamp(1000.0, 1560.0);
+              ScreenUtil.init(context, designSize: Size(dw, dw * 984 / 1750), minTextAdapt: true);
+            } else if (compact) {
               // Re-initialize ScreenUtil with a tighter design baseline so
               // .sp/.w/.h/.r values render at ~85% at 1366 instead of ~78%.
               // 1366 / 1607 ≈ 0.85. The outer ScreenUtilInit(1750, 984) keeps

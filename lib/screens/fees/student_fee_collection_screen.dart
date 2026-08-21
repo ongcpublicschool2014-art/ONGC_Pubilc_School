@@ -8,8 +8,6 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
-import 'package:webview_windows/webview_windows.dart'
-    if (dart.library.html) 'webview_windows_stub.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -17,18 +15,17 @@ import '../../utils/formatters.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../services/supabase_service.dart';
+import '../../services/paytm_service.dart';
+import '../../config/paytm_config.dart';
+import '../../widgets/paytm_checkout_dialog.dart';
 import '../../widgets/receipt_widget.dart';
 import 'student_fee_definition_dialog.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/focusable_tap.dart';
-const _classOrder =['PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-
-int _classIndex(String c) {
-  final idx = _classOrder.indexOf(c.toUpperCase());
-  return idx >= 0 ? idx : _classOrder.length;
-}
+import '../../utils/class_sort.dart';
+// Class ordering (course, then year) lives in utils/class_sort.dart -> classCompare.
 
 const _termOrder = [
   'I TERM', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER',
@@ -71,9 +68,15 @@ class _StudentFeeCollectionScreenState
   String? _selectedCourse;
   List<String> _classList = [];
   List<String> _allClasses = [];
+  Map<String, int> _classOrdid = {}; // claname(upper) -> course.ordid*N + class.ordid
   Map<String, List<String>> _courseClassMap = {};
   String? _selectedClass;
   List<Map<String, dynamic>> _classSuggestions = [];
+
+  /// stu_id -> total outstanding across that student's active fee demands.
+  /// 0 means billed but fully paid (shown as PAID in the lookup); a missing
+  /// entry means their demands haven't been loaded yet.
+  final Map<int, double> _balanceByStu = {};
 
 
   bool _searching = false;
@@ -86,6 +89,30 @@ class _StudentFeeCollectionScreenState
   bool _loadingDemands = false;
 
   String? _selectedTerm; // null = All
+
+  // Regular vs Arrear collection. Students pay arrear and regular fees on
+  // SEPARATE receipts, so the pending list, selection, totals and payment are
+  // all scoped to one demseqtype at a time. Default 'REGULAR' (covers
+  // demseqtype REGULAR/DEMAND/blank); switch to 'ARREAR' via the header toggle.
+  String _seqType = 'REGULAR';
+  // Utilities setting (fee_collection_arrear_first): when true, a student with
+  // arrear dues opens on Arrear so arrears are cleared before regular fees.
+  bool _arrearFirst = true;
+
+  bool _isArrear(Map<String, dynamic> d) =>
+      (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+  bool get _hasArrear => _allDemands.any(_isArrear);
+  bool get _hasRegular => _allDemands.any((d) => !_isArrear(d));
+  // The student still owes arrear (any arrear demand with a positive balance).
+  bool get _arrearOutstanding => _allDemands.any(
+      (d) => _isArrear(d) && ((d['balancedue'] as num?)?.toDouble() ?? 0) > 0);
+  // Regular collection is locked while arrear is unpaid, when the arrear-first
+  // Utilities toggle is on.
+  bool get _regularLocked => _arrearFirst && _arrearOutstanding;
+  bool _matchesSeqType(Map<String, dynamic> d) =>
+      _seqType == 'ARREAR' ? _isArrear(d) : !_isArrear(d);
+  List<Map<String, dynamic>> get _currentTypeDemands =>
+      _allDemands.where(_matchesSeqType).toList();
   // Payment mode — null = nothing selected yet. The cashier picks one via
   // the inline chips in the bottom bar before the action button is enabled.
   String? _paymentMode;
@@ -101,8 +128,32 @@ class _StudentFeeCollectionScreenState
   // rebuild the table on every keystroke (which loses focus). A short pause
   // (~350ms) after the last digit triggers the actual selection flip.
   final Map<String, Timer> _conFlipTimers = {};
+  // Debounces the student search so we don't fire 2 DB round-trips per keystroke.
+  Timer? _searchDebounce;
   final Set<String> _selected = {};
   List<Map<String, dynamic>> _fineRules = [];
+
+  /// Session token for gating the payment write RPCs. Null before the security
+  /// migrations are run (→ helpers fall back to the legacy RPCs, non-breaking).
+  String? get _sessionToken {
+    try { return context.read<AuthProvider>().sessionToken; } catch (_) { return null; }
+  }
+
+  // Cached in didChangeDependencies so dispose() — where the element is
+  // deactivated and context lookups throw "deactivated widget's ancestor" —
+  // can still reach institution id / token for the fine-reset-on-exit.
+  int? _cachedInsId;
+  String? _cachedToken;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      final auth = context.read<AuthProvider>();
+      _cachedInsId = auth.insId;
+      _cachedToken = auth.sessionToken;
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -110,6 +161,18 @@ class _StudentFeeCollectionScreenState
     _fetchClasses();
     _loadFineRules();
     _sweepOrphanedPayments();
+    _loadUtilSettings();
+  }
+
+  /// Loads the arrear-first Utilities toggle for this institution.
+  Future<void> _loadUtilSettings() async {
+    final insId = context.read<AuthProvider>().insId;
+    if (insId == null) return;
+    final s = await SupabaseService.getInstitutionSettings(insId);
+    if (!mounted) return;
+    setState(() {
+      _arrearFirst = (s['fee_collection_arrear_first'] ?? 'true').toLowerCase() != 'false';
+    });
   }
 
   Future<void> _sweepOrphanedPayments() async {
@@ -130,13 +193,10 @@ class _StudentFeeCollectionScreenState
         bool captured = false;
         if (orderId != null && orderId.isNotEmpty) {
           try {
-            final resp = await SupabaseService.client.functions.invoke(
-              'get-razorpay-payment', body: {'order_id': orderId},
-            );
-            final data = resp.data as Map<String, dynamic>;
-            if (data['status'] == 'captured' && data['payment_id'] != null) {
+            final s = await PaytmService.verifyPayment(orderId);
+            if (s.isCaptured && s.paymentId != null) {
               captured = true;
-              paymentId = data['payment_id'].toString();
+              paymentId = s.paymentId;
             }
           } catch (_) {}
         }
@@ -147,95 +207,18 @@ class _StudentFeeCollectionScreenState
             try { items = jsonDecode(raw) as List<dynamic>; } catch (_) {}
           }
           try {
-            await SupabaseService.client.rpc('complete_payment_grouped', params: {
-              'p_pay_id': payId,
-              'p_pay_method': 'online',
-              'p_pay_reference': paymentId,
-              'p_items': items,
-              'p_ins_id': insId,
-              'p_status': 'C',
-            });
+            await SupabaseService.completePaymentGrouped(
+              token: _sessionToken, payId: payId, payMethod: 'online',
+              payReference: paymentId, items: items, insId: insId, status: 'C');
           } catch (e) {
             debugPrint('Recovery complete failed for pay_id=$payId: $e');
           }
         } else {
-          await SupabaseService.fromSchema('payment')
-              .update({'paystatus': 'F'})
-              .eq('pay_id', payId)
-              .eq('ins_id', insId);
+          await SupabaseService.updatePayment(payId, {'paystatus': 'F'});
         }
       }
     } catch (e) {
       debugPrint('Orphaned payment sweep failed: $e');
-    }
-  }
-
-  /// Resolve a single pending 'I' payment on demand, bypassing the 15-min
-  /// orphan sweep. Called from the "Check status now" button so a cashier in
-  /// a flaky-network school doesn't have to wait after a polling timeout.
-  Future<void> _resolvePendingPayment({
-    required int? payId,
-    required String? orderId,
-    required String? itemsRaw,
-    required int? insId,
-  }) async {
-    if (payId == null || insId == null) return;
-    setState(() => _processing = true);
-    bool captured = false;
-    String? paymentId;
-    try {
-      if (orderId != null && orderId.isNotEmpty) {
-        final resp = await SupabaseService.client.functions.invoke(
-          'get-razorpay-payment', body: {'order_id': orderId},
-        );
-        final data = resp.data as Map<String, dynamic>;
-        if (data['status'] == 'captured' && data['payment_id'] != null) {
-          captured = true;
-          paymentId = data['payment_id'].toString();
-        }
-      }
-    } catch (e) {
-      debugPrint('Razorpay status check failed: $e');
-    }
-
-    if (captured) {
-      List<dynamic> items = [];
-      if (itemsRaw != null && itemsRaw.isNotEmpty) {
-        try { items = jsonDecode(itemsRaw) as List<dynamic>; } catch (_) {}
-      }
-      try {
-        await SupabaseService.client.rpc('complete_payment_grouped', params: {
-          'p_pay_id': payId,
-          'p_pay_method': 'online',
-          'p_pay_reference': paymentId,
-          'p_items': items,
-          'p_ins_id': insId,
-          'p_status': 'C',
-        });
-      } catch (e) {
-        debugPrint('Recovery complete failed for pay_id=$payId: $e');
-      }
-    } else {
-      try {
-        await SupabaseService.fromSchema('payment')
-            .update({'paystatus': 'F'})
-            .eq('pay_id', payId)
-            .eq('ins_id', insId);
-      } catch (e) {
-        debugPrint('Mark-failed for pay_id=$payId failed: $e');
-      }
-    }
-
-    if (mounted) {
-      setState(() => _processing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(captured
-              ? 'Pending payment recovered. Please re-open the student.'
-              : 'No captured payment found — cleared pending lock. You can retry now.'),
-          backgroundColor: captured ? Colors.green : Colors.orange,
-        ),
-      );
     }
   }
 
@@ -299,12 +282,25 @@ class _StudentFeeCollectionScreenState
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
     if (insId == null) return;
-    // Get courses and classes from feedemand table
+    // Course/Class dropdown options. Source these from the STUDENTS table
+    // (one row per student, just 2 columns) rather than the entire feedemand
+    // table (many rows per student, every column) — far fewer rows and payload.
+    // The actual per-class student lookup (_searchByClass) is already scoped.
     try {
-      final demands = await SupabaseService.getFeeDemands(insId);
+      final results = await Future.wait([
+        SupabaseService.fetchAll(() => SupabaseService
+            .fromSchema('students')
+            .select('courname, stuclass')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)),
+        SupabaseService.getClassOrder(insId),
+      ]);
+      final rows = results[0] as List<Map<String, dynamic>>;
+      _classOrdid = results[1] as Map<String, int>;
+      final cmp = classOrdidComparator(_classOrdid); // order by class-master ordid
       final courseSet = <String>{};
       final mapping = <String, Set<String>>{};
-      for (final d in demands) {
+      for (final d in rows) {
         final course = d['courname']?.toString() ?? '';
         final cls = d['stuclass']?.toString() ?? '';
         if (course.isNotEmpty) courseSet.add(course);
@@ -312,9 +308,8 @@ class _StudentFeeCollectionScreenState
           mapping.putIfAbsent(course, () => <String>{}).add(cls);
         }
       }
-      final allClasses = mapping.values.expand((s) => s).toSet().toList();
-      allClasses.sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
-      final courseClassMap = <String, List<String>>{ for (final e in mapping.entries) e.key: e.value.toList()..sort((a, b) => _classIndex(a).compareTo(_classIndex(b))) };
+      final allClasses = mapping.values.expand((s) => s).toSet().toList()..sort(cmp);
+      final courseClassMap = <String, List<String>>{ for (final e in mapping.entries) e.key: e.value.toList()..sort(cmp) };
       final courseList = courseSet.toList()..sort();
       if (mounted) setState(() {
         _courseList = courseList;
@@ -322,7 +317,7 @@ class _StudentFeeCollectionScreenState
         _allClasses = allClasses;
         _classList = allClasses;
       });
-    } catch (e) { debugPrint('Error loading course-class from feedemand: $e'); }
+    } catch (e) { debugPrint('Error loading course-class from students: $e'); }
   }
 
   Future<void> _searchByClass(String className) async {
@@ -330,41 +325,44 @@ class _StudentFeeCollectionScreenState
     final insId = auth.insId;
     if (insId == null) return;
     try {
-      // Step 1: gather stu_ids in this class+course that still have at least
-      // one fee demand with balancedue > 0 — students who are fully paid up
-      // should not appear in the lookup at all.
-      var demQuery = SupabaseService.fromSchema('feedemand')
-          .select('stu_id')
-          .eq('ins_id', insId)
-          .eq('activestatus', 1)
-          .eq('stuclass', className)
-          .gt('balancedue', 0);
-      if (_selectedCourse != null) {
-        demQuery = demQuery.eq('courname', _selectedCourse!);
-      }
-      final demRows = await demQuery;
-      final pendingStuIds = <int>{};
-      for (final r in (demRows as List)) {
+      // Step 1: gather every student in this class+course who has been billed
+      // (has at least one fee demand), together with their outstanding total.
+      // Fully-paid students are kept in the list and flagged PAID rather than
+      // hidden, so a cashier can confirm someone has already settled up.
+      // Both queries are paged — PostgREST caps a response at 1000 rows and
+      // truncates silently, which for a large class would drop students from
+      // the lookup with no error shown.
+      final demRows = await SupabaseService.fetchAll(() {
+        var q = SupabaseService.fromSchema('feedemand')
+            .select('stu_id, balancedue')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .eq('collectible', true) // ignore non-collectible demands in the owing flag
+            .eq('stuclass', className);
+        if (_selectedCourse != null) q = q.eq('courname', _selectedCourse!);
+        return q;
+      });
+      final balances = <int, double>{};
+      for (final r in demRows) {
         final id = r['stu_id'];
-        if (id is int) pendingStuIds.add(id);
+        if (id is! int) continue;
+        balances[id] = (balances[id] ?? 0) + ((r['balancedue'] as num?)?.toDouble() ?? 0);
       }
-      if (pendingStuIds.isEmpty) {
-        setState(() => _classSuggestions = []);
-        return;
-      }
+      _balanceByStu.addAll(balances);
 
-      // Step 2: fetch only those students.
-      var query = SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
-          .eq('ins_id', insId)
-          .eq('activestatus', 1)
-          .eq('stuclass', className)
-          .inFilter('stu_id', pendingStuIds.toList());
-      if (_selectedCourse != null) {
-        query = query.eq('courname', _selectedCourse!);
-      }
-      final rows = await query.order('stuname', ascending: true);
-      setState(() => _classSuggestions = List<Map<String, dynamic>>.from(rows));
+      // Step 2: the whole class roster. Students with no demands are listed
+      // too (just without a status badge) — hiding them made the lookup look
+      // broken when a class hadn't been billed yet.
+      final rows = await SupabaseService.fetchAll(() {
+        var q = SupabaseService.fromSchema('students')
+            .select('stu_id, stuname, stuadmno, stuclass, courname')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .eq('stuclass', className);
+        if (_selectedCourse != null) q = q.eq('courname', _selectedCourse!);
+        return q.order('stuname', ascending: true);
+      });
+      setState(() => _classSuggestions = rows);
     } catch (_) {}
   }
 
@@ -389,12 +387,15 @@ class _StudentFeeCollectionScreenState
     for (final f in _fineFocus.values) f.dispose();
     for (final f in _conFocus.values) f.dispose();
     for (final t in _conFlipTimers.values) t.cancel();
+    _searchDebounce?.cancel();
     super.dispose();
   }
 
   void _resetFinesOnExit() {
     if (_allDemands.isEmpty) return;
-    final insId = context.read<AuthProvider>().insId;
+    // Use the values cached in didChangeDependencies — dispose() must not touch
+    // context (the element is already deactivated).
+    final insId = _cachedInsId;
     if (insId == null) return;
     // Fire-and-forget — dispose can't await.
     for (final d in _allDemands) {
@@ -402,10 +403,7 @@ class _StudentFeeCollectionScreenState
       final paidStatus = d['paidstatus']?.toString() ?? 'U';
       if (demId == null) continue;
       if (paidStatus == 'P') continue; // don't wipe historical paid fines
-      SupabaseService.fromSchema('feedemand')
-          .update({'fineamount': 0})
-          .eq('dem_id', demId)
-          .eq('ins_id', insId)
+      SupabaseService.setDemandFine(token: _cachedToken, demId: demId, fineamount: 0)
           .then((_) {}, onError: (e) => debugPrint('Fine reset on exit failed for dem_id=$demId: $e'));
     }
   }
@@ -434,6 +432,7 @@ class _StudentFeeCollectionScreenState
       _allDemands = [];
       _errorMsg = null;
       _selectedTerm = null;
+      _seqType = 'REGULAR';
       _selected.clear();
       _paymentMode = null;
       _chequeNoController.clear();
@@ -482,6 +481,20 @@ class _StudentFeeCollectionScreenState
     } catch (_) {}
   }
 
+  /// Debounces keystrokes so the search (2 DB round-trips) fires at most once
+  /// every 300ms after the user stops typing, instead of on every character.
+  void _onSearchChanged(String v) {
+    _searchDebounce?.cancel();
+    if (v.trim().length < 2) {
+      // Short/empty term → clear immediately, no round-trip.
+      if (_studentSuggestions.isNotEmpty) setState(() => _studentSuggestions = []);
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) _searchByAdmNoOrName(v);
+    });
+  }
+
   /// Combined suggestion search — matches Roll No (prefix) OR Student Name
   /// (substring) so the single search field works for both.
   Future<void> _searchByAdmNoOrName(String q) async {
@@ -494,13 +507,57 @@ class _StudentFeeCollectionScreenState
     final insId = auth.insId;
     if (insId == null) return;
     try {
-      final rows = await SupabaseService.fromSchema('students')
+      // Scope the search to the selected course / class when chosen, so the
+      // cashier only matches students within the picked course + class.
+      var query = SupabaseService.fromSchema('students')
           .select('stu_id, stuname, stuadmno, stuclass, courname')
           .eq('ins_id', insId)
-          .eq('activestatus', 1)
+          .eq('activestatus', 1);
+      if (_selectedCourse != null && _selectedCourse!.isNotEmpty) {
+        query = query.eq('courname', _selectedCourse!);
+      }
+      if (_selectedClass != null && _selectedClass!.isNotEmpty) {
+        query = query.eq('stuclass', _selectedClass!);
+      }
+      final rows = await query
           .or('stuadmno.ilike.$term%,stuname.ilike.%$term%')
           .limit(10);
-      setState(() => _studentSuggestions = List<Map<String, dynamic>>.from(rows));
+      final list = List<Map<String, dynamic>>.from(rows);
+      setState(() => _studentSuggestions = list);
+      // Load outstanding totals so the lookup can flag PAID here too.
+      await _loadBalancesFor(
+        list.map((s) => s['stu_id']).whereType<int>(),
+        insId,
+      );
+    } catch (_) {}
+  }
+
+  /// Fill [_balanceByStu] for the given students by summing their active
+  /// demands' balancedue. Students with demands but nothing owing land on 0.
+  Future<void> _loadBalancesFor(Iterable<int> stuIds, int insId) async {
+    final ids = stuIds.toSet().toList();
+    if (ids.isEmpty) return;
+    try {
+      final rows = await SupabaseService.fromSchema('feedemand')
+          .select('stu_id, balancedue')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1)
+          .eq('collectible', true) // ignore non-collectible demands in the owing flag
+          .inFilter('stu_id', ids);
+      final totals = <int, double>{};
+      for (final r in (rows as List)) {
+        final id = (r['stu_id'] as num?)?.toInt();
+        if (id == null) continue;
+        totals[id] = (totals[id] ?? 0) + ((r['balancedue'] as num?)?.toDouble() ?? 0);
+      }
+      if (!mounted) return;
+      setState(() {
+        for (final id in ids) {
+          // Absent from `totals` = no demands at all; leave unset so the row
+          // shows no badge rather than claiming the student has paid.
+          if (totals.containsKey(id)) _balanceByStu[id] = totals[id]!;
+        }
+      });
     } catch (_) {}
   }
 
@@ -595,7 +652,7 @@ class _StudentFeeCollectionScreenState
           _selectedCourse = stuCourse;
           if (_courseClassMap.containsKey(stuCourse)) {
             _classList = List<String>.from(_courseClassMap[stuCourse]!)
-              ..sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
+              ..sort(classOrdidComparator(_classOrdid));
           }
         }
         if (stuClass != null && _classList.contains(stuClass)) {
@@ -614,11 +671,12 @@ class _StudentFeeCollectionScreenState
       final parentFuture = SupabaseService.getStudentParent(stuId, stuadmno: stuAdmno);
       final demandsFuture = SupabaseService.fromSchema('feedemand')
           .select(
-              'dem_id, demno, yr_id, demfeeyear, demfeetype, demfeeterm, feeamount, conamount, balancedue, paidamount, fineamount, duedate, paidstatus, stuclass')
+              'dem_id, demno, demseqtype, yr_id, demfeeyear, demfeetype, demfeeterm, feeamount, conamount, balancedue, paidamount, fineamount, duedate, paidstatus, stuclass, collectible')
           .eq('ins_id', insId)
           .eq('stuadmno', stuAdmno)
           .eq('paidstatus', 'U')
           .gt('balancedue', 0)
+          .eq('collectible', true) // only collectible demands are payable here
           .order('duedate', ascending: true);
 
       final parent = await parentFuture;
@@ -643,15 +701,24 @@ class _StudentFeeCollectionScreenState
       // and Col Amount is pre-filled with the balance — cashier just tweaks
       // values then hits Proceed to Pay.
       _selected.clear();
+      _selectedTerm = null;
+      // Arrear-first (Utilities): when enabled and the student has arrear dues,
+      // open on Arrear so arrears are cleared before regular. Otherwise default
+      // to Regular when present. Only the ACTIVE type is pre-selected/pre-filled
+      // so the first receipt is single-type — the other type shows Col Amount 0.
+      _seqType = (_arrearFirst && _hasArrear)
+          ? 'ARREAR'
+          : (_hasRegular ? 'REGULAR' : 'ARREAR');
       for (final d in demandList) {
         final key = d['dem_id']?.toString() ?? '';
         if (key.isNotEmpty) {
           final serverFine = (d['fineamount'] as num?)?.toDouble() ?? 0;
           final fine = serverFine > 0 ? serverFine : _calculateFine(d);
           final bal = (d['balancedue'] as num?)?.toDouble() ?? 0;
+          final active = _matchesSeqType(d);
           _fineCtrl[key] = TextEditingController(text: fine > 0 ? fine.toStringAsFixed(0) : '');
-          _conCtrl[key] = TextEditingController(text: bal > 0 ? bal.toStringAsFixed(0) : '');
-          if (bal > 0) _selected.add(key);
+          _conCtrl[key] = TextEditingController(text: (active && bal > 0) ? bal.toStringAsFixed(0) : '0');
+          if (active && bal > 0) _selected.add(key);
         }
       }
 
@@ -669,16 +736,20 @@ class _StudentFeeCollectionScreenState
   }
 
   List<Map<String, dynamic>> get _filteredDemands {
-    if (_selectedTerm == null) return _allDemands;
-    return _allDemands.where((d) =>
-        (d['demfeetype']?.toString() ?? '') == _selectedTerm).toList();
+    var list = _currentTypeDemands;
+    if (_selectedTerm != null) {
+      list = list
+          .where((d) => (d['demfeetype']?.toString() ?? '') == _selectedTerm)
+          .toList();
+    }
+    return list;
   }
 
-  /// Unique Fee Type values across the current student's demands. Used by
-  /// the in-table filter dropdown (label: "Fee Type").
+  /// Unique Fee Type values across the current student's demands OF THE ACTIVE
+  /// type (regular/arrear). Used by the in-table filter dropdown ("Fee Type").
   List<String> get _terms {
     final seen = <String>[];
-    for (final d in _allDemands) {
+    for (final d in _currentTypeDemands) {
       final t = d['demfeetype']?.toString() ?? '';
       if (t.isNotEmpty && !seen.contains(t)) seen.add(t);
     }
@@ -706,11 +777,108 @@ class _StudentFeeCollectionScreenState
     // Bottom NET AMOUNT = sum of every row's actual NET AMT (col + fine).
     // Stays in lockstep with the per-row column so a row with Col Amount = 0
     // contributes 0 to the total even if the checkbox is still ticked.
+    // Scoped to the ACTIVE type so regular and arrear totals never mix.
     var sum = 0.0;
-    for (final d in _allDemands) {
+    for (final d in _currentTypeDemands) {
       sum += _netAmt(d);
     }
     return sum;
+  }
+
+  /// Switch between collecting Regular and Arrear fees. Resets the fee-type
+  /// filter and re-scopes the selection + Col Amounts to the chosen type so a
+  /// receipt only ever contains one type.
+  void _switchSeqType(String t) {
+    if (_seqType == t) return;
+    if (t == 'REGULAR' && _regularLocked) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Clear the arrear dues before collecting regular fees.'),
+        backgroundColor: AppColors.warning,
+      ));
+      return;
+    }
+    setState(() {
+      _seqType = t;
+      _selectedTerm = null;
+      _selected.clear();
+      for (final d in _allDemands) {
+        final k = _demKey(d);
+        final active = _matchesSeqType(d);
+        final bal = (d['balancedue'] as num?)?.toDouble() ?? 0;
+        _conCtrl[k]?.text = (active && bal > 0) ? bal.toStringAsFixed(0) : '0';
+        if (active && bal > 0) _selected.add(k);
+      }
+    });
+  }
+
+  Widget _buildSeqTypeToggle() {
+    Widget seg(String label, String value, IconData icon) {
+      final active = _seqType == value;
+      final locked = value == 'REGULAR' && _regularLocked;
+      final fg = active ? Colors.white : (locked ? AppColors.textLight : AppColors.textSecondary);
+      final content = InkWell(
+        onTap: () => _switchSeqType(value),
+        borderRadius: BorderRadius.circular(8.r),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+          decoration: BoxDecoration(
+            color: active ? AppColors.accent : Colors.transparent,
+            borderRadius: BorderRadius.circular(8.r),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(locked ? Icons.lock_outline : icon, size: 15, color: fg),
+              SizedBox(width: 6.w),
+              Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: fg)),
+            ],
+          ),
+        ),
+      );
+      return locked ? Tooltip(message: 'Clear arrear dues first', child: content) : content;
+    }
+
+    return Container(
+      padding: EdgeInsets.all(3.w),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          seg('Regular', 'REGULAR', Icons.receipt_long_rounded),
+          seg('Arrear', 'ARREAR', Icons.history_rounded),
+        ],
+      ),
+    );
+  }
+
+  /// Static badge shown when the student has demands of ONLY one type, so the
+  /// cashier can still tell at a glance whether they're collecting a Regular or
+  /// an Arrear demand (the Regular/Arrear toggle only appears when both exist).
+  Widget _buildSingleTypeBadge(String type) {
+    final isArrear = type == 'ARREAR';
+    final color = isArrear ? const Color(0xFFB45309) : AppColors.accent;
+    final bg = isArrear ? const Color(0xFFFEF3C7) : AppColors.accent.withValues(alpha: 0.12);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(isArrear ? Icons.history_rounded : Icons.receipt_long_rounded, size: 15, color: color),
+          SizedBox(width: 6.w),
+          Text(isArrear ? 'Arrear' : 'Regular',
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
   }
 
   @override
@@ -761,11 +929,15 @@ class _StudentFeeCollectionScreenState
         // class on a single line, first row tinted, hover in accent.
         if (_studentSuggestions.isNotEmpty || _classSuggestions.isNotEmpty)
           Positioned(
-            width: _compactCtx ? 260.w : 340.w,
+            width: _compactCtx ? 340.w : 480.w,
             child: CompositedTransformFollower(
               link: _admSearchLink,
               showWhenUnlinked: false,
-              offset: Offset(0, _compactCtx ? 38 : 50),
+              // Anchor to the search field's right edge so the (now wider) popup
+              // grows leftward into the empty space instead of off-screen.
+              targetAnchor: Alignment.bottomRight,
+              followerAnchor: Alignment.topRight,
+              offset: const Offset(0, 6),
               child: Material(
                 elevation: 6,
                 borderRadius: BorderRadius.circular(12.r),
@@ -783,15 +955,36 @@ class _StudentFeeCollectionScreenState
                         final s = source[i];
                         final name = (s['stuname']?.toString() ?? '').toUpperCase();
                         final admno = s['stuadmno']?.toString() ?? '';
-                        final cls = s['stuclass']?.toString() ?? '';
                         final selected = i == 0;
                         return InkWell(
                           onTap: () => _selectSuggestion(s),
                           hoverColor: AppColors.accent.withValues(alpha: 0.06),
                           child: Container(
-                            color: selected ? AppColors.tableHeadBg : Colors.transparent,
+                            decoration: BoxDecoration(
+                              color: selected ? AppColors.tableHeadBg : Colors.transparent,
+                              border: i < source.length - 1
+                                  ? Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.4)))
+                                  : null,
+                            ),
                             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                            // Uniform 3-column layout: Roll No | Name | Status,
+                            // each a fixed slot so they line up down the list.
                             child: Row(children: [
+                              // Roll No / Admn No (single identifier column)
+                              SizedBox(
+                                width: _compactCtx ? 110.w : 132.w,
+                                child: Text(
+                                  admno,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: _compactCtx ? 10 : 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 14.w),
+                              // Name
                               Expanded(
                                 child: Text(
                                   name,
@@ -804,28 +997,40 @@ class _StudentFeeCollectionScreenState
                                   ),
                                 ),
                               ),
-                              SizedBox(width: 8.w),
-                              Text(
-                                admno,
-                                style: TextStyle(
-                                  fontSize: _compactCtx ? 10 : 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textSecondary,
+                              SizedBox(width: 14.w),
+                              // Status (fixed column so PAID/PENDING align across rows)
+                              SizedBox(
+                                width: _compactCtx ? 74.w : 88.w,
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Builder(builder: (_) {
+                                    final id = s['stu_id'];
+                                    if (id is! int || !_balanceByStu.containsKey(id)) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final bal = _balanceByStu[id]!;
+                                    final paid = bal <= 0;
+                                    final color = paid ? AppColors.success : AppColors.warning;
+                                    return Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
+                                      decoration: BoxDecoration(
+                                        color: color.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(999),
+                                        border: Border.all(color: color.withValues(alpha: 0.35)),
+                                      ),
+                                      child: Text(
+                                        paid ? 'PAID' : 'PENDING',
+                                        style: TextStyle(
+                                          fontSize: _compactCtx ? 9 : 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: color,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    );
+                                  }),
                                 ),
                               ),
-                              if (cls.isNotEmpty) ...[
-                                SizedBox(width: 6.w),
-                                Text('•', style: TextStyle(fontSize: _compactCtx ? 10 : 12, color: AppColors.textLight)),
-                                SizedBox(width: 6.w),
-                                Text(
-                                  cls,
-                                  style: TextStyle(
-                                    fontSize: _compactCtx ? 10 : 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                              ],
                             ]),
                           ),
                         );
@@ -846,7 +1051,7 @@ class _StudentFeeCollectionScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Single-line bar matching the Fee Collection reference: icon +
-          // title + subtitle on the left, then Standard/Class dropdowns +
+          // title + subtitle on the left, then Course/Class dropdowns +
           // search + Clear button all inline on the right.
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -862,9 +1067,9 @@ class _StudentFeeCollectionScreenState
                   borderRadius: BorderRadius.circular(12.r),
                   elevation: 6,
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _inputDec('Select Standard', filled: _selectedCourse != null),
+                  decoration: _inputDec('Select Course', filled: _selectedCourse != null),
                   style: _ddTextStyle(),
-                  hint: Text('Select Standard',
+                  hint: Text('Select Course',
                       style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: _compactCtx ? 11 : 14)),
                   items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: _ddItemStyle()))).toList(),
                   selectedItemBuilder: (context) => _courseList.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: _compactCtx ? 11 : 14, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
@@ -880,7 +1085,7 @@ class _StudentFeeCollectionScreenState
                       } else {
                         _classList = List<String>.from(_allClasses);
                       }
-                      _classList.sort((a, b) => _classIndex(a).compareTo(_classIndex(b)));
+                      _classList.sort(classOrdidComparator(_classOrdid));
                       if (val != null && val.startsWith('M') && _classList.length > 2) {
                         _classList = _classList.sublist(0, 2);
                       }
@@ -907,9 +1112,9 @@ class _StudentFeeCollectionScreenState
                     borderRadius: BorderRadius.circular(12.r),
                     elevation: 6,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _inputDec('Select Section', filled: value != null),
+                    decoration: _inputDec('Select Class', filled: value != null),
                     style: _ddTextStyle(),
-                    hint: Text('Select Section',
+                    hint: Text('Select Class',
                         style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: _compactCtx ? 11 : 14)),
                     items: items,
                     selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text((m.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: _compactCtx ? 11 : 14, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
@@ -932,7 +1137,7 @@ class _StudentFeeCollectionScreenState
                   child: TextField(
                     controller: _admNoController,
                     onSubmitted: (_) => _search(),
-                    onChanged: (v) { setState(() {}); _searchByAdmNoOrName(v); },
+                    onChanged: (v) { setState(() {}); _onSearchChanged(v); },
                     decoration: _inputDec('Admission No or Student Name', filled: _admNoController.text.trim().isNotEmpty).copyWith(
                       prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
                     ),
@@ -1043,6 +1248,22 @@ class _StudentFeeCollectionScreenState
         SizedBox(width: 12.w),
         SizedBox(
           height: _compactCtx ? 36.0 : 44.0,
+          child: OutlinedButton.icon(
+            onPressed: _openStudentReceipts,
+            icon: const Icon(Icons.receipt_long_outlined, size: 16),
+            label: const Text('Receipts'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.accent,
+              side: const BorderSide(color: AppColors.accent),
+              padding: EdgeInsets.symmetric(horizontal: _compactCtx ? 14.w : 18.w),
+              textStyle: TextStyle(fontSize: _compactCtx ? 11.sp : 13.sp, fontWeight: FontWeight.w700),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_compactCtx ? 6.r : 8.r)),
+            ),
+          ),
+        ),
+        SizedBox(width: 8.w),
+        SizedBox(
+          height: _compactCtx ? 36.0 : 44.0,
           child: ElevatedButton.icon(
             onPressed: _openFeeDefinition,
             icon: const Icon(Icons.fact_check_outlined, size: 16),
@@ -1084,6 +1305,412 @@ class _StudentFeeCollectionScreenState
       // THIS student.
       _admNoController.text = s['stuadmno']?.toString() ?? '';
       _search();
+    }
+  }
+
+  String _fmtReceiptDate(dynamic v) {
+    if (v == null) return '-';
+    final dt = DateTime.tryParse(v.toString());
+    if (dt == null) return v.toString();
+    final l = dt.toLocal();
+    return '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}/${l.year}';
+  }
+
+  /// Show the selected student's receipts with a per-row delete (void) option.
+  Future<void> _openStudentReceipts() async {
+    final s = _student;
+    if (s == null) return;
+    final stuId = s['stu_id'] as int?;
+    final auth = context.read<AuthProvider>();
+    final insId = auth.insId;
+    if (stuId == null || insId == null) return;
+
+    Future<List<Map<String, dynamic>>> load() async {
+      final rows = await SupabaseService.fromSchema('payment')
+          .select('pay_id, paynumber, paydate, createdat, transtotalamount, paymethod, recon_status')
+          .eq('ins_id', insId)
+          .eq('stu_id', stuId)
+          .eq('activestatus', 1)
+          .eq('paystatus', 'C')
+          .order('createdat', ascending: false);
+      final payments = List<Map<String, dynamic>>.from(rows as List);
+      if (payments.isEmpty) return payments;
+
+      // Attach each receipt's fee-line breakdown (paymentdetails -> feedemand).
+      final payIds = payments.map((p) => p['pay_id']).whereType<int>().toList();
+      final detRows = await SupabaseService.fromSchema('paymentdetails')
+          .select('pay_id, dem_id, transtotalamount')
+          .inFilter('pay_id', payIds)
+          .eq('activestatus', 1);
+      final dets = List<Map<String, dynamic>>.from(detRows as List);
+      final demIds = dets.map((d) => d['dem_id']).whereType<int>().toSet().toList();
+      final demInfo = <int, Map<String, dynamic>>{};
+      if (demIds.isNotEmpty) {
+        final demRows = await SupabaseService.fromSchema('feedemand')
+            .select('dem_id, demfeetype, demfeeterm')
+            .inFilter('dem_id', demIds);
+        for (final d in List<Map<String, dynamic>>.from(demRows as List)) {
+          final id = d['dem_id'] as int?;
+          if (id != null) demInfo[id] = d;
+        }
+      }
+      final byPay = <int, List<Map<String, dynamic>>>{};
+      for (final d in dets) {
+        final pid = d['pay_id'] as int?;
+        if (pid == null) continue;
+        final info = demInfo[d['dem_id'] as int?];
+        byPay.putIfAbsent(pid, () => []).add({
+          'type': info?['demfeetype']?.toString() ?? 'Fee',
+          'term': info?['demfeeterm']?.toString() ?? '',
+          'amount': (d['transtotalamount'] as num?)?.toDouble() ?? 0,
+        });
+      }
+      for (final p in payments) {
+        p['_details'] = byPay[p['pay_id'] as int?] ?? const [];
+      }
+      return payments;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dctx) {
+        return StatefulBuilder(builder: (dctx, setDlg) {
+          // Small chip that identifies the tender used for a receipt.
+          Widget methodChip(String methodRaw) {
+            final m = methodRaw.toLowerCase();
+            IconData ic;
+            Color c;
+            if (m.contains('cash')) {
+              ic = Icons.payments_rounded; c = const Color(0xFF059669);
+            } else if (m.contains('upi') || m.contains('qr')) {
+              ic = Icons.qr_code_2_rounded; c = AppColors.accent;
+            } else if (m.contains('cheque') || m.contains('dd')) {
+              ic = Icons.description_rounded; c = const Color(0xFFB45309);
+            } else if (m.contains('razor') || m.contains('online') || m.contains('net')) {
+              ic = Icons.public_rounded; c = AppColors.accent;
+            } else {
+              ic = Icons.account_balance_wallet_rounded; c = AppColors.textSecondary;
+            }
+            return Container(
+              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(6.r),
+                border: Border.all(color: c.withValues(alpha: 0.30)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(ic, size: 12, color: c),
+                SizedBox(width: 4.w),
+                Text(methodRaw.isEmpty ? '—' : methodRaw.toUpperCase(),
+                    style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w700, color: c, letterSpacing: 0.2)),
+              ]),
+            );
+          }
+
+          Widget iconBtn({required IconData icon, required Color color, required String tip, VoidCallback? onTap}) {
+            final enabled = onTap != null;
+            return Tooltip(
+              message: tip,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(9.r),
+                child: Container(
+                  padding: EdgeInsets.all(8.w),
+                  decoration: BoxDecoration(
+                    color: enabled ? color.withValues(alpha: 0.10) : AppColors.border.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(9.r),
+                    border: Border.all(color: enabled ? color.withValues(alpha: 0.40) : AppColors.border),
+                  ),
+                  child: Icon(icon, size: 16, color: enabled ? color : AppColors.textLight),
+                ),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18.r)),
+            titlePadding: EdgeInsets.fromLTRB(20.w, 18.h, 16.w, 6.h),
+            contentPadding: EdgeInsets.fromLTRB(20.w, 8.h, 20.w, 4.h),
+            actionsPadding: EdgeInsets.fromLTRB(20.w, 0, 16.w, 14.h),
+            title: Row(children: [
+              Container(
+                padding: EdgeInsets.all(9.w),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11.r),
+                ),
+                child: AppIcon('receipt-2', size: 18, color: AppColors.accent),
+              ),
+              SizedBox(width: 11.w),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text('Receipts', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                  SizedBox(height: 1.h),
+                  Text(
+                    '${s['stuname'] ?? ''}'
+                    '${(s['stuadmno']?.toString() ?? '').isNotEmpty ? '  •  ${s['stuadmno']}' : ''}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
+                  ),
+                ]),
+              ),
+            ]),
+            content: SizedBox(
+              width: 560.w,
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: load(),
+                builder: (ctx, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator()));
+                  }
+                  final receipts = snap.data ?? [];
+                  if (receipts.isEmpty) {
+                    return Padding(
+                      padding: EdgeInsets.symmetric(vertical: 28.h),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.receipt_long_rounded, size: 40, color: AppColors.textLight),
+                        SizedBox(height: 10.h),
+                        Text('No receipts yet', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+                        SizedBox(height: 2.h),
+                        Text('Collected payments for this student will appear here.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11.sp, color: AppColors.textLight)),
+                      ]),
+                    );
+                  }
+                  final grandTotal = receipts.fold<double>(
+                      0, (t, p) => t + ((p['transtotalamount'] as num?)?.toDouble() ?? 0));
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.only(bottom: 8.h),
+                        child: Row(children: [
+                          Text('${receipts.length} receipt${receipts.length == 1 ? '' : 's'}',
+                              style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+                          const Spacer(),
+                          Text('Total  ', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+                          Text('₹${formatIndianNumber(grandTotal)}',
+                              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: AppColors.accent)),
+                        ]),
+                      ),
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: 400.h),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: receipts.length,
+                            itemBuilder: (_, i) {
+                              final p = receipts[i];
+                              final no = p['paynumber']?.toString() ?? '-';
+                              final method = (p['paymethod']?.toString() ?? '').toLowerCase();
+                              final recon = p['recon_status']?.toString() ?? 'P';
+                              final locked = recon == 'R' && method != 'cash';
+                              final amt = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
+                              final date = _fmtReceiptDate(p['paydate'] ?? p['createdat']);
+                              final details = (p['_details'] as List?) ?? const [];
+                              return Container(
+                                margin: EdgeInsets.only(bottom: 10.h),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12.r),
+                                  border: Border.all(color: AppColors.border),
+                                  boxShadow: const [
+                                    BoxShadow(color: Color.fromRGBO(15, 23, 42, 0.04), offset: Offset(0, 2), blurRadius: 8),
+                                  ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // ── Receipt header ──
+                                    Padding(
+                                      padding: EdgeInsets.fromLTRB(12.w, 11.h, 10.w, 11.h),
+                                      child: Row(children: [
+                                        Expanded(
+                                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                            Row(children: [
+                                              Flexible(
+                                                child: Text(no,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                                              ),
+                                              if (locked) ...[
+                                                SizedBox(width: 8.w),
+                                                Container(
+                                                  padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                                                  decoration: BoxDecoration(
+                                                    color: AppColors.success.withValues(alpha: 0.12),
+                                                    borderRadius: BorderRadius.circular(5.r),
+                                                  ),
+                                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                                    Icon(Icons.verified_rounded, size: 11, color: AppColors.success),
+                                                    SizedBox(width: 3.w),
+                                                    Text('RECONCILED',
+                                                        style: TextStyle(fontSize: 9.sp, fontWeight: FontWeight.w800, color: AppColors.success, letterSpacing: 0.3)),
+                                                  ]),
+                                                ),
+                                              ],
+                                            ]),
+                                            SizedBox(height: 5.h),
+                                            Row(children: [
+                                              Icon(Icons.event_rounded, size: 12, color: AppColors.textLight),
+                                              SizedBox(width: 4.w),
+                                              Text(date, style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+                                              SizedBox(width: 8.w),
+                                              methodChip(p['paymethod']?.toString() ?? ''),
+                                            ]),
+                                          ]),
+                                        ),
+                                        SizedBox(width: 10.w),
+                                        Text('₹${formatIndianNumber(amt)}',
+                                            style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w800, color: AppColors.accent)),
+                                        SizedBox(width: 12.w),
+                                        iconBtn(
+                                          icon: Icons.print_rounded,
+                                          color: AppColors.accent,
+                                          tip: 'View / print receipt',
+                                          onTap: () {
+                                            final pid = (p['pay_id'] as num?)?.toInt();
+                                            Navigator.pop(dctx);
+                                            if (pid != null) _downloadReceipt(pid, no);
+                                          },
+                                        ),
+                                        SizedBox(width: 8.w),
+                                        iconBtn(
+                                          icon: Icons.delete_outline_rounded,
+                                          color: AppColors.error,
+                                          tip: locked ? 'Reconciled — cannot delete' : 'Delete receipt',
+                                          onTap: locked ? null : () async {
+                                            final done = await _voidReceiptFromDialog(p);
+                                            if (done) setDlg(() {});
+                                          },
+                                        ),
+                                      ]),
+                                    ),
+                                    // ── Fee breakdown ──
+                                    if (details.isNotEmpty)
+                                      Container(
+                                        width: double.infinity,
+                                        padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 9.h),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.surface,
+                                          borderRadius: BorderRadius.only(
+                                            bottomLeft: Radius.circular(11.r),
+                                            bottomRight: Radius.circular(11.r),
+                                          ),
+                                          border: Border(top: BorderSide(color: AppColors.border)),
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            for (final d in details)
+                                              Padding(
+                                                padding: EdgeInsets.symmetric(vertical: 2.5.h),
+                                                child: Row(children: [
+                                                  Container(width: 4.w, height: 4.w, margin: EdgeInsets.only(right: 8.w),
+                                                      decoration: BoxDecoration(color: AppColors.textLight, shape: BoxShape.circle)),
+                                                  Expanded(
+                                                    child: Text(
+                                                      (d['term']?.toString() ?? '').isNotEmpty
+                                                          ? '${d['type']} — ${d['term']}'
+                                                          : '${d['type']}',
+                                                      style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary),
+                                                    ),
+                                                  ),
+                                                  Text('₹${formatIndianNumber((d['amount'] as num?)?.toDouble() ?? 0)}',
+                                                      style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                                                ]),
+                                              ),
+                                            Padding(
+                                              padding: EdgeInsets.only(top: 6.h),
+                                              child: Row(children: [
+                                                Expanded(child: Container(height: 1, color: AppColors.border)),
+                                              ]),
+                                            ),
+                                            Padding(
+                                              padding: EdgeInsets.only(top: 6.h),
+                                              child: Row(children: [
+                                                Text('Total', style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                                                const Spacer(),
+                                                Text('₹${formatIndianNumber(amt)}',
+                                                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                                              ]),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dctx),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary,
+                  padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
+                ),
+                child: Text('Close', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          );
+        });
+      },
+    );
+    // A delete restores demands to pending — refresh the page for this student.
+    if (mounted) {
+      _admNoController.text = s['stuadmno']?.toString() ?? '';
+      _search();
+    }
+  }
+
+  /// Confirm + void a single receipt from the receipts dialog. Returns true
+  /// when the receipt was deleted (so the dialog list can reload).
+  Future<bool> _voidReceiptFromDialog(Map<String, dynamic> p) async {
+    final payId = p['pay_id'] as int?;
+    if (payId == null) return false;
+    final no = p['paynumber']?.toString() ?? '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+        title: const Text('Delete Receipt'),
+        content: Text('Delete receipt $no?\n\nThis voids the receipt and restores the fees it collected back to pending.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return false;
+    try {
+      final auth = context.read<AuthProvider>();
+      await SupabaseService.voidReceipt(payId, insId: auth.insId ?? 0, user: auth.userName ?? '');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Receipt $no deleted'), backgroundColor: AppColors.success));
+      }
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      }
+      return false;
     }
   }
 
@@ -1161,7 +1788,7 @@ class _StudentFeeCollectionScreenState
                       borderRadius: BorderRadius.circular(12.r),
                     ),
                     child: Text(
-                      '${_filteredDemands.length} of ${_allDemands.length} items',
+                      '${_filteredDemands.length} of ${_currentTypeDemands.length} items',
                       style: TextStyle(
                           fontSize: 13.sp,
                           color: AppColors.accent,
@@ -1170,6 +1797,13 @@ class _StudentFeeCollectionScreenState
                   ),
                 ],
                 const Spacer(),
+                if (_student != null && _hasRegular && _hasArrear) ...[
+                  _buildSeqTypeToggle(),
+                  SizedBox(width: 12.w),
+                ] else if (_student != null && _allDemands.isNotEmpty) ...[
+                  _buildSingleTypeBadge(_hasArrear ? 'ARREAR' : 'REGULAR'),
+                  SizedBox(width: 12.w),
+                ],
                 if (_student != null && _terms.isNotEmpty) ...[
                   Text('Fee Type:', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
                   SizedBox(width: 8.w),
@@ -1617,7 +2251,7 @@ class _StudentFeeCollectionScreenState
                     items: const [
                       DropdownMenuItem(value: 'Cash', child: Text('CASH')),
                       DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
-                      DropdownMenuItem(value: 'Online', child: Text('ONLINE')),
+                      DropdownMenuItem(value: 'Paytm', child: Text('PAYTM')),
                       DropdownMenuItem(value: 'Cheque', child: Text('CHEQUE')),
                     ],
                     onChanged: _selected.isEmpty ? null : (v) => setState(() => _paymentMode = v),
@@ -1800,7 +2434,8 @@ class _StudentFeeCollectionScreenState
     try {
       final sequences = await SupabaseService.fromSchema('sequence')
           .select('fg_id')
-          .eq('ins_id', insId);
+          .eq('ins_id', insId)
+          .neq('actname', 'REGNO'); // exclude register-number sequences
       final seqFgIds = (sequences as List).map((s) => s['fg_id']).toSet();
       final feeGroups = await SupabaseService.fromSchema('feegroup')
           .select('fg_id, fgdesc, ban_id')
@@ -2067,10 +2702,7 @@ class _StudentFeeCollectionScreenState
                               final demId = d['dem_id'];
                               if (demId == null) continue;
                               try {
-                                await SupabaseService.fromSchema('feedemand')
-                                    .update({'fineamount': 0})
-                                    .eq('dem_id', demId)
-                                    .eq('ins_id', insId);
+                                await SupabaseService.setDemandFine(token: _sessionToken, demId: demId, fineamount: 0);
                               } catch (e) {
                                 debugPrint('Fine reset error for dem_id=$demId: $e');
                               }
@@ -2128,7 +2760,7 @@ class _StudentFeeCollectionScreenState
                             ),
                           ),
                           child: Text(
-                            _paymentMode == 'Online' ? 'Confirm Payment' : 'Save',
+                            _paymentMode == 'Paytm' ? 'Confirm Payment' : 'Save',
                             style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -2160,8 +2792,8 @@ class _StudentFeeCollectionScreenState
 
   Future<void> _processPayment() async {
     if (_processing || _student == null) return;
-    if (_paymentMode == 'Online') {
-      await _processOnlinePayment();
+    if (_paymentMode == 'Paytm') {
+      await _processPaytmPayment();
     } else {
       await _processDirectPayment();
     }
@@ -2407,7 +3039,7 @@ class _StudentFeeCollectionScreenState
     final Map<int, Map<String, dynamic>> demById = {};
     if (demIds.isNotEmpty) {
       final demands = await SupabaseService.fromSchema('feedemand')
-          .select('dem_id, demfeetype, demfeeterm, duedate, fineamount, feeamount')
+          .select('dem_id, demfeetype, demfeeterm, duedate, fineamount, feeamount, demseqtype, arrearclass')
           .inFilter('dem_id', demIds);
       for (final d in demands) {
         demById[d['dem_id'] as int] = Map<String, dynamic>.from(d);
@@ -2457,6 +3089,23 @@ class _StudentFeeCollectionScreenState
         ? [ReceiptTermDetail(term: '-', fees: [ReceiptFeeItem(type: 'Payment', amount: totalAmount)])]
         : termMap.entries.map((e) => ReceiptTermDetail(term: e.key, fees: e.value)).toList();
 
+    // For an ARREAR receipt, the Branch shows the arrear's ORIGINAL class
+    // (feedemand.arrearclass), not the student's current class. Receipts are
+    // single-type (regular/arrear collected separately), so any arrear demand
+    // in this payment carries the class to display.
+    String? arrearBranch;
+    for (final dem in demById.values) {
+      final isArr = (dem['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+      final ac = dem['arrearclass']?.toString() ?? '';
+      if (isArr && ac.isNotEmpty) {
+        arrearBranch = ac;
+        break;
+      }
+    }
+    final branchClass = (arrearBranch != null && arrearBranch.isNotEmpty)
+        ? arrearBranch
+        : (student?['stuclass']?.toString() ?? '-');
+
     final ins = await SupabaseService.getInstitutionInfo(insId);
 
     return ReceiptData(
@@ -2466,7 +3115,7 @@ class _StudentFeeCollectionScreenState
       mobileNo: (payInchargeMob?.isNotEmpty == true) ? payInchargeMob! : (student?['stumobile']?.toString() ?? '-'),
       address: student?['stuaddress']?.toString() ?? '-',
       admissionNo: student?['stuadmno']?.toString() ?? '-',
-      className: student?['stuclass']?.toString() ?? '-',
+      className: branchClass,
       courseName: student?['courname']?.toString().isNotEmpty == true ? student!['courname'].toString() : '-',
       schoolName: (ins.name?.isNotEmpty == true) ? ins.name! : (auth.insName ?? 'Institution'),
       schoolAddress: (ins.address?.isNotEmpty == true) ? ins.address! : '-',
@@ -2484,6 +3133,25 @@ class _StudentFeeCollectionScreenState
   }
 
   // ── Direct payment (Cash / Bank / Cheque) using atomic RPCs ──
+  /// Fallback academic-year id for payments on demands with a NULL yr_id
+  /// (arrear demands whose Fee/Arrear Year isn't in the year master).
+  /// payment.yr_id and paymentdetails.yr_id are NOT NULL, so such a receipt is
+  /// recorded under the current active year. Cached after the first lookup.
+  int? _fallbackYrId;
+  Future<int?> _currentYearId() async {
+    if (_fallbackYrId != null) return _fallbackYrId;
+    try {
+      final r = await SupabaseService.fromSchema('year')
+          .select('yr_id')
+          .eq('activestatus', 1)
+          .order('yr_id', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      _fallbackYrId = (r?['yr_id'] as num?)?.toInt();
+    } catch (_) {}
+    return _fallbackYrId;
+  }
+
   Future<void> _processDirectPayment() async {
     setState(() => _processing = true);
 
@@ -2543,7 +3211,10 @@ class _StudentFeeCollectionScreenState
 
     try {
       final firstDemand = _allDemands.firstWhere((d) => _selected.contains(_demKey(d)));
-      final yrId = firstDemand['yr_id'] as int?;
+      // Arrear demands may have a NULL yr_id (year not in master); payment.yr_id
+      // is NOT NULL, so fall back to the current active year.
+      int? yrId = firstDemand['yr_id'] as int?;
+      yrId ??= await _currentYearId();
       final yrlabel = firstDemand['demfeeyear']?.toString() ?? '';
 
       // Build items list with fee type info
@@ -2556,7 +3227,7 @@ class _StudentFeeCollectionScreenState
         final net = (col > 0 ? col : bal) + fine; // Total including fine
         items.add({
           'dem_id': d['dem_id'] as int,
-          'yr_id': d['yr_id'],
+          'yr_id': (d['yr_id'] as int?) ?? yrId,
           'yrlabel': d['demfeeyear']?.toString() ?? '',
           'ins_id': insId,
           'amount': net,
@@ -2583,18 +3254,10 @@ class _StudentFeeCollectionScreenState
 
       // Call grouped payment RPC — creates one payment per fee group
       // totalNet includes fine — paidamount will include fine (old approach)
-      final result = await SupabaseService.client.rpc('process_grouped_payment', params: {
-        'p_ins_id': insId,
-        'p_inscode': inscode,
-        'p_stu_id': stuId,
-        'p_yr_id': yrId,
-        'p_yrlabel': yrlabel,
-        'p_total_amount': totalNet,
-        'p_created_by': createdBy,
-        'p_pay_method': payMethod,
-        'p_pay_reference': payReference,
-        'p_items': items,
-      });
+      final result = await SupabaseService.processGroupedPayment(
+        token: _sessionToken, insId: insId, inscode: inscode, stuId: stuId,
+        yrId: yrId, yrlabel: yrlabel, totalAmount: totalNet, createdBy: createdBy,
+        payMethod: payMethod, payReference: payReference, items: items);
 
       // Result is JSON array of receipt numbers
       final receipts = result is List ? result : (result is String ? [result] : []);
@@ -2613,13 +3276,13 @@ class _StudentFeeCollectionScreenState
         for (final r in receipts) {
           final payId = r is Map ? r['pay_id'] : null;
           if (payId != null) {
-            await SupabaseService.fromSchema('payment').update({
+            await SupabaseService.updatePayment(payId, {
               'paychequeno': _chequeNoController.text.trim(),
               'paychequedate': _chequeDate != null
                   ? '${_chequeDate!.year}-${_chequeDate!.month.toString().padLeft(2, '0')}-${_chequeDate!.day.toString().padLeft(2, '0')}'
                   : null,
               'paybankname': _bankNameController.text.trim(),
-            }).eq('pay_id', payId).eq('ins_id', insId!);
+            });
           }
         }
       }
@@ -2630,10 +3293,10 @@ class _StudentFeeCollectionScreenState
         for (final r in receipts) {
           final payId = r is Map ? r['pay_id'] : null;
           if (payId != null) {
-            await SupabaseService.fromSchema('payment').update({
+            await SupabaseService.updatePayment(payId, {
               'tender_amount': _cashTenderAmount,
               'refund_amount': _cashRefundAmount,
-            }).eq('pay_id', payId).eq('ins_id', insId!);
+            });
           }
         }
       }
@@ -2647,10 +3310,7 @@ class _StudentFeeCollectionScreenState
           final demId = item['dem_id'];
           if (demId != null) {
             try {
-              await SupabaseService.fromSchema('feedemand')
-                  .update({'fineamount': fine})
-                  .eq('dem_id', demId)
-                  .eq('ins_id', insId!);
+              await SupabaseService.setDemandFine(token: _sessionToken, demId: demId, fineamount: fine);
             } catch (e) {
               debugPrint('Fine column update error for dem_id=$demId: $e');
             }
@@ -2660,6 +3320,7 @@ class _StudentFeeCollectionScreenState
 
       _showSuccessDialog(receiptStr, totalNet, payId: firstPayId);
     } catch (e) {
+      debugPrint('PAYMENT SAVE FAILED (raw): $e');
       String errorMsg = e.toString();
       if (errorMsg.contains('already fully paid')) {
         errorMsg = 'One or more fees have already been paid. Please refresh and try again.';
@@ -2675,10 +3336,7 @@ class _StudentFeeCollectionScreenState
         final demId = item['dem_id'];
         if (demId != null) {
           try {
-            await SupabaseService.fromSchema('feedemand')
-                .update({'fineamount': 0})
-                .eq('dem_id', demId)
-                .eq('ins_id', insId!);
+            await SupabaseService.setDemandFine(token: _sessionToken, demId: demId, fineamount: 0);
           } catch (e2) {
             debugPrint('Fine reset error for dem_id=$demId: $e2');
           }
@@ -2695,10 +3353,11 @@ class _StudentFeeCollectionScreenState
     }
   }
 
-  // ── Online payment (Razorpay) ──
-  Timer? _pollTimer;
-
-  Future<void> _processOnlinePayment() async {
+  // ── Online payment (Paytm) ──
+  // Mirrors _processOnlinePayment but uses Paytm JS Checkout and routes the
+  // payment to the merchant (MID) tied to the fee group's bank account, so the
+  // money settles to the correct IOBPAY entity. See docs/paytm_integration.md.
+  Future<void> _processPaytmPayment() async {
     setState(() => _processing = true);
 
     final auth = context.read<AuthProvider>();
@@ -2707,11 +3366,12 @@ class _StudentFeeCollectionScreenState
     final createdBy = auth.currentUser?.usename ?? '';
     final stuId = _student!['stu_id'] as int;
     final totalNet = _totalNetSelected;
-    final amountInPaise = (totalNet * 100).round();
 
+    // Block if an online payment for this student is still pending (<15 min),
+    // so a double-tap or flaky network doesn't create a second live order.
     try {
       final pending = await SupabaseService.fromSchema('payment')
-          .select('pay_id, createdat, payorderid, payitems')
+          .select('createdat')
           .eq('ins_id', insId!)
           .eq('stu_id', stuId)
           .eq('paystatus', 'I')
@@ -2719,58 +3379,64 @@ class _StudentFeeCollectionScreenState
           .limit(1)
           .maybeSingle();
       if (pending != null) {
-        final createdAtStr = pending['createdat']?.toString();
-        final createdAt = createdAtStr != null ? DateTime.tryParse(createdAtStr) : null;
-        if (createdAt != null) {
-          final ageMin = DateTime.now().difference(createdAt).inMinutes;
-          if (ageMin < 15) {
-            final waitMin = 15 - ageMin;
-            final stalePayId = pending['pay_id'] as int?;
-            final staleOrderId = pending['payorderid']?.toString();
-            final staleItemsRaw = pending['payitems']?.toString();
-            if (mounted) {
-              setState(() => _processing = false);
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Payment in progress'),
-                  content: Text(
-                    'An online payment for this student is still pending.\n'
-                    'Please try again in about $waitMin minute${waitMin == 1 ? '' : 's'}, '
-                    "or tap 'Check status now' to verify with Razorpay immediately.",
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        await _resolvePendingPayment(
-                          payId: stalePayId,
-                          orderId: staleOrderId,
-                          itemsRaw: staleItemsRaw,
-                          insId: insId,
-                        );
-                      },
-                      child: const Text('Check status now'),
-                    ),
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-                  ],
+        final createdAt = DateTime.tryParse(pending['createdat']?.toString() ?? '');
+        if (createdAt != null && DateTime.now().difference(createdAt).inMinutes < 15) {
+          if (mounted) {
+            setState(() => _processing = false);
+            final clear = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Payment already pending'),
+                content: const Text(
+                  'An online payment for this student was started but not '
+                  'completed. If that attempt failed or the payment window was '
+                  'closed, clear it and start a new payment.\n\n'
+                  'Only clear if you are sure no payment actually went through.',
                 ),
-              );
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Clear & retry'),
+                  ),
+                ],
+              ),
+            );
+            if (clear == true) {
+              try {
+                // Mark every not-completed (status 'I') attempt for this student
+                // as failed, so the guard releases and a fresh order can start.
+                await SupabaseService.failPendingPayments(stuId);
+                if (mounted) _processPaytmPayment(); // retry, now unblocked
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('Could not clear pending payment: ${friendlyError(e)}'),
+                    backgroundColor: Colors.red));
+                }
+              }
             }
-            return;
           }
+          return;
         }
       }
     } catch (e) {
-      debugPrint('Pending-payment check failed: $e');
+      debugPrint('Paytm pending-payment check failed: $e');
     }
 
+    int? createdPayId; // the temp 'I' row, so we can clean it up on failure
     try {
       final firstDemand = _allDemands.firstWhere((d) => _selected.contains(_demKey(d)));
-      final yrId = firstDemand['yr_id'] as int?;
+      // Arrear demands may have a NULL yr_id; payment.yr_id is NOT NULL, so fall
+      // back to the current active year.
+      int? yrId = firstDemand['yr_id'] as int?;
+      yrId ??= await _currentYearId();
       final yrlabel = firstDemand['demfeeyear']?.toString() ?? '';
 
-      // Build items with demfeetype for grouping
+      // Build items (same shape as the Razorpay flow).
       final items = <Map<String, dynamic>>[];
       for (final key in _selected) {
         final d = _allDemands.firstWhere((x) => _demKey(x) == key, orElse: () => {});
@@ -2781,7 +3447,7 @@ class _StudentFeeCollectionScreenState
         final net = (col > 0 ? col : bal) + fine;
         items.add({
           'dem_id': d['dem_id'] as int,
-          'yr_id': d['yr_id'],
+          'yr_id': (d['yr_id'] as int?) ?? yrId,
           'yrlabel': d['demfeeyear']?.toString() ?? '',
           'ins_id': insId,
           'amount': net,
@@ -2789,60 +3455,50 @@ class _StudentFeeCollectionScreenState
         });
       }
 
-      // Resolve a beneficiary bank for this Razorpay payment by walking
-      // the items → feedemand.fee_id → feetype.fg_id → feegroup.ban_id
-      // chain and picking the most common ban_id. Razorpay batches all
-      // fee groups into one transaction, so we stamp the predominant
-      // group's bank — good enough for the testing/demo flow. Mixed
-      // multi-bank payments leave ban_id NULL and a real split-payment
-      // gateway (Razorpay Route / virtual accounts) handles them later.
-      int? razorpayBanId;
+      // Resolve the selected fee groups → predominant bank (ban_id) and its
+      // Paytm MID, so the payment routes to the merchant that settles to the
+      // correct account. Null MID falls back to the app's default merchant.
+      int? paytmBanId;
+      String? paytmMid;
+      // Per-unit settlement: the routing MID depends only on the paying
+      // institution (public.paytm_configuration), not the fee groups. The edge
+      // function creates the order under this unit's OWN MID and signs it with
+      // that MID's own key (PAYTM_MERCHANTS), so Paytm settles to the unit's bank.
+      if (PaytmConfig.perUnitSettlement) {
+        paytmMid = await SupabaseService.getPaytmMidForInstitution(insId!);
+      }
       try {
         final demIds = items.map((it) => it['dem_id']).whereType<int>().toList();
         if (demIds.isNotEmpty) {
           final fdRows = await SupabaseService.fromSchema('feedemand')
-              .select('fee_id')
-              .inFilter('dem_id', demIds);
-          final feeIds = (fdRows as List)
-              .map((r) => r['fee_id'])
-              .whereType<int>()
-              .toSet()
-              .toList();
+              .select('fee_id').inFilter('dem_id', demIds);
+          final feeIds = (fdRows as List).map((r) => r['fee_id']).whereType<int>().toSet().toList();
           if (feeIds.isNotEmpty) {
             final ftRows = await SupabaseService.fromSchema('feetype')
-                .select('fg_id')
-                .inFilter('fee_id', feeIds);
-            final fgIds = (ftRows as List)
-                .map((r) => r['fg_id'])
-                .whereType<int>()
-                .toSet()
-                .toList();
+                .select('fg_id').inFilter('fee_id', feeIds);
+            final fgIds = (ftRows as List).map((r) => r['fg_id']).whereType<int>().toSet().toList();
             if (fgIds.isNotEmpty) {
+              // Single-account / per-bank routing uses the fee group's bank MID.
+              if (!PaytmConfig.perUnitSettlement) {
+                paytmMid = await SupabaseService.getPaytmMidForFeeGroups(fgIds);
+              }
               final fgRows = await SupabaseService.fromSchema('feegroup')
-                  .select('ban_id')
-                  .inFilter('fg_id', fgIds);
-              final banIds = (fgRows as List)
-                  .map((r) => r['ban_id'])
-                  .whereType<int>()
-                  .toList();
+                  .select('ban_id').inFilter('fg_id', fgIds);
+              final banIds = (fgRows as List).map((r) => r['ban_id']).whereType<int>().toList();
               if (banIds.isNotEmpty) {
-                // Pick the ban_id that appears most often.
                 final counts = <int, int>{};
-                for (final id in banIds) {
-                  counts[id] = (counts[id] ?? 0) + 1;
-                }
-                final entry = counts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-                razorpayBanId = entry.key;
+                for (final id in banIds) { counts[id] = (counts[id] ?? 0) + 1; }
+                paytmBanId = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
               }
             }
           }
         }
       } catch (e) {
-        debugPrint('ban_id resolve failed: $e');
+        debugPrint('Paytm bank/MID resolve failed: $e');
       }
 
-      // 1. Create a temporary payment for Razorpay order (status I)
-      final inserted = await SupabaseService.fromSchema('payment').insert({
+      // 1. Temporary payment row (status I).
+      final payId = await SupabaseService.insertPayment({
         'ins_id': insId,
         'inscode': inscode,
         'stu_id': stuId,
@@ -2855,348 +3511,43 @@ class _StudentFeeCollectionScreenState
         'createdby': createdBy,
         'recon_status': 'P',
         'payitems': jsonEncode(items),
-        if (razorpayBanId != null) 'ban_id': razorpayBanId,
-      }).select('pay_id').single();
-      final payId = inserted['pay_id'] as int;
+        if (paytmBanId != null) 'ban_id': paytmBanId,
+      });
+      createdPayId = payId;
 
-      // 2. Create Razorpay order
-      final orderResponse = await SupabaseService.client.functions.invoke(
-        'create-razorpay-order',
-        body: {
-          'amount': amountInPaise,
-          'currency': 'INR',
-          'pay_id': payId,
-          'receipt': 'PAY-$payId',
-        },
+      // 2. Initiate the Paytm transaction (server-side checksum + MID routing).
+      final order = await PaytmService.createOrder(
+        payId: payId,
+        amount: totalNet,
+        custId: 'STU-$stuId',
+        mid: paytmMid,
       );
+      await SupabaseService.updatePayment(payId, {'payorderid': order.orderId});
 
-      final orderData = orderResponse.data is Map<String, dynamic>
-          ? orderResponse.data as Map<String, dynamic>
-          : <String, dynamic>{};
-      final orderId = orderData['order_id'] as String;
-
-      // Update payorderid
-      await SupabaseService.fromSchema('payment').update({
-        'payorderid': orderId,
-      }).eq('pay_id', payId).eq('ins_id', insId!);
-
-      // 3. Build checkout HTML and open in browser
-      final studentName = _student!['stuname']?.toString() ?? '';
-      final studentMobile = _student!['stumobile']?.toString() ?? '';
-      final studentEmail = _student!['stuemail']?.toString() ?? '';
-
-      final html = '''
-<!DOCTYPE html>
-<html>
-<head>
-  <title>TBS School - Fee Payment</title>
-  <meta charset="utf-8">
-  <style>
-    body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
-    .container { text-align: center; padding: 40px; background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-    .success { color: #4CAF50; font-size: 24px; }
-    .failed { color: #F44336; font-size: 24px; }
-    .info { color: #666; margin-top: 10px; }
-  </style>
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-</head>
-<body>
-  <div class="container" id="status">
-    <p>Opening Razorpay Checkout...</p>
-  </div>
-  <script>
-    var options = {
-      key: 'rzp_test_RQsgJgVFwM7kov',
-      amount: $amountInPaise,
-      currency: 'INR',
-      name: 'TBS School',
-      description: 'School Fees Payment',
-      order_id: '$orderId',
-      prefill: {
-        name: '${studentName.replaceAll("'", "\\'")}',
-        contact: '$studentMobile',
-        email: '$studentEmail'
-      },
-      theme: { color: '#00B4AB' },
-      notes: { pay_id: '$payId', student_id: '$stuId' },
-      handler: function(response) {
-        document.getElementById('status').innerHTML =
-          '<p class="success">Payment Successful!</p>' +
-          '<p class="info">Payment ID: ' + response.razorpay_payment_id + '</p>' +
-          '<p class="info">You can close this window now.</p>';
-      }
-    };
-    var rzp = new Razorpay(options);
-    rzp.on('payment.failed', function(response) {
-      document.getElementById('status').innerHTML =
-        '<p class="failed">Payment Failed</p>' +
-        '<p class="info">' + response.error.description + '</p>' +
-        '<p class="info">You can close this window now.</p>';
-    });
-    rzp.open();
-  </script>
-</body>
-</html>
-''';
-
-      // Write temp HTML file for WebView
-      final tempDir = Directory.systemTemp;
-      final tempFile = File('${tempDir.path}/tbs_razorpay_checkout_$payId.html');
-      await tempFile.writeAsString(html);
-
-      // 4. Show WebView dialog with Razorpay checkout + polling
+      // 3. Show the Paytm checkout + poll for status.
+      String? result;
       if (mounted) {
-        await _showRazorpayWebViewDialog(payId, insId, totalNet, tempFile.path, inscode, stuId, createdBy);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Online payment failed. ${friendlyError(e)}'), backgroundColor: Colors.red),
+        result = await showPaytmCheckout(
+          context,
+          order: order,
+          amount: totalNet,
+          studentName: _student!['stuname']?.toString() ?? '',
+          studentMobile: _student!['stumobile']?.toString() ?? '',
+          studentEmail: _student!['stuemail']?.toString() ?? '',
+          merchantName: auth.insName ?? 'KCET',
         );
       }
-    } finally {
-      _pollTimer?.cancel();
-      if (mounted) setState(() => _processing = false);
-    }
-  }
 
-  Future<void> _showRazorpayWebViewDialog(int payId, int? insId, double totalNet, String htmlPath, String inscode, int stuId, String createdBy) async {
-    final completer = Completer<String?>(); // 'C', 'F', or null (cancelled)
-    final webviewController = WebviewController();
-
-    try {
-      await webviewController.initialize();
-      await webviewController.setBackgroundColor(Colors.white);
-
-      // Razorpay checkout URL allowlist (S5). The webview only ever loads a
-      // local HTML file we generate; that HTML in turn loads checkout.js
-      // from `checkout.razorpay.com`. Any other navigation target is
-      // suspicious — log it and surface to the user. This is defence in
-      // depth: the local HTML is the primary control.
-      const allowedHosts = <String>{
-        'checkout.razorpay.com',
-        'api.razorpay.com',
-        'lumberjack.razorpay.com',
-        'lumberjack-cx.razorpay.com',
-      };
-      try {
-        webviewController.url.listen((current) {
-          if (current.isEmpty) return;
-          final uri = Uri.tryParse(current);
-          if (uri == null) return;
-          if (uri.scheme == 'file' || uri.scheme == 'about' || uri.scheme == 'data') return;
-          if (uri.scheme != 'https') {
-            debugPrint('Razorpay webview blocked non-https navigation: $current');
-            return;
-          }
-          if (!allowedHosts.contains(uri.host)) {
-            debugPrint('Razorpay webview navigated to unexpected host: ${uri.host}');
-          }
-        });
-      } catch (_) {
-        // url stream may not be available on all platforms; skip silently.
-      }
-
-      await webviewController.loadUrl(Uri.file(htmlPath).toString());
-    } catch (e) {
-      if (!completer.isCompleted) completer.complete(null);
-      // Most common failure here on Windows 10 pre-Oct-2021 boxes is the
-      // WebView2 runtime not being installed. Give a specific, actionable
-      // message instead of the raw exception text so the accountant knows
-      // to call IT / install the runtime, not that payments are broken.
-      final msg = e.toString().toLowerCase();
-      final isWebView2Missing = msg.contains('webview2') ||
-          msg.contains('not found') ||
-          msg.contains('0x80070002');
-      if (mounted) {
-        if (isWebView2Missing) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('Online payments unavailable'),
-              content: const Text(
-                'Microsoft Edge WebView2 runtime is missing on this PC, '
-                'so the online payment window cannot open.\n\n'
-                'Install the "Evergreen Bootstrapper" from:\n'
-                'https://developer.microsoft.com/microsoft-edge/webview2/\n\n'
-                'Or collect this payment as Cash / Cheque / UPI while IT installs it.',
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-              ],
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to open payment window. ${friendlyError(e)}'), backgroundColor: Colors.red),
-          );
-        }
-      }
-      return;
-    }
-
-    // Start polling for payment status. Cap total polling at 10 minutes.
-    final pollStarted = DateTime.now();
-    const pollMaxDuration = Duration(minutes: 10);
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      if (DateTime.now().difference(pollStarted) > pollMaxDuration) {
-        timer.cancel();
-        try {
-          final payRec = await SupabaseService.fromSchema('payment')
-              .select('payorderid').eq('pay_id', payId).single();
-          final orderId = payRec['payorderid']?.toString();
-          if (orderId != null && orderId.isNotEmpty) {
-            final finalResp = await SupabaseService.client.functions.invoke(
-              'get-razorpay-payment', body: {'order_id': orderId},
-            );
-            final fd = finalResp.data as Map<String, dynamic>;
-            if (fd['status'] == 'captured' && fd['payment_id'] != null) {
-              await SupabaseService.fromSchema('payment').update({
-                'payreference': fd['payment_id'].toString(),
-              }).eq('pay_id', payId).eq('ins_id', insId!);
-              if (!completer.isCompleted) completer.complete('C');
-              return;
-            }
-          }
-        } catch (_) {}
-        if (!completer.isCompleted) completer.complete('F');
-        return;
-      }
-      try {
-        final payRecord = await SupabaseService.fromSchema('payment')
-            .select('payorderid')
-            .eq('pay_id', payId)
-            .single();
-
-        final orderId = payRecord['payorderid']?.toString();
-        if (orderId == null || orderId.isEmpty) return;
-
-        final rpResponse = await SupabaseService.client.functions.invoke(
-          'get-razorpay-payment',
-          body: {'order_id': orderId},
-        );
-
-        final rpData = rpResponse.data as Map<String, dynamic>;
-        final rpPaymentId = rpData['payment_id']?.toString();
-        final rpStatus = rpData['status']?.toString();
-
-        if (rpPaymentId != null && rpPaymentId.isNotEmpty) {
-          if (rpStatus == 'captured') {
-            timer.cancel();
-            await SupabaseService.fromSchema('payment').update({
-              'payreference': rpPaymentId,
-            }).eq('pay_id', payId).eq('ins_id', insId!);
-            if (!completer.isCompleted) completer.complete('C');
-          } else if (rpStatus == 'failed') {
-            timer.cancel();
-            await SupabaseService.fromSchema('payment').update({
-              'payreference': rpPaymentId,
-            }).eq('pay_id', payId).eq('ins_id', insId!);
-            if (!completer.isCompleted) completer.complete('F');
-          }
-        }
-      } catch (_) {}
-    });
-
-    // Show WebView dialog. Capture its BuildContext so polling paths can
-    // pop before we dispose the WebviewController.
-    BuildContext? dialogCtx;
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) {
-          dialogCtx = ctx;
-          return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-          child: SizedBox(
-            width: 500.w,
-            height: 620.h,
-            child: Column(
-              children: [
-                // Header
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(14.r)),
-                  ),
-                  child: Row(
-                    children: [
-                      AppIcon.linear('wallet-money', color: Colors.white, size: 20),
-                      SizedBox(width: 8.w),
-                      Expanded(
-                        child: Text(
-                          'Razorpay Payment  -  ${formatIndianNumber(totalNet)}',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15.sp),
-                        ),
-                      ),
-                      InkWell(
-                        onTap: () async {
-                          _pollTimer?.cancel();
-                          try {
-                            final checkPay = await SupabaseService.fromSchema('payment')
-                                .select('payreference')
-                                .eq('pay_id', payId)
-                                .eq('ins_id', insId!)
-                                .maybeSingle();
-                            final ref = checkPay?['payreference']?.toString() ?? '';
-                            if (ref.isNotEmpty && ref.startsWith('pay_')) {
-                              Navigator.pop(ctx);
-                              if (!completer.isCompleted) completer.complete('C');
-                              return;
-                            }
-                          } catch (_) {}
-                          Navigator.pop(ctx);
-                          if (!completer.isCompleted) completer.complete(null);
-                        },
-                        child: AppIcon.linear('close-circle', color: Colors.white, size: 20),
-                      ),
-                    ],
-                  ),
-                ),
-                // WebView
-                Expanded(
-                  child: Webview(webviewController),
-                ),
-              ],
-            ),
-          ),
-        );
-        },
-      );
-    }
-
-    final result = await completer.future;
-
-    // Pop dialog first (if polling paths finished without popping).
-    if (dialogCtx != null && dialogCtx!.mounted) {
-      final nav = Navigator.maybeOf(dialogCtx!);
-      if (nav != null && nav.canPop()) {
-        nav.pop();
-      }
-    }
-
-    // Let the exit animation finish before disposing the Webview.
-    await Future.delayed(const Duration(milliseconds: 300));
-    try { webviewController.dispose(); } catch (_) {}
-
-    if (result == 'C' || result == 'F' || result == null) {
+      // 4. Resolve final gateway reference, then complete the payment.
       final status = result == 'C' ? 'C' : 'F';
-
-      // Get Razorpay reference
-      String rpRef = '';
+      String payRef = '';
       try {
-        final payRecord = await SupabaseService.fromSchema('payment')
-            .select('payreference')
-            .eq('pay_id', payId)
-            .eq('ins_id', insId!)
-            .maybeSingle();
-        rpRef = payRecord?['payreference']?.toString() ?? '';
+        final s = await PaytmService.verifyPayment(order.orderId, mid: order.mid);
+        payRef = s.paymentId ?? '';
       } catch (_) {}
 
-      // Build items with demfeetype for per-group receipts
-      final items = <Map<String, dynamic>>[];
+      // Items for per-group receipts (dem_id + amount + demfeetype).
+      final completeItems = <Map<String, dynamic>>[];
       for (final key in _selected) {
         final d = _allDemands.firstWhere((x) => _demKey(x) == key, orElse: () => {});
         if (d.isEmpty) continue;
@@ -3204,83 +3555,80 @@ class _StudentFeeCollectionScreenState
         final fine = _fine(key);
         final col = _con(key);
         final net = (col > 0 ? col : bal) + fine;
-        items.add({
+        completeItems.add({
           'dem_id': d['dem_id'] as int,
           'amount': net,
           'demfeetype': d['demfeetype']?.toString() ?? '',
         });
       }
 
-      // Store just the gateway txn id (no narrative prefix) so the
-      // PowerCollege SETTLEMENT ID column shows it cleanly. Failed /
-      // cancelled flows still get a short tag so they're distinguishable.
-      String payRef = status == 'C' ? rpRef : (result == 'F' ? 'FAILED:$rpRef' : 'CANCELLED');
-
+      final reference = status == 'C' ? payRef : (result == 'F' ? 'FAILED:$payRef' : 'CANCELLED');
       try {
-        final rpResult = await SupabaseService.client.rpc('complete_payment_grouped', params: {
-          'p_pay_id': payId,
-          'p_pay_method': 'online',
-          'p_pay_reference': payRef,
-          'p_items': items,
-          'p_ins_id': insId,
-          'p_status': status,
-        });
-
+        // Paytm gateway → distinct "Online Transfer" mode in the MODE column
+        // (still buckets as Online in charts/receipts, which lowercase + match
+        // .contains('online')).
+        final rpResult = await SupabaseService.completePaymentGrouped(
+          token: _sessionToken, payId: payId, payMethod: 'Online Transfer',
+          payReference: reference, items: completeItems, insId: insId, status: status);
         final receipts = rpResult is List ? rpResult : [rpResult];
         final receiptStr = receipts.map((r) => r is Map ? r['paynumber'] ?? r.toString() : r.toString()).join(', ');
-        int? firstPayIdRp;
+        int? firstPayId;
         for (final r in receipts) {
           if (r is Map && r['pay_id'] != null) {
-            firstPayIdRp = r['pay_id'] is int ? r['pay_id'] as int : int.tryParse(r['pay_id'].toString());
+            firstPayId = r['pay_id'] is int ? r['pay_id'] as int : int.tryParse(r['pay_id'].toString());
             break;
           }
         }
-
-        // On cancel/fail, explicitly reset fineamount to 0 on the attempted
-        // demands so no stale fine value is left in the DB.
+        // On cancel/fail, clear any transient fine on the attempted demands.
         if (status != 'C') {
-          for (final item in items) {
+          for (final item in completeItems) {
             final demId = item['dem_id'];
             if (demId != null) {
               try {
-                await SupabaseService.fromSchema('feedemand')
-                    .update({'fineamount': 0})
-                    .eq('dem_id', demId)
-                    .eq('ins_id', insId!);
-              } catch (e) {
-                debugPrint('Fine reset error for dem_id=$demId: $e');
-              }
+                await SupabaseService.setDemandFine(token: _sessionToken, demId: demId, fineamount: 0);
+              } catch (_) {}
             }
           }
         }
-
         if (mounted) {
           if (status == 'C') {
-            _showSuccessDialog(receiptStr, totalNet, payId: firstPayIdRp);
+            _showSuccessDialog(receiptStr, totalNet, payId: firstPayId);
           } else if (result == 'F') {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Payment failed. Receipt: $receiptStr'), backgroundColor: Colors.red),
-            );
+              SnackBar(content: Text('Payment failed. Receipt: $receiptStr'), backgroundColor: Colors.red));
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Payment cancelled. Receipt: $receiptStr'), backgroundColor: Colors.orange),
-            );
+              SnackBar(content: Text('Payment cancelled. Receipt: $receiptStr'), backgroundColor: Colors.orange));
           }
         }
       } catch (e) {
-        debugPrint('complete_payment_grouped failed: $e');
-        // Fallback: just mark as failed
+        debugPrint('complete_payment_grouped (Paytm) failed: $e');
         try {
-          await SupabaseService.fromSchema('payment').update({
-            'paystatus': 'F',
-          }).eq('pay_id', payId).eq('ins_id', insId!);
+          await SupabaseService.updatePayment(payId, {'paystatus': 'F'});
         } catch (_) {}
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
-          );
+            SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red));
         }
       }
+    } catch (e, st) {
+      // Surface the real cause in the run log (the snackbar only shows a
+      // friendly message) so failures can be diagnosed.
+      debugPrint('PAYTM PAYMENT ERROR: $e');
+      debugPrint('PAYTM PAYMENT STACK: $st');
+      // Clean up the orphaned 'I' row so a failed/aborted attempt (e.g. a
+      // network drop) doesn't block the next retry via the 15-min pending lock.
+      if (createdPayId != null) {
+        try {
+          await SupabaseService.updatePayment(createdPayId, {'paystatus': 'F'});
+        } catch (_) {}
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Paytm payment failed. ${friendlyError(e)}'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _processing = false);
     }
   }
 

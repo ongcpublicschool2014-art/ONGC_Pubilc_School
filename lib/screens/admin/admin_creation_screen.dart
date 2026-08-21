@@ -260,14 +260,16 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   }
 
   void _clearForm() {
-    // Reset the form's validation state first, otherwise the just-cleared
-    // (now empty) fields re-trigger their 'Required' errors via
-    // autovalidateMode.onUserInteraction right after a successful create.
-    _formKey.currentState?.reset();
+    // Clear the controllers FIRST, then reset the form. Clearing a controller
+    // fires a change that re-marks its field as "interacted", so with
+    // autovalidateMode.onUserInteraction every emptied field would light up
+    // 'Required' after a successful create. reset() LAST clears those
+    // interaction flags, leaving a clean blank form.
     _nameController.clear();
     _emailController.clear();
     _phoneController.clear();
     _passwordController.clear();
+    _formKey.currentState?.reset();
     setState(() {
       _selectedDesignation = null;
       _selectedDesId = null;

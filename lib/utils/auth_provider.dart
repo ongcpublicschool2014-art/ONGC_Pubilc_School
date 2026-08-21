@@ -35,6 +35,7 @@ class AuthProvider extends ChangeNotifier {
   String? _insAddress;
   String? _yearLabel;
   InstitutionUserModel? _currentUser;
+  String? _sessionToken; // server-issued session token (security foundation)
 
   bool get isAuthenticated => _isAuthenticated;
   bool get isLoading => _isLoading;
@@ -52,6 +53,7 @@ class AuthProvider extends ChangeNotifier {
   String? get insAddress => _insAddress;
   String? get yearLabel => _yearLabel;
   InstitutionUserModel? get currentUser => _currentUser;
+  String? get sessionToken => _sessionToken;
 
   Future<bool> login(String email, String password, {int? insId, bool isSuperAdmin = false, String? yearLabel}) async {
     _isLoading = true;
@@ -96,6 +98,27 @@ class AuthProvider extends ChangeNotifier {
         _isSuperAdmin = isSuperAdmin;
         _currentUser = user;
         _userRole = isSuperAdmin ? 'Super Admin' : user.desname;
+
+        // Mint a server-side session token (Phase 0 security foundation).
+        // Best-effort — nothing requires it yet; write RPCs will gate on it in a
+        // later phase. Credentials are re-verified server-side by the RPC.
+        _sessionToken = null;
+        if (user.insId != null) {
+          try {
+            _sessionToken = await SupabaseService.createAppSession(
+              email: email,
+              password: password,
+              insId: user.insId!,
+              isSuperAdmin: isSuperAdmin,
+            );
+          } catch (e) {
+            debugPrint('create_app_session failed: $e');
+          }
+        }
+        // Expose the token to the static service layer so centralized write
+        // helpers (addStudent/saveParent/…) can route through session-gated RPCs.
+        SupabaseService.sessionToken = _sessionToken;
+
         _isLoading = false;
         notifyListeners();
 
@@ -207,6 +230,12 @@ class AuthProvider extends ChangeNotifier {
 
   /// Clear saved credentials (call on logout)
   Future<void> clearCredentials() async {
+    // Revoke the server-side session so the token can't be reused after logout.
+    if (_sessionToken != null) {
+      try { await SupabaseService.revokeSession(_sessionToken!); } catch (_) {}
+      _sessionToken = null;
+    }
+    SupabaseService.sessionToken = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kEmail);
     await prefs.remove(_kPassword); // remove any legacy plaintext copy too

@@ -33,7 +33,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
   String _selectedBank = 'Auto detect';
   int _reconciledPage = 0;
   static const int _reconciledPageSize = 20;
-  static const List<String> _bankOptions = ['Auto detect', 'HDFC', 'ICICI', 'SBI', 'IOB'];
+  static const List<String> _bankOptions = ['Auto detect', 'HDFC', 'ICICI', 'SBI', 'IOB', 'Paytm'];
 
   @override
   void initState() {
@@ -89,7 +89,10 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
         Map<int, String> stuNames = {};
         if (stuIds.isNotEmpty) {
           try {
-            final students = await SupabaseService.fromSchema('students').select('stu_id, stuname, stuadmno').inFilter('stu_id', stuIds);
+            final students = await SupabaseService.fetchAll(() => SupabaseService
+                .fromSchema('students')
+                .select('stu_id, stuname, stuadmno')
+                .inFilter('stu_id', stuIds));
             for (final s in students) { stuNames[s['stu_id'] as int] = '${s['stuname']} (${s['stuadmno']})'; }
           } catch (_) {}
         }
@@ -174,6 +177,13 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
       final bytes = await file.readAsBytes();
       String csvString = _decodeBankBytes(bytes);
       csvString = csvString.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
+      // Paytm dashboard export is a fixed-column, single-quoted settlement file
+      // (order_id / amount / settled_date / status ...) — parse it separately.
+      if (_selectedBank == 'Paytm') {
+        _parsePaytmStatement(csvString);
+        return;
+      }
 
       // Auto-detect delimiter by scanning the first few lines - comma,
       // semicolon, or tab. Some co-op and European bank exports use ';'
@@ -422,6 +432,108 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     }
   }
 
+  /// Parse a Paytm dashboard "reconcile / settlement" CSV. Unlike bank
+  /// statements, it has fixed named columns and single-quoted values. Each
+  /// SUCCESS row is matched to a pending payment by the order_id (`PAY-<pay_id>`)
+  /// plus amount, and the row's `settled_date` becomes the reconciliation date
+  /// (settlement date taken FROM the imported file).
+  void _parsePaytmStatement(String csvString) {
+    final allRows = CsvToListConverter(
+      fieldDelimiter: ',',
+      textDelimiter: "'", // Paytm wraps every value in single quotes
+      eol: '\n',
+      shouldParseNumbers: false,
+    ).convert(csvString);
+    if (allRows.length < 2) {
+      _showError('The Paytm file looks empty.');
+      return;
+    }
+
+    String s(dynamic v) {
+      var t = v.toString().trim();
+      // Paytm wraps values as "'...'" (double- then single-quoted) and the CSV
+      // reader leaves the outer quotes as literals — strip any surrounding quote
+      // characters so ids/amounts are clean and don't visually merge.
+      while (t.length >= 2 &&
+          ((t.startsWith('"') && t.endsWith('"')) ||
+              (t.startsWith("'") && t.endsWith("'")))) {
+        t = t.substring(1, t.length - 1).trim();
+      }
+      return t;
+    }
+    final headers = allRows.first.map((h) => s(h).toLowerCase()).toList();
+    int col(String n) => headers.indexOf(n);
+    final orderIdx = col('order_id');
+    final amountIdx = col('amount');
+    final statusIdx = col('status');
+    final settledIdx = col('settled_date');
+    final txnDateIdx = col('transaction_date');
+    final utrIdx = col('utr_no');
+    final txnIdIdx = col('transaction_id');
+    if (orderIdx < 0 || amountIdx < 0) {
+      _showError('Not a Paytm settlement file (expected order_id and amount columns).');
+      return;
+    }
+
+    String cell(List<dynamic> r, int idx) => (idx >= 0 && idx < r.length) ? s(r[idx]) : '';
+    final bankRows = <Map<String, dynamic>>[];
+    final usedPayIds = <int>{};
+
+    for (int i = 1; i < allRows.length; i++) {
+      final row = allRows[i];
+      final status = cell(row, statusIdx).toUpperCase();
+      if (status.isNotEmpty && status != 'SUCCESS') continue; // only settled/successful
+      final amount = _parseAmount(cell(row, amountIdx));
+      if (amount <= 0) continue;
+
+      final orderId = cell(row, orderIdx);
+      final settled = cell(row, settledIdx);   // <-- settlement date from the file
+      final txnDate = cell(row, txnDateIdx);
+      final utr = cell(row, utrIdx);
+      final txnId = cell(row, txnIdIdx);
+      final m = RegExp(r'PAY-(\d+)', caseSensitive: false).firstMatch(orderId);
+      final payId = m != null ? int.tryParse(m.group(1)!) : null;
+
+      final br = <String, dynamic>{
+        'date': settled.isNotEmpty ? settled : txnDate,
+        // Show/store the Paytm TRANSACTION ID as the reference (matching is still
+        // done on the order_id → pay_id below; the txn id is the bank-side ref).
+        'reference': txnId.isNotEmpty ? txnId : (utr.isNotEmpty ? utr : orderId),
+        'narration': orderId.isEmpty ? 'Paytm' : 'Paytm $orderId',
+        'amount': amount,
+        'matched_pay_id': null,
+        'match_type': '',
+      };
+
+      if (payId != null && !usedPayIds.contains(payId)) {
+        final pay = _pendingPayments.firstWhere(
+          (p) => p['pay_id'] == payId,
+          orElse: () => <String, dynamic>{},
+        );
+        if (pay.isNotEmpty) {
+          final payAmount = (pay['transtotalamount'] as num?)?.toDouble() ?? 0;
+          if ((payAmount - amount).abs() < 0.01) {
+            br['matched_pay_id'] = payId;
+            br['match_type'] = 'Paytm Order + Amount Match';
+            usedPayIds.add(payId);
+          }
+        }
+      }
+      bankRows.add(br);
+    }
+
+    setState(() => _bankStatementRows = bankRows);
+    _tabController.animateTo(1);
+  }
+
+  void _showError(String msg) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   /// Batch reconcile via RPC; falls back to per-row updates if the RPC
   /// is not yet deployed. Returns the number of payments marked.
   Future<int> _reconcilePaymentsBatch({
@@ -436,15 +548,10 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     final schema = SupabaseService.currentSchema;
     try {
       if (schema != null) {
-        final result = await SupabaseService.client.rpc('reconcile_payments_batch', params: {
-          'p_schema': schema,
-          'p_ins_id': insId,
-          'p_pay_ids': payIds,
-          'p_user': userName,
-          'p_bank_ref': bankRef,
-          'p_bank_date': isoBankDate,
-        });
-        return (result as num?)?.toInt() ?? payIds.length;
+        return await SupabaseService.reconcilePayments(
+          token: context.read<AuthProvider>().sessionToken,
+          payIds: payIds, insId: insId, schema: schema, userName: userName,
+          bankRef: bankRef, bankDate: isoBankDate);
       }
     } catch (e) {
       debugPrint('reconcile_payments_batch RPC failed, using fallback: $e');
@@ -745,7 +852,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                                 },
                                 activeColor: AppColors.accent,
                               )),
-                              Expanded(flex: 2, child: Text('PAY NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                              Expanded(flex: 2, child: Text('RECEIPT NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                               Expanded(flex: 3, child: Text('STUDENT', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                               Expanded(flex: 2, child: Text('AMOUNT', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                               Expanded(flex: 2, child: Text('METHOD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
@@ -967,8 +1074,8 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                                       children: [
                                         SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                         Expanded(flex: 2, child: Text(row['date']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                        Expanded(flex: 2, child: Text(row['reference']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                        Expanded(flex: 2, child: Text('${formatIndianNumber((row['amount'] as num?)?.toDouble() ?? 0)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                        Expanded(flex: 2, child: Text(row['reference']?.toString() ?? '-', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                        Expanded(flex: 2, child: Text(formatIndianNumber((row['amount'] as num?)?.toDouble() ?? 0), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                         Expanded(
                                           flex: 2,
                                           child: isMatched
@@ -1077,7 +1184,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                     child: Row(
                       children: [
                         SizedBox(width: 40.w, child: Text('#', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('PAY NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 2, child: Text('RECEIPT NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 3, child: Text('STUDENT', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('AMOUNT', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
                         Expanded(flex: 2, child: Text('METHOD', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),

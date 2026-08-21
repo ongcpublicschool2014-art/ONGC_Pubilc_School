@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../utils/app_theme.dart';
+import 'package:provider/provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/auth_provider.dart';
 
 /// Student Fee Definition — lists every fee defined for a student (both the
 /// applicable-to-all / collectible ones and the optional / non-collectible
@@ -32,6 +34,9 @@ class _DefRow {
   final String cls;
   final String feeType;
   final double concession;
+  final double paidAmount; // already collected on this demand
+  final double balanceDue; // stored outstanding (already reflects payments)
+  final double origAmount; // original feeamount, to detect edits
   final TextEditingController amountCtrl;
   bool opted;
   _DefRow({
@@ -41,12 +46,22 @@ class _DefRow {
     required this.feeType,
     required double amount,
     required this.concession,
+    required this.paidAmount,
+    required this.balanceDue,
     required this.opted,
-  }) : amountCtrl = TextEditingController(text: amount.toStringAsFixed(2));
+  })  : origAmount = amount,
+        amountCtrl = TextEditingController(text: amount.toStringAsFixed(2));
 
   double get amount => double.tryParse(amountCtrl.text.trim()) ?? 0;
+
+  /// True once the cashier edits the fee amount.
+  bool get amountChanged => (amount - origAmount).abs() >= 0.005;
+
   double get balance {
-    final b = amount - concession;
+    // Amount unchanged → show the real outstanding (balancedue already credits
+    // any payments made). Amount edited → recompute for the new fee, still
+    // crediting what's already been paid so a payment is never erased.
+    final b = amountChanged ? (amount - concession - paidAmount) : balanceDue;
     return b > 0 ? b : 0;
   }
 
@@ -77,7 +92,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
     setState(() => _loading = true);
     try {
       final res = await SupabaseService.fromSchema('feedemand')
-          .select('dem_id, stuclass, demfeeterm, demfeetype, feeamount, balancedue, conamount, collectible')
+          .select('dem_id, stuclass, demfeeterm, demfeetype, feeamount, balancedue, conamount, paidamount, collectible')
           .eq('ins_id', widget.insId)
           .eq('stuadmno', widget.stuAdmno)
           .eq('activestatus', 1)
@@ -93,6 +108,8 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
           feeType: m['demfeetype']?.toString() ?? '',
           amount: (m['feeamount'] as num?)?.toDouble() ?? 0,
           concession: (m['conamount'] as num?)?.toDouble() ?? 0,
+          paidAmount: (m['paidamount'] as num?)?.toDouble() ?? 0,
+          balanceDue: (m['balancedue'] as num?)?.toDouble() ?? 0,
           opted: m['collectible'] == true,
         );
       }).toList();
@@ -121,13 +138,13 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
+      final token = context.read<AuthProvider>().sessionToken;
       for (final r in _rows) {
-        await SupabaseService.fromSchema('feedemand').update({
-          'feeamount': r.amount,
-          'balancedue': r.balance,
-          'reconbalancedue': r.balance,
-          'collectible': r.opted,
-        }).eq('dem_id', r.demId);
+        // Only recompute the outstanding when the fee amount actually changed —
+        // never overwrite balancedue for a demand that already has payments.
+        await SupabaseService.saveFeeDefinition(
+          token: token, demId: r.demId, feeamount: r.amount, collectible: r.opted,
+          balancedue: r.amountChanged ? r.balance : null);
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
