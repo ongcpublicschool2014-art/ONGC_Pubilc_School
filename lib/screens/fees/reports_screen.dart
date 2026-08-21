@@ -922,8 +922,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           listenable: _tabController,
           builder: (context, _) {
             final selected = _tabController.index;
-            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'Export', 'DCB Register'];
-            final tabIcons = ['calendar-1', 'book-1', 'clock', 'chart-2', 'document-download', 'grid-1'];
+            final tabLabels = ['Daily Collection', 'Student Ledger', 'Pending Payment', 'Consolidated Status', 'DCB Register', 'Export'];
+            final tabIcons = ['calendar-1', 'book-1', 'clock', 'chart-2', 'grid-1', 'document-download'];
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: SingleChildScrollView(
@@ -972,8 +972,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                           _buildStudentLedger(),
                           _buildPendingPayment(),
                           _buildConsolidatedStatus(),
-                          _buildPowerCollege(),
                           _buildDcbRegister(),
+                          _buildPowerCollege(),
                         ],
                       ),
           ),
@@ -1466,7 +1466,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               ),
             ),
           ],
-          if (_tabController.index == 5) ...[
+          if (_tabController.index == 4) ...[
             SizedBox(width: 12.w),
             // Fee Type "Type" filter (DCB Register) — checkbox multi-select
             _checkMultiSelect(

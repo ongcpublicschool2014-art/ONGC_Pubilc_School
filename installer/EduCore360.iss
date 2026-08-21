@@ -8,7 +8,7 @@
 ;      (or open in the Inno Setup IDE and press F9)
 
 #define MyAppName       "EduCore360"
-#define MyAppVersion    "1.0.0"
+#define MyAppVersion    "1.0.1"
 #define MyAppPublisher  "TBS Technologies Private Limited"
 #define MyAppExeName    "school_admin.exe"
 ; UUID for this product line — bumping it makes Windows treat upgrades as
