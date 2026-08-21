@@ -36,6 +36,7 @@ import '../admission/admission_master_screen.dart';
 
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/update_dialog.dart';
 import '../../utils/friendly_error.dart';
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -160,6 +161,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadUnreadNotifCount();
     _loadAcademicYear();
     _loadMenuAccess();
+    // One-shot update check after login (silent if up to date / offline).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) maybePromptUpdate(context);
+    });
     _navScrollCtrl.addListener(_updateNavMoreBelow);
     _searchFocusNode.addListener(() {
       if (!_searchFocusNode.hasFocus) {
