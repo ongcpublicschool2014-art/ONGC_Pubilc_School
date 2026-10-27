@@ -20,6 +20,7 @@ import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
+import '../../utils/app_text.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 
@@ -612,7 +613,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _selectedClass == null ||
         _mobileController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(schoolTerm('Please fill all required fields (Roll No, Name, Class, Mobile)')), backgroundColor: AppColors.error),
+        SnackBar(content: Text(schoolTerm('Fill in all required fields: Roll No., Student Name, Class and Mobile Number.')), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -738,7 +739,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving student. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not save the student. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -756,7 +757,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _nameController.text.trim().isEmpty ||
         _selectedClass == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(schoolTerm('Please fill all required fields (Roll No, Name, Class)')), backgroundColor: AppColors.error),
+        SnackBar(content: Text(schoolTerm('Fill in all required fields: Roll No., Student Name and Class.')), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -843,7 +844,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating student. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not update the student. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -905,7 +906,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Photo upload failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not upload the photo. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -924,7 +925,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // file inside and uploads them - much faster than Ctrl+A in the file
     // picker when a school has hundreds of photos.
     final folderPath = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: schoolTerm('Select folder of photos named by Roll No (e.g. 6522.jpg)'),
+      dialogTitle: schoolTerm('Select the folder of photos named by roll no. (e.g. 6522.jpg)'),
     );
     if (folderPath == null) return;
 
@@ -954,7 +955,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('No image files found in that folder'),
+            content: Text('No JPG, PNG, WEBP or GIF files found in that folder. Choose another folder.'),
             backgroundColor: AppColors.warning,
           ),
         );
@@ -1038,7 +1039,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Photo import complete'),
+          title: const Text('Photo Import Complete'),
           content: SizedBox(
             width: 480,
             child: SingleChildScrollView(
@@ -1050,10 +1051,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       style: TextStyle(color: AppColors.success, fontWeight: FontWeight.w700, fontSize: 14.sp)),
                   if (unmatched.isNotEmpty) ...[
                     SizedBox(height: 8.h),
-                    Text(schoolTerm('Unmatched (${unmatched.length}) - no student with this Roll No:'),
+                    Text(schoolTerm('Not matched (${unmatched.length}): no student has this roll no.'),
                         style: TextStyle(color: AppColors.warning, fontWeight: FontWeight.w700, fontSize: 13.sp)),
                     for (final n in unmatched.take(20))
-                      Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('* $n', style: TextStyle(fontSize: 12.sp))),
+                      Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('• $n', style: TextStyle(fontSize: 12.sp))),
                     if (unmatched.length > 20)
                       Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('... and ${unmatched.length - 20} more', style: TextStyle(fontSize: 12.sp, fontStyle: FontStyle.italic))),
                   ],
@@ -1062,7 +1063,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     Text('Failed (${failed.length}):',
                         style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w700, fontSize: 13.sp)),
                     for (final n in failed.take(10))
-                      Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('* $n', style: TextStyle(fontSize: 12.sp))),
+                      Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('• $n', style: TextStyle(fontSize: 12.sp))),
                   ],
                 ],
               ),
@@ -1510,7 +1511,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           children: [
             const Icon(Icons.info_outline_rounded, color: AppColors.warning),
             const SizedBox(width: 10),
-            const Text('Import prerequisites'),
+            const Text('Import Prerequisites'),
           ],
         ),
         content: ConstrainedBox(
@@ -1576,7 +1577,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           padding: EdgeInsets.fromLTRB(16.w, 10.h, 16.w, 0),
           child: Row(
             children: [
-              const CardTitleBlock(icon: 'people', title: 'All Students', subtitle: 'browse and search the student directory'),
+              const CardTitleBlock(icon: 'people', title: 'All Students', subtitle: 'Browse and search the student directory'),
               SizedBox(width: 8.w),
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
@@ -1586,9 +1587,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
               const Spacer(),
               AppSearchField(
                 controller: _searchController,
-                hintText: 'Search...',
+                hintText: schoolTerm('Search by name, roll no. or course'),
                 onChanged: (_) => setState(() {}),
-                width: 240.w,
+                width: 300.w,
               ),
               ..._buildImportActionButtons(),
             ],
@@ -1609,13 +1610,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
-                        Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                        Expanded(flex: 1, child: Text('S. NO.', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('ROLL NO.'), style: AppUI.tableHead)),
                         Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
                         if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
-                        Expanded(flex: 2, child: Text('MOBILE NO', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text('MOBILE NO.', style: AppUI.tableHead)),
                         Expanded(flex: 1, child: Text('VIEW', textAlign: TextAlign.right, style: AppUI.tableHead)),
                       ],
                     ),
@@ -1729,7 +1730,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 const Spacer(),
                 AppSearchField(
                   controller: _searchController,
-                  hintText: 'Search...',
+                  hintText: schoolTerm('Search by name or roll no.'),
                   onChanged: (_) => setState(() {}),
                   width: 260.w,
                 ),
@@ -1745,13 +1746,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
-                    Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text('S. NO.', style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text(schoolTerm('ROLL NO.'), style: AppUI.tableHead)),
                     Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
                     Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
                     if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text('GENDER', style: AppUI.tableHead)),
-                    Expanded(flex: 2, child: Text('MOBILE', style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text('MOBILE NO.', style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text('VIEW', textAlign: TextAlign.right, style: AppUI.tableHead)),
                   ],
                 ),
@@ -1893,7 +1894,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       children: [
                         AppUI.cardHeader(
                           icon: 'people',
-                          title: 'Students',
+                          title: 'Student Details',
                           trailing: [
                             Container(
                               padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
@@ -2051,6 +2052,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               _panel(title: 'Payment In Charge', icon: 'indianrupeesign.circle.fill', child: _buildPaymentFields()),
                               if (_selectedStudent == null || _isFormEnabled) ...[
                                 SizedBox(height: 16.h),
+                                Align(alignment: Alignment.centerLeft, child: AppUI.requiredNote()),
+                                SizedBox(height: 8.h),
                                 Row(
                                   children: [
                                     Expanded(
@@ -2103,7 +2106,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             dropdownColor: Colors.white,
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
-            decoration: _dec('Select year', filled: _selectedYrId != null),
+            decoration: _dec('Select academic year', filled: _selectedYrId != null),
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: _years.map((y) => DropdownMenuItem(value: y['yr_id'].toString(), child: Text(y['yrlabel']))).toList(),
@@ -2118,7 +2121,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           )),
           _fieldFull(label: schoolTerm('Roll Number *'), child: TextFormField(
             controller: _admNoController,
-            decoration: _dec(schoolTerm('Enter roll no'), filled: _admNoController.text.trim().isNotEmpty),
+            decoration: _dec(schoolTerm('Enter roll no.'), filled: _admNoController.text.trim().isNotEmpty),
             style: _inputStyle.copyWith(color: _admNoController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
@@ -2135,7 +2138,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
         _row3(
           _fieldFull(
-            label: 'Admission Date *',
+            label: '${AppText.dateOfAdmission} *',
             child: InkWell(
               onTap: () async {
                 final d = await showDatePicker(
@@ -2147,7 +2150,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 if (d != null) setState(() => _admDate = d);
               },
               child: InputDecorator(
-                decoration: _dec('Select admission date', filled: _admDate != null).copyWith(
+                decoration: _dec('Select date of admission', filled: _admDate != null).copyWith(
                   suffixIcon: Padding(
                     padding: EdgeInsets.only(right: 10.w),
                     child: AppIcon('calendar-1', size: 14, color: AppColors.textSecondary),
@@ -2155,8 +2158,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 ),
                 child: Text(
                   _admDate != null
-                      ? '${_admDate!.day.toString().padLeft(2, '0')}/${_admDate!.month.toString().padLeft(2, '0')}/${_admDate!.year}'
-                      : 'Select admission date',
+                      ? formatDmy(_admDate)
+                      : 'Select date of admission',
                   style: _admDate != null
                       ? AppUI.fieldText(context, filled: true)
                       : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
@@ -2188,11 +2191,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
               if (d != null) setState(() => _dob = d);
             },
             child: InputDecorator(
-              decoration: _dec('Select DOB', filled: _dob != null),
+              decoration: _dec('Select date of birth', filled: _dob != null),
               child: Text(
                 _dob != null
-                    ? '${_dob!.day.toString().padLeft(2, '0')}/${_dob!.month.toString().padLeft(2, '0')}/${_dob!.year}'
-                    : 'DD/MM/YYYY',
+                    ? formatDmy(_dob)
+                    : 'Select date of birth',
                 style: _dob != null
                     ? AppUI.fieldText(context, filled: true)
                     : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
@@ -2203,7 +2206,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         SizedBox(height: 14.h),
 
         _row3(
-          _fieldFull(label: 'Mobile Number', child: TextFormField(
+          _fieldFull(label: _selectedStudent == null ? 'Mobile Number *' : 'Mobile Number', child: TextFormField(
             controller: _mobileController,
             decoration: _dec('Enter mobile', filled: _mobileController.text.trim().isNotEmpty),
             style: _inputStyle.copyWith(color: _mobileController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
@@ -2220,7 +2223,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           )),
           _fieldFull(label: schoolTerm('Course'), child: TextFormField(
             initialValue: _selectedStudent?.courname ?? '',
-            decoration: _dec(schoolTerm('Course'), filled: (_selectedStudent?.courname ?? '').trim().isNotEmpty),
+            decoration: _dec(schoolTerm('Auto-filled from class'), filled: (_selectedStudent?.courname ?? '').trim().isNotEmpty),
             style: _inputStyle.copyWith(color: (_selectedStudent?.courname ?? '').trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             enabled: false,
           )),
@@ -2256,7 +2259,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             dropdownColor: Colors.white,
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
-            decoration: _dec('Select', filled: _selectedBloodGroup != null),
+            decoration: _dec('Select blood group', filled: _selectedBloodGroup != null),
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: _bloodGroups.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
@@ -2364,24 +2367,24 @@ class _StudentsScreenState extends State<StudentsScreen> {
           _fieldFull(label: 'City', child: TextFormField(controller: _cityController, decoration: _dec('Enter city', filled: _cityController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _cityController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
           _fieldFull(label: 'State', child: TextFormField(controller: _stateController, decoration: _dec('Enter state', filled: _stateController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _stateController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
           _fieldFull(label: 'Country', child: TextFormField(controller: _countryController, decoration: _dec('Enter country', filled: _countryController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _countryController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
-          _fieldFull(label: 'Pin Code *', child: TextFormField(
+          _fieldFull(label: 'PIN Code *', child: TextFormField(
             controller: _pinController,
-            decoration: _dec('Enter pin', filled: _pinController.text.trim().isNotEmpty),
+            decoration: _dec('Enter PIN code', filled: _pinController.text.trim().isNotEmpty),
             style: _inputStyle.copyWith(color: _pinController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
             validator: (v) => (v == null || v.trim().isEmpty)
                 ? 'Required'
-                : v.trim().length != 6 ? 'Must be 6 digits' : null,
+                : v.trim().length != 6 ? 'PIN code must be 6 digits' : null,
           )),
         ),
         SizedBox(height: 14.h),
 
         _row4(
-          _fieldFull(label: 'Aadhar No', child: TextFormField(
+          _fieldFull(label: 'Aadhaar No.', child: TextFormField(
             controller: _aadharController,
-            decoration: _dec('Enter Aadhar', filled: _aadharController.text.trim().isNotEmpty),
+            decoration: _dec('Enter Aadhaar number', filled: _aadharController.text.trim().isNotEmpty),
             style: _inputStyle.copyWith(color: _aadharController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             keyboardType: TextInputType.number,
@@ -2426,7 +2429,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             dropdownColor: Colors.white,
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
-            decoration: _dec('Select', filled: _selectedHostel != null),
+            decoration: _dec('Select yes or no', filled: _selectedHostel != null),
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: const [
@@ -2485,7 +2488,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           child: _row3(
             _fieldFull(label: '$prefix Name', child: TextFormField(
               controller: controllers.$1,
-              decoration: _dec('Enter $prefix name', filled: controllers.$1.text.trim().isNotEmpty),
+              decoration: _dec("Enter ${prefix.toLowerCase()}'s name", filled: controllers.$1.text.trim().isNotEmpty),
               style: _inputStyle.copyWith(color: controllers.$1.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
               onChanged: (_) => setState(() {}),
             )),
@@ -2745,14 +2748,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
       if (ext == 'csv') {
         final csvString = utf8.decode(file.bytes!);
         final parsed = const CsvToListConverter().convert(csvString);
-        if (parsed.isEmpty) throw Exception('CSV file is empty');
+        if (parsed.isEmpty) throw Exception('The file is empty. Add student rows and choose the file again.');
         headers = parsed.first.map((e) => e.toString().trim()).toList();
         rows = parsed.skip(1).where((r) => r.any((c) => c.toString().trim().isNotEmpty)).toList();
       } else {
         final excel = xl.Excel.decodeBytes(file.bytes!);
         final sheetName = excel.tables.keys.first;
         final sheet = excel.tables[sheetName]!;
-        if (sheet.rows.isEmpty) throw Exception('Excel file is empty');
+        if (sheet.rows.isEmpty) throw Exception('The file is empty. Add student rows and choose the file again.');
         headers = sheet.rows.first.map((c) => c?.value?.toString().trim() ?? '').toList();
         rows = sheet.rows.skip(1)
             .where((r) => r.any((c) => c?.value != null && c!.value.toString().trim().isNotEmpty))
@@ -2892,7 +2895,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not export the file. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -2942,7 +2945,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not export the template. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -2959,7 +2962,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final sampleMaps = <Map<String, String>>[
       {
         'stuadmno': 'CS001', 'stuname': 'RAHUL KUMAR', 'stugender': 'Male', 'studob': '2004-06-15',
-        'stuadmdate': '2025-06-01', 'courname': 'BSC-CS', 'stuclass': 'I Year', 'stumobile': '9876543210',
+        'stuadmdate': '2025-06-01', 'courname': isSchool ? 'I' : 'BSC-CS', 'stuclass': isSchool ? 'I A' : 'I Year', 'stumobile': '9876543210',
         'stuemail': 'rahul@email.com', 'concession': 'GENERAL', 'stuaddress': 'No.5 Main Street',
         'stucity': 'Chennai', 'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600001',
         'stubloodgrp': 'B+', 'aadharno': '234567890123', 'community': 'OC', 'caste': 'Iyer',
@@ -2971,7 +2974,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       },
       {
         'stuadmno': 'CS002', 'stuname': 'PRIYA S', 'stugender': 'Female', 'studob': '2004-03-22',
-        'stuadmdate': '2025-06-01', 'courname': 'BSC-CS', 'stuclass': 'I Year', 'stumobile': '9876543220',
+        'stuadmdate': '2025-06-01', 'courname': isSchool ? 'I' : 'BSC-CS', 'stuclass': isSchool ? 'I A' : 'I Year', 'stumobile': '9876543220',
         'concession': 'GENERAL', 'stuaddress': 'No.10 Anna Nagar', 'stucity': 'Chennai',
         'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600040', 'stubloodgrp': 'O+',
         'aadharno': '345678901234', 'community': 'BC', 'caste': 'Naidu', 'religion': 'Hindu',
@@ -3022,7 +3025,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not export the sample data. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -3129,8 +3132,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final payer = _deriveImportPayer(row);
     final payName = _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? payer[0];
     final payMob = _nullIfEmpty(_importCellByKey(row, 'payinchargemob')) ?? payer[1];
-    if (payName == null) errors['payincharge'] = 'Pay In Charge: give a value or a parent with name & mobile';
-    if (payMob == null) errors['payinchargemob'] = 'Pay Mobile: give a value or a parent with name & mobile';
+    if (payName == null) errors['payincharge'] = 'Payment In Charge is missing. Enter it, or enter a parent\'s name and mobile number.';
+    if (payMob == null) errors['payinchargemob'] = 'Payment Mobile is missing. Enter it, or enter a parent\'s name and mobile number.';
     // DOB is NOT NULL on students - a non-empty but unparseable value would
     // insert null and fail server-side, so flag the bad format here.
     final dobRaw = (_importCellByKey(row, 'studob') ?? '').trim();
@@ -3148,7 +3151,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       }
     }
     if (payMob != null && payMob.replaceAll(RegExp(r'[^0-9]'), '').length != 10) {
-      errors['payinchargemob'] = 'Pay Mobile must be 10 digits';
+      errors['payinchargemob'] = 'Payment Mobile must be 10 digits';
     }
     // Class + course must exist in the master and (if both supplied) agree
     // with the class-course mapping. Skip if masters haven't loaded yet -
@@ -3159,15 +3162,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (classRaw.isNotEmpty && _importClassNames.isNotEmpty) {
       final k = norm(classRaw);
       if (!_importClassNames.contains(k)) {
-        errors['stuclass'] = schoolTerm('Class "$classRaw" not found in master');
+        errors['stuclass'] = '${schoolTerm('Class')} "$classRaw" not found in Master Data';
       } else if (courseRaw.isNotEmpty && _importCourseNames.isNotEmpty) {
         final ck = norm(courseRaw);
         if (!_importCourseNames.contains(ck)) {
-          errors['courname'] = schoolTerm('Course "$courseRaw" not found in master');
+          errors['courname'] = '${schoolTerm('Course')} "$courseRaw" not found in Master Data';
         } else {
           final expected = _importClassToCourse[k];
           if (expected != null && expected != ck) {
-            errors['courname'] = schoolTerm('Class "$classRaw" belongs to "$expected"');
+            errors['courname'] = '${schoolTerm('Class')} "$classRaw" belongs to ${schoolTerm('course')} "$expected", not the ${schoolTerm('course')} in this row';
           }
         }
       }
@@ -3203,10 +3206,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (m.contains('not-null') || m.contains('null value')) {
       final match = RegExp(r'column "(\w+)"').firstMatch(msg);
       final col = match?.group(1) ?? '';
-      final labels = {'stuadmno': 'Roll No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
+      final labels = {'stuadmno': 'Roll No.', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Payment In Charge', 'payinchargemob': 'Payment Mobile'};
       return schoolTerm('${labels[col] ?? col} is required');
     }
-    if (m.contains('foreign key') || m.contains('fkey')) return schoolTerm('Invalid reference - check class, year, or concession values');
+    if (m.contains('foreign key') || m.contains('fkey')) return schoolTerm('Invalid class, academic year or concession. Check these values in Master Data.');
     if (m.contains('check constraint')) {
       if (m.contains('gender')) return 'Gender must be M, F, or T';
       if (m.contains('email')) return 'Invalid email format';
@@ -3236,11 +3239,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     });
     if (rowErrors.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All rows are valid'), backgroundColor: AppColors.success),
+        const SnackBar(content: Text('All rows are valid. Click Import to add the students.'), backgroundColor: AppColors.success),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${rowErrors.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('${rowErrors.length} row(s) have errors (highlighted in red). Fix them in the file, or click Export with Errors.'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -3489,9 +3492,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
           final status = e['status'];
           final admNo = e['stuadmno'] ?? '';
           if (status == 'NO_PARENT') {
-            _importErrors.add('Roll $admNo: Payment In Charge or Mobile is missing - student not created');
+            _importErrors.add('${schoolTerm('Roll No.')} $admNo: Payment In Charge name or mobile is missing, so the student was not added.');
           } else {
-            _importErrors.add('Roll $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
+            _importErrors.add('${schoolTerm('Roll No.')} $admNo: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}');
           }
         }
       } catch (e) {
@@ -3510,7 +3513,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       // Only a genuinely fatal error (e.g. process_student_import itself failed)
       // reaches here; those leave _importedCount at 0. Show the raw cause so it
       // isn't masked by the generic "Something went wrong".
-      _importErrors.add('Import error: $e');
+      _importErrors.add('Import failed. ${friendlyError(e)}');
     }
 
     setState(() => _importStep = 3);
@@ -3570,7 +3573,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ElevatedButton.icon(
                 onPressed: _pickImportFile,
                 icon: AppIcon('document-upload', size: 16),
-                label: const Text('Import'),
+                label: const Text(AppText.chooseFile),
               ),
               SizedBox(width: 8.w),
               Builder(builder: (_) {
@@ -3582,7 +3585,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 return ElevatedButton.icon(
                   onPressed: hasErrors ? _exportImportRowsWithErrors : _exportStudentTemplate,
                   icon: AppIcon(hasErrors ? 'document-download' : 'grid-1', size: 16),
-                  label: Text(hasErrors ? 'Export with Errors' : 'Format to Excel'),
+                  label: Text(hasErrors ? 'Export with Errors' : AppText.downloadTemplate),
                   style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
                 );
               }),
@@ -3590,7 +3593,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ElevatedButton.icon(
                 onPressed: _exportSampleData,
                 icon: AppIcon('document-download', size: 16),
-                label: const Text('Sample Data'),
+                label: const Text(AppText.downloadSample),
               ),
             ],
           ),
@@ -3653,7 +3656,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                     ? AppUI.empty(
                                         icon: 'element-4',
                                         title: 'No data loaded',
-                                        why: 'Click Browse to load a CSV or Excel file',
+                                        why: 'Click Choose File to load a CSV or Excel file.',
                                       )
                                     : ListView.builder(
                                         itemCount: _importRows.length,
@@ -3731,7 +3734,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ElevatedButton.icon(
                 onPressed: _importValidated ? _startStudentImport : null,
                 icon: AppIcon('save-2', size: 16),
-                label: const Text('Save'),
+                label: const Text(AppText.import),
               ),
               SizedBox(width: 8.w),
               OutlinedButton(
