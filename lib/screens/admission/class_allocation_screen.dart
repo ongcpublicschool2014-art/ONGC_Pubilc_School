@@ -833,7 +833,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
                   icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.textSecondary),
                   style: AppUI.fieldText(context, filled: options.contains(chosen)),
                   decoration: _cellDec(filled: options.contains(chosen)),
-                  hint: Text(schoolTerm('Select class'), style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
+                  hint: Text(schoolTerm('Select class'), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                   items: [
                     for (final e in options)
                       DropdownMenuItem(value: e, child: Text(e, style: AppUI.fieldText(context))),

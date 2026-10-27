@@ -940,20 +940,20 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                   locked: _regNoLocked,
                   invalid: _regNoBad(r))),
           _cell(w(_wName), _textCell(r.name, hint: 'Enter name', required: true)),
-          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(), (v) => setState(() => r.sex = v), hint: 'Select gender', required: true)),
+          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(), (v) => setState(() => r.sex = v), hint: 'Select', required: true)),
           _cell(w(_wCourse), _dropCell(r.course, _courses.map((e) => MapEntry(e, e)).toList(), (v) => setState(() {
             r.course = v;
             // Drop a class that no longer belongs to the newly chosen course.
             if (r.cls != null && !_classNamesFor(v).contains(r.cls)) r.cls = null;
             // the standard's division fills in (still changeable)
             r.division = _divisionOfCourse(v) ?? r.division;
-          }), hint: schoolTerm('Select course'), required: true)),
-          _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: schoolTerm('Select class'), required: !isSchool)),
+          }), hint: 'Select', required: true)),
+          _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: 'Select', required: !isSchool)),
           if (isSchool)
             _cell(w(_wDiv), _dropCell(r.division, {..._divisions, if (r.division != null) r.division!}.map((e) => MapEntry(e, e)).toList(),
-                (v) => setState(() => r.division = v), hint: 'Select division', required: true)),
+                (v) => setState(() => r.division = v), hint: 'Select', required: true)),
           if (!isSchool) ...[
-          _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select admission type', required: true)),
+          _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select', required: true)),
           _cell(w(_wBatch), _textCell(r.batch, hint: 'YYYY-YYYY', required: true, invalid: _batchBad(r.batch.text))),
           ],
           _cell(w(_wDob), _dateCell(r.dob, (d) => setState(() => r.dob = d), required: true)),
@@ -961,7 +961,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
               w(_wPtype),
               _dropCell(r.parentType, _parentOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(),
                   (v) => setState(() => r.parentType = v ?? 'F'),
-                  hint: 'Select parent', required: true)),
+                  hint: 'Select', required: true)),
           _cell(w(_wFather), _textCell(r.parentName, hint: 'Enter name', required: true)),
           _cell(w(_wFmob), _textCell(r.parentMobile, hint: 'Enter mobile', required: true, digitsOnly: true, maxLen: 10, invalid: _mobileBad(r.parentMobile.text))),
           _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('Enter EMIS no.'), digitsOnly: true, maxLen: 30)),
@@ -1081,7 +1081,12 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       elevation: 6,
       icon: const Icon(Icons.arrow_drop_down, size: 18, color: AppColors.textSecondary),
       style: _cellText(false),
-      decoration: _cellDec(filled: values.contains(value), hint: hint, error: bad),
+      // The dropdown draws its own hint (it ignores hintMaxLines), so give it
+      // a one-line Text -- a longer hint wrapped and was cut in half.
+      hint: hint == null
+          ? null
+          : Text(hint, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.textLight, fontSize: 11.sp)),
+      decoration: _cellDec(filled: values.contains(value), error: bad),
       items: items
           .map((e) => DropdownMenuItem(
                 value: e.key,
