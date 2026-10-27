@@ -11,6 +11,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
 import '../fees/pending_approval_screen.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 
 /// Dashboard overview — the institution's fee pulse at a glance. Redesigned as a
 /// multi-panel overview: KPI row, a collection-over-time area chart, a
@@ -640,8 +641,8 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
     if (_error != null) {
       return EmptyState(
         icon: 'info-circle',
-        title: 'Could not load dashboard',
-        subtitle: 'Please check your connection and try again.',
+        title: 'Could not load the dashboard',
+        subtitle: 'Check your internet connection, then select Retry.',
         action: OutlinedButton.icon(onPressed: _load, icon: const Icon(Icons.refresh, size: 16), label: const Text('Retry')),
       );
     }
@@ -668,13 +669,13 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                 final chart = _panel(
                   icon: 'chart-1',
                   title: 'Collection Overview',
-                  subtitle: 'last 12 months',
+                  subtitle: 'Last 12 months',
                   child: _heavyLoading ? _chartLoading() : _barChart(),
                 );
                 final pie = _panel(
                   icon: 'grid-1',
                   title: 'Collection by Mode',
-                  subtitle: 'this year, reconciled',
+                  subtitle: 'This year, reconciled payments',
                   child: _heavyLoading ? _chartLoading() : _methodPie(),
                 );
                 if (!showPie) return chart;
@@ -700,7 +701,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                 final recent = _panel(
                   icon: 'receipt-2',
                   title: 'Recent Payments',
-                  subtitle: 'latest ${_recent.length}',
+                  subtitle: 'Latest ${_recent.length}',
                   trailing: _viewAll('Transactions'),
                   child: _recentTable(),
                 );
@@ -796,7 +797,9 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(p.$1.toUpperCase(), style: AppUI.caps, maxLines: 1, overflow: TextOverflow.ellipsis),
+            // 'Waived (concession)' stays the tuple value (checked above);
+            // the legend shows the glossary word.
+            Text((p.$1.startsWith('Waived') ? 'Concession' : p.$1).toUpperCase(), style: AppUI.caps, maxLines: 1, overflow: TextOverflow.ellipsis),
             SizedBox(height: 3.h),
             FittedBox(
               fit: BoxFit.scaleDown,
@@ -805,7 +808,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                   maxLines: 1, style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
             ),
             SizedBox(height: 2.h),
-            Text(waiting ? 'loading' : '${_pct(p.$2).toStringAsFixed(1)}% of fees due${p.$5 != null ? ' · tap' : ''}',
+            Text(waiting ? 'loading' : '${_pct(p.$2).toStringAsFixed(1)}% of fees due${p.$5 != null ? ' · click for details' : ''}',
                 style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         ),
@@ -839,7 +842,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                     maxLines: 1, style: TextStyle(fontSize: 34.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.5)),
               ),
               SizedBox(height: 4.h),
-              Text('Regular + Arrear · tap for the split', style: AppUI.muted),
+              Text('Regular + arrear · click for the split', style: AppUI.muted),
             ]),
           ),
         );
@@ -895,23 +898,23 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
           _byClassType.isEmpty
               ? 'Active students'
               : 'Promotional ${_byClassType['PROMOTIONAL'] ?? 0} · '
-                  'Terminal ${_byClassType['TERMINAL'] ?? 0} · tap',
+                  'Terminal ${_byClassType['TERMINAL'] ?? 0} · click for details',
           AppColors.primary,
           'people',
           onTap: _byClassType.isEmpty ? null : _showClassTypeBreakdown),
-      if (!_showHero && _may('dash:demand')) _Kpi('Total Fees Due', _inrFull(_demand), 'Regular + Arrear · tap', AppColors.demand, 'receipt-2',
+      if (!_showHero && _may('dash:demand')) _Kpi('Total Fees Due', _inrFull(_demand), 'Regular + arrear · click for the split', AppColors.demand, 'receipt-2',
           onTap: () => _showRegArrBreakdown('demand', 'Total Fees Due', AppColors.demand, 'receipt-2')),
-      if (!_showHero && _may('dash:collected')) _Kpi('Total Collected', _inrFull(_collected), '${_pct(_collected).toStringAsFixed(1)}% collected · tap', AppColors.success, 'money-recive',
+      if (!_showHero && _may('dash:collected')) _Kpi('Total Collected', _inrFull(_collected), '${_pct(_collected).toStringAsFixed(1)}% collected · click for the split', AppColors.success, 'money-recive',
           onTap: () => _showRegArrBreakdown('paid', 'Total Collected', AppColors.success, 'money-recive')),
-      if (_may('dash:misc')) _Kpi('Misc Collection', hv(_misc), 'Miscellaneous fees', AppColors.accent, 'receipt-2'),
+      if (_may('dash:misc')) _Kpi('Miscellaneous Collection', hv(_misc), 'Miscellaneous fees', AppColors.accent, 'receipt-2'),
       if (_may('dash:advance')) _Kpi('Advance Collection', hv(_advance), 'Held, not yet adjusted', AppColors.success, 'empty-wallet-add'),
       if (_may('dash:fine')) _Kpi('Fine Collected', _inrFull(_fine), 'Late-fee collected', AppColors.error, 'receipt-edit'),
       if (!_showHero && _may('dash:concession')) _Kpi('Concession', hv(_concession), 'Total waived', AppColors.info, 'discount-shape'),
-      if (_may('dash:today')) _Kpi('Today Collection', hv(_collectedToday + _miscToday + _advanceToday + _fineToday), _heavyLoading ? "Today's reconciled" : 'Fee + Misc + Advance + Fine · tap to split', AppColors.today, 'calendar-1',
+      if (_may('dash:today')) _Kpi("Today's Collection", hv(_collectedToday + _miscToday + _advanceToday + _fineToday), _heavyLoading ? 'Reconciled today' : 'Fee + miscellaneous + advance + fine · click for the split', AppColors.today, 'calendar-1',
           onTap: _heavyLoading ? null : _showTodayBreakdown),
-      if (_may('dash:pendingapproval')) _Kpi('Pending Approval', hv(_pendingApproval), 'Awaiting reconcile · tap', AppColors.warning, 'money-remove',
+      if (_may('dash:pendingapproval')) _Kpi('Pending Approval', hv(_pendingApproval), 'Awaiting reconciliation · click to view', AppColors.warning, 'money-remove',
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PendingApprovalScreen()))),
-      if (!_showHero && _may('dash:outstanding')) _Kpi('Outstanding', _inrFull(_pending), '${_pct(_pending).toStringAsFixed(1)}% pending · tap', AppColors.today, 'wallet-money',
+      if (!_showHero && _may('dash:outstanding')) _Kpi('Outstanding', _inrFull(_pending), '${_pct(_pending).toStringAsFixed(1)}% pending · click for the split', AppColors.today, 'wallet-money',
           onTap: () => _showRegArrBreakdown('outstanding', 'Outstanding', AppColors.today, 'wallet-money')),
     ];
     if (cards.isEmpty) return const SizedBox.shrink();
@@ -954,7 +957,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Students by class type', style: AppUI.cardTitle),
+        title: Text(schoolTerm('Students by Class Type'), style: AppUI.cardTitle),
         content: SizedBox(
           width: 340.w,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -969,7 +972,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                           color: tint[k], shape: BoxShape.circle)),
                   SizedBox(width: 10.w),
                   Expanded(
-                      child: Text(label[k]!, style: AppUI.body)),
+                      child: Text(schoolTerm(label[k]!), style: AppUI.body)),
                   Text('${_byClassType[k] ?? 0}',
                       style: TextStyle(
                           fontSize: 14.sp,
@@ -1008,7 +1011,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
             SizedBox(height: 8.h),
             Row(children: [
               Expanded(
-                  child: Text('Total active, including TC classes',
+                  child: Text(schoolTerm('Total active, including TC classes'),
                       style: AppUI.muted)),
               Text('$_students',
                   style: TextStyle(
@@ -1083,13 +1086,13 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                 SizedBox(width: 12.w),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Today's Collection", style: AppUI.cardTitle),
-                  Text(_ymd(DateTime.now()), style: AppUI.muted),
+                  Text(formatDmy(DateTime.now()), style: AppUI.muted),
                 ])),
               ]),
               SizedBox(height: 18.h),
               _breakdownRow('money-recive', AppColors.success, 'Fee Collection', _collectedToday),
               Divider(height: 20.h, color: AppColors.divider),
-              _breakdownRow('receipt-2', AppColors.accent, 'Misc Collection', _miscToday),
+              _breakdownRow('receipt-2', AppColors.accent, 'Miscellaneous Collection', _miscToday),
               _breakdownRow('empty-wallet-add', AppColors.success, 'Advance Collection', _advanceToday),
               Divider(height: 20.h, color: AppColors.divider),
               // Fine is listed apart from Fee Collection, not folded into it.
@@ -1242,7 +1245,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                     _breakdownRow('receipt-edit', AppColors.error, 'Less: Fine', _fine),
                   ],
                   Divider(height: 20.h, color: AppColors.divider),
-                  _breakdownRow(icon, color, metric == 'paid' ? 'Collection (excl. fine)' : 'Total',
+                  _breakdownRow(icon, color, metric == 'paid' ? 'Collection (Excluding Fine)' : 'Total',
                       metric == 'paid' ? total - _fine : total,
                       bold: true),
                   SizedBox(height: 20.h),
@@ -1290,7 +1293,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text('View all', style: AppUI.label.copyWith(color: AppColors.primary)),
+            Text('View All', style: AppUI.label.copyWith(color: AppColors.primary)),
             SizedBox(width: 4.w),
             Icon(Icons.arrow_forward, size: 14.sp, color: AppColors.primary),
           ]),
@@ -1302,7 +1305,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   // ── Collection overview: monthly bar chart ─────────────────────────────────
   Widget _barChart() {
     final maxV = _monthly.fold<double>(0, (m, b) => math.max(m, b.value));
-    if (maxV <= 0) return _emptyMini('No collection recorded yet', 'Reconciled receipts from the last 12 months will chart here.');
+    if (maxV <= 0) return _emptyMini('No collection recorded yet', 'Reconciled receipts from the last 12 months will appear here.');
     return SizedBox(
       height: 230.h,
       child: LayoutBuilder(builder: (context, c) {
@@ -1340,7 +1343,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
         padding: EdgeInsets.symmetric(vertical: 10.h, horizontal: 8.w),
         decoration: AppUI.tableHeadBar.copyWith(borderRadius: BorderRadius.circular(8)),
         child: Row(children: [
-          head('RECEIPT', flex: 3),
+          head('RECEIPT NO.', flex: 3),
           head('AMOUNT', flex: 2, align: TextAlign.right),
           head('DATE', flex: 2, align: TextAlign.right),
           head('MODE', flex: 2, align: TextAlign.center),
@@ -1353,7 +1356,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   Widget _recentRow(PaymentModel p, bool zebra) {
     final amt = p.transtotalamount;
     final date = p.paydate ?? p.createdat;
-    final dStr = '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year % 100}';
+    final dStr = formatDmy(date);
     final mode = (p.paymethod ?? '-');
     return Container(
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider))),
@@ -1386,12 +1389,12 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   Widget _quickActions() {
     final allowed = widget.allowedMenus;
     final actions = <_QuickAction>[
-      _QuickAction('Add Student', 'user-add', AppColors.primary, 'Admission'),
+      _QuickAction('New Admission', 'user-add', AppColors.primary, 'Admission'),
       _QuickAction('Collect Fee', 'money-recive', AppColors.success, 'Fee Collection'),
       _QuickAction('Fee Demand', 'receipt-edit', AppColors.demand, 'Fee Demand'),
-      _QuickAction('Misc Collect', 'receipt-2', AppColors.today, 'Misc Collection'),
+      _QuickAction('Miscellaneous Collection', 'receipt-2', AppColors.today, 'Misc Collection'),
       _QuickAction('Fee Refund', 'money-remove', AppColors.error, 'Fee Refund'),
-      _QuickAction('Reports', 'chart-1', AppColors.info, 'Daily Collection'),
+      _QuickAction('Daily Collection', 'chart-1', AppColors.info, 'Daily Collection'),
     ].where((a) => allowed == null || allowed.contains(a.menu)).toList();
     if (actions.isEmpty) {
       return const EmptyState(icon: 'grid-1', title: 'No quick actions', subtitle: 'Your role has no shortcut screens.');
@@ -1422,7 +1425,12 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
           child: Column(children: [
             AppUI.iconTile(a.icon, color: a.color, size: 18),
             SizedBox(height: 8.h),
-            Text(a.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.label),
+            // Shrinks a long label (Miscellaneous Collection) instead of
+            // cutting it off; tiles keep one height.
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6.w),
+              child: FittedBox(fit: BoxFit.scaleDown, child: Text(a.label, maxLines: 1, style: AppUI.label)),
+            ),
           ]),
         ),
       ),
@@ -1434,7 +1442,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
     return _panel(
       icon: 'calendar-1',
       title: "Today's Summary",
-      subtitle: _ymd(DateTime.now()),
+      subtitle: formatDmy(DateTime.now()),
       child: Row(children: [
         // Fee + Misc, matching the Today Collection KPI above. Fine stays out
         // of it deliberately -- a penalty is not fee collection.

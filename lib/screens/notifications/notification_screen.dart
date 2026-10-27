@@ -9,6 +9,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
+import '../../utils/app_text.dart';
 class NotificationScreen extends StatefulWidget {
   final VoidCallback? onReadChanged;
   const NotificationScreen({super.key, this.onReadChanged});
@@ -91,7 +92,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (dateStr == null) return '-';
     try {
       final dt = DateTime.parse(dateStr);
-      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+      return formatDmy(dt);
     } catch (_) {
       return dateStr;
     }
@@ -102,10 +103,10 @@ class _NotificationScreenState extends State<NotificationScreen> {
     try {
       final dt = DateTime.parse(dateStr);
       final diff = DateTime.now().difference(dt);
-      if (diff.inDays > 30) return '${(diff.inDays / 30).floor()}mo ago';
-      if (diff.inDays > 0) return '${diff.inDays}d ago';
-      if (diff.inHours > 0) return '${diff.inHours}h ago';
-      if (diff.inMinutes > 0) return '${diff.inMinutes}m ago';
+      if (diff.inDays > 30) return '${(diff.inDays / 30).floor()} months ago';
+      if (diff.inDays > 0) return '${diff.inDays} days ago';
+      if (diff.inHours > 0) return '${diff.inHours} hours ago';
+      if (diff.inMinutes > 0) return '${diff.inMinutes} minutes ago';
       return 'Just now';
     } catch (_) {
       return '';
@@ -289,7 +290,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
               TextButton.icon(
                 onPressed: _markAllAsRead,
                 icon: AppIcon('task-square', size: AppBtn.iconSize(context), color: AppColors.primary),
-                label: const Text('Mark all read'),
+                label: const Text('Mark All as Read'),
               ),
           ],
         ),
@@ -332,7 +333,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     return AppUI.empty(
       icon: 'notification-bing',
       title: _filter == 'Unread' ? 'No unread notifications' : _filter == 'Read' ? 'No read notifications' : 'No notifications yet',
-      why: 'You\'re all caught up!',
+      why: 'You\'re all caught up.',
     );
   }
 
@@ -513,7 +514,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                     children: [
                       const AppIcon.linear('people', size: 16, color: AppColors.textLight),
                       SizedBox(width: 6.w),
-                      Text('Target: ', style: AppUI.muted),
+                      Text('Audience: ', style: AppUI.muted),
                       Expanded(child: Text(target, style: AppUI.label)),
                     ],
                   ),

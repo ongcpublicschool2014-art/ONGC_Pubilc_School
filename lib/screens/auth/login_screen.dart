@@ -307,7 +307,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   FadeInLeft(
                     delay: const Duration(milliseconds: 400),
                     child: Text(
-                      'Your complete school administration\nplatform for modern education.',
+                      'Your complete institution administration\nplatform for modern education.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                             color: Colors.white.withValues(alpha: 0.6),
@@ -672,7 +672,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: _fieldStyle(_emailController.text.trim().isNotEmpty),
                           onChanged: (_) => setState(() {}),
                           decoration: _dec(
-                            _isSuperAdmin ? 'Enter username' : 'admin@edudesk.com',
+                            _isSuperAdmin ? 'Enter username' : 'name@example.com',
                             filled: _emailController.text.trim().isNotEmpty,
                             prefixIcon: AppIcon(
                                 _isSuperAdmin ? 'user' : 'sms',
@@ -761,7 +761,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             SizedBox(width: 8),
                             Text(
-                              'Remember me',
+                              'Remember Me',
                               style: AppUI.body.copyWith(fontSize: 13),
                             ),
                           ],

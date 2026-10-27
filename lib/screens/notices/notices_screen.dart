@@ -12,6 +12,7 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 class NoticesScreen extends StatefulWidget {
   const NoticesScreen({super.key});
 
@@ -94,7 +95,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
     if (dateStr == null) return '-';
     try {
       final dt = DateTime.parse(dateStr);
-      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+      return formatDmy(dt);
     } catch (_) {
       return dateStr;
     }
@@ -108,7 +109,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
       if (diff.inDays > 30) return '${(diff.inDays / 30).floor()} months ago';
       if (diff.inDays > 0) return '${diff.inDays} days ago';
       if (diff.inHours > 0) return '${diff.inHours} hours ago';
-      if (diff.inMinutes > 0) return '${diff.inMinutes} min ago';
+      if (diff.inMinutes > 0) return '${diff.inMinutes} minutes ago';
       return 'Just now';
     } catch (_) {
       return '';
@@ -441,7 +442,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
                     children: [
                       const AppIcon.linear('people', size: 16, color: AppColors.textLight),
                       SizedBox(width: 6.w),
-                      Text('Target: ', style: AppUI.muted),
+                      Text('Audience: ', style: AppUI.muted),
                       Expanded(child: Text(target, style: AppUI.label)),
                     ],
                   ),
@@ -599,18 +600,18 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
         child: DropdownButton<String?>(
           value: _selectedCourse,
           isExpanded: true,
-          hint: Text(schoolTerm('All Courses'), style: AppUI.fieldText(context)),
+          hint: Text(schoolTerm('Select course'), style: AppUI.fieldText(context)),
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           elevation: 6,
           style: AppUI.fieldText(context),
           icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
           selectedItemBuilder: (context) => [
-            Align(alignment: Alignment.centerLeft, child: Text(schoolTerm('All Courses'), style: AppUI.fieldText(context, filled: filled))),
+            Align(alignment: Alignment.centerLeft, child: Text(schoolTerm('Select course'), style: AppUI.fieldText(context, filled: filled))),
             ...courses.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, style: AppUI.fieldText(context, filled: true)))),
           ],
           items: [
-            DropdownMenuItem<String?>(value: null, child: Text(schoolTerm('All Courses'))),
+            DropdownMenuItem<String?>(value: null, child: Text(schoolTerm('Select course'))),
             ...courses.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
           ],
           onChanged: (v) => setState(() {
@@ -969,7 +970,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                     return TextField(
                       controller: _titleController,
                       onChanged: (_) => setState(() {}),
-                      decoration: AppUI.field(context, 'Enter notice title...', filled: filled),
+                      decoration: AppUI.field(context, 'Enter notice title', filled: filled),
                       style: AppUI.fieldText(context, filled: filled),
                     );
                   }),
@@ -1059,12 +1060,12 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                               if (_selectedClasses.isNotEmpty)
                                 FocusableTap(
                                   onTap: () => setState(() => _selectedClasses.clear()),
-                                  child: Text('Clear all', style: AppUI.label.copyWith(color: AppColors.error)),
+                                  child: Text('Clear All', style: AppUI.label.copyWith(color: AppColors.error)),
                                 ),
                               SizedBox(width: 12.w),
                               FocusableTap(
                                 onTap: () => setState(() => _selectedClasses = List.from(_classesInScope)),
-                                child: Text('Select all', style: AppUI.label.copyWith(color: AppColors.primary)),
+                                child: Text('Select All', style: AppUI.label.copyWith(color: AppColors.primary)),
                               ),
                             ],
                           ),
@@ -1224,7 +1225,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                       controller: _descController,
                       maxLines: 5,
                       onChanged: (_) => setState(() {}),
-                      decoration: AppUI.field(context, 'Enter notice description...', filled: filled),
+                      decoration: AppUI.field(context, 'Enter notice description', filled: filled),
                       style: AppUI.fieldText(context, filled: filled),
                     );
                   }),
@@ -1244,9 +1245,9 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   AppUI.sectionLabel('Schedule'),
                   Row(
                     children: [
-                      Expanded(child: _buildDatePicker('From Date', _fromDate, (d) => setState(() => _fromDate = d))),
+                      Expanded(child: _buildDatePicker('Start Date', _fromDate, (d) => setState(() => _fromDate = d), hint: 'Select start date')),
                       SizedBox(width: 16.w),
-                      Expanded(child: _buildDatePicker('To Date', _toDate, (d) => setState(() => _toDate = d))),
+                      Expanded(child: _buildDatePicker('End Date', _toDate, (d) => setState(() => _toDate = d), hint: 'Select end date')),
                     ],
                   ),
 
@@ -1269,8 +1270,8 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                 SizedBox(width: 8.w),
                                 Text(
                                   _fromDate != null
-                                      ? '${_fromDate!.day.toString().padLeft(2,'0')}/${_fromDate!.month.toString().padLeft(2,'0')}/${_fromDate!.year}'
-                                      : 'From Date',
+                                      ? formatDmy(_fromDate)
+                                      : 'Select start date',
                                   style: _fromDate != null ? AppUI.fieldText(context, filled: true) : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
                                 ),
                               ],
@@ -1295,8 +1296,8 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                 SizedBox(width: 8.w),
                                 Text(
                                   _toDate != null
-                                      ? '${_toDate!.day.toString().padLeft(2,'0')}/${_toDate!.month.toString().padLeft(2,'0')}/${_toDate!.year}'
-                                      : 'To Date (Auto-expire)',
+                                      ? formatDmy(_toDate)
+                                      : 'Select end date (notice expires after it)',
                                   style: _toDate != null ? AppUI.fieldText(context, filled: true) : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
                                 ),
                               ],
@@ -1308,7 +1309,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   ),
                   SizedBox(height: 6.h),
                   Text(
-                    'Notice will be automatically removed after the To Date.',
+                    'The notice is removed automatically after the end date.',
                     style: AppUI.muted,
                   ),
 
@@ -1378,6 +1379,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
 
         // Footer: Cancel (= the old Back) + Send Notice
         AppFormFooter(
+          note: AppText.requiredNote,
           onCancel: _isSending ? null : widget.onBack,
           actions: [
             ElevatedButton.icon(
@@ -1405,11 +1407,9 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
     }
   }
 
-  String _formatDateDisplay(DateTime date) {
-    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
-  }
+  String _formatDateDisplay(DateTime date) => formatDmy(date);
 
-  Widget _buildDatePicker(String label, DateTime? selectedDate, ValueChanged<DateTime> onSelected) {
+  Widget _buildDatePicker(String label, DateTime? selectedDate, ValueChanged<DateTime> onSelected, {String hint = 'Select date'}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1433,7 +1433,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
               children: [
                 Expanded(
                   child: Text(
-                    selectedDate != null ? _formatDateDisplay(selectedDate) : 'Select date...',
+                    selectedDate != null ? _formatDateDisplay(selectedDate) : hint,
                     style: selectedDate != null
                         ? AppUI.fieldText(context, filled: true)
                         : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),

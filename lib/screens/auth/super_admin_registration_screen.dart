@@ -82,8 +82,8 @@ class _SuperAdminRegistrationScreenState
         setState(() {
           _sendingOtp = false;
           _error = data is Map
-              ? (data['error']?.toString() ?? 'Could not send OTP (${resp.status})')
-              : 'Could not send OTP (${resp.status})';
+              ? (data['error']?.toString() ?? 'Could not send the OTP. Try again in a moment.')
+              : 'Could not send the OTP. Try again in a moment.';
         });
         return;
       }
@@ -160,7 +160,7 @@ class _SuperAdminRegistrationScreenState
         if (!mounted) return;
         setState(() {
           _submitting = false;
-          _error = 'Registration failed';
+          _error = 'Could not create the super admin account. Try again.';
         });
       }
     } catch (e) {
@@ -199,7 +199,7 @@ class _SuperAdminRegistrationScreenState
                       size: 52.sp, color: AppColors.primary),
                   SizedBox(height: 14.h),
                   Text(
-                    'Set up Super Admin',
+                    'Set Up Super Admin',
                     textAlign: TextAlign.center,
                     style: AppUI.pageTitle,
                   ),
@@ -236,7 +236,7 @@ class _SuperAdminRegistrationScreenState
                             FilteringTextInputFormatter.digitsOnly,
                             LengthLimitingTextInputFormatter(10),
                           ],
-                          decoration: _inputDec('Mobile *',
+                          decoration: _inputDec('Mobile Number *',
                               prefixIcon: const Icon(Icons.phone_outlined),
                               hint: '10-digit mobile number',
                               filled: _phoneController.text.trim().isNotEmpty),
@@ -276,9 +276,9 @@ class _SuperAdminRegistrationScreenState
                         LengthLimitingTextInputFormatter(6),
                       ],
                       style: AppUI.fieldText(context).copyWith(letterSpacing: 4),
-                      decoration: _inputDec('Enter 6-digit OTP *',
+                      decoration: _inputDec('OTP *',
                           prefixIcon: const Icon(Icons.sms_outlined),
-                          hint: '6-digit OTP',
+                          hint: 'Enter the 6-digit OTP',
                           filled: _otpController.text.trim().isNotEmpty),
                     ),
                   ],
@@ -351,6 +351,8 @@ class _SuperAdminRegistrationScreenState
                           )
                         : const Text('Create Super Admin'),
                   ),
+                  SizedBox(height: 10.h),
+                  Center(child: AppUI.requiredNote()),
                 ],
               ),
             ),

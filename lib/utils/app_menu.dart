@@ -18,8 +18,12 @@ const String kSequenceMenu = 'Sequence Master';
 
 class AppNavSubItem {
   final String icon;
+  /// Routing / tab key (screens find their tab by it) -- never reworded.
   final String label;
-  const AppNavSubItem(this.icon, this.label);
+  /// Optional display-only text for the sidebar.
+  final String? title;
+  const AppNavSubItem(this.icon, this.label, {this.title});
+  String get navTitle => schoolTerm(title ?? label);
 }
 
 class AppNavItem {
@@ -179,17 +183,17 @@ const List<AppNavItem> kAppNavItems = [
   // them, not a second copy.
   AppNavItem('hashtag', kSequenceMenu, section: 'SETUP', adminOnly: true,
       subItems: [
-        AppNavSubItem('tag', 'Reg No'),
-        AppNavSubItem('document-text', 'TC Sequence'),
-        AppNavSubItem('category', 'Demand No'),
-        AppNavSubItem('discount-shape', 'Concession No'),
-        AppNavSubItem('money-recive', 'Refund No'),
+        AppNavSubItem('tag', 'Reg No', title: 'Register No.'),
+        AppNavSubItem('document-text', 'TC Sequence', title: 'TC No.'),
+        AppNavSubItem('category', 'Demand No', title: 'Demand No.'),
+        AppNavSubItem('discount-shape', 'Concession No', title: 'Concession No.'),
+        AppNavSubItem('money-recive', 'Refund No', title: 'Refund No.'),
         // No ADVNO series any more: a student or mess advance is numbered from
         // the RECEIPT sequence of the fee group it is banked under, like every
         // other receipt. See save_advance_collection.
-        AppNavSubItem('receipt-1', 'Receipt Sequence'),
+        AppNavSubItem('receipt-1', 'Receipt Sequence', title: 'Receipt No.'),
         // School only: Advance Fee Collection's own receipt series (ADVFEENO).
-        AppNavSubItem('receipt-2', 'Advance Fee Receipt No'),
+        AppNavSubItem('receipt-2', 'Advance Fee Receipt No', title: 'Advance Receipt No.'),
       ]),
   AppNavItem('bank', 'Bank Accounts', section: 'SETUP', adminOnly: true),
   // Roles first, then Users — you define a role before assigning it to a user.

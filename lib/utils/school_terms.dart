@@ -39,10 +39,10 @@ String schoolTerm(String text) {
   // EMIS is the school's student id, entered together with the APAAR ID; a
   // school has no UMIS (university) number.
   var t = text.replaceAllMapped(_emisUmisRe, (m) => keepCase(m.group(0)!, 'EMIS / APAAR ID'));
-  t = t.replaceAllMapped(_emisNoRe, (m) => keepCase(m.group(0)!, 'EMIS No / APAAR ID'));
+  t = t.replaceAllMapped(_emisNoRe, (m) => keepCase(m.group(0)!, 'EMIS No. / APAAR ID'));
   t = t.replaceAllMapped(_seqRe, (m) {
     final s = m.group(0)!;
-    return keepCase(s, s.toLowerCase().endsWith('s') ? 'Admission No Sequences' : 'Admission No Sequence');
+    return keepCase(s, s.toLowerCase().endsWith('s') ? 'Admission No. Sequences' : 'Admission No. Sequence');
   });
   t = t.replaceAllMapped(_numberRe, (m) {
     final s = m.group(0)!;
@@ -54,7 +54,7 @@ String schoolTerm(String text) {
     return keepCase(s, next == ':' || next == '.' ? 'Admission No' : 'Admission No.');
   });
   // the long menu / tab name does not fit the sidebar or a card header
-  t = t.replaceAll('Advance Fee Receipt No', 'Advance Receipt No');
+  t = t.replaceAll(RegExp(r'Advance Fee Receipt No\.?'), 'Advance Receipt No.');
   t = t.replaceAll('Advance Fee Definition', 'Advance Fee Demand');
   return t.replaceAllMapped(_wordRe, (m) => _schoolWords[m.group(0)!] ?? m.group(0)!);
 }

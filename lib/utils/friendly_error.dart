@@ -22,18 +22,18 @@ String friendlyError(Object e) {
 
   // Supabase PostgREST
   if (lower.contains('pgrst106') || lower.contains('invalid schema')) {
-    return 'This institution\'s data isn\'t exposed yet. Ask the super admin to finish schema setup.';
+    return 'This institution\'s data is not set up yet. Ask the super admin to complete the setup.';
   }
   if (lower.contains('42501') ||
       lower.contains('row-level security') ||
       lower.contains('permission denied')) {
-    return 'You don\'t have permission to perform this action.';
+    return 'You do not have permission to do this. Ask your administrator for access.';
   }
   if (lower.contains('duplicate key') || lower.contains('23505')) {
     return 'That record already exists. Refresh and try again.';
   }
   if (lower.contains('foreign key') || lower.contains('23503')) {
-    return 'This record is linked to other data and cannot be changed right now.';
+    return 'This record is linked to other records, so it cannot be changed or deleted. Remove or update the linked records first.';
   }
   // A CHECK constraint refused the row (23514). In practice that means schema
   // drift: the app can now produce a value the database has not been told to
@@ -51,11 +51,11 @@ String friendlyError(Object e) {
     // Raised by process_grouped_payment's balance guard
     final match = RegExp(r"Demand \d+ is already paid").firstMatch(s);
     if (match != null) {
-      return 'One of the selected fees has already been collected by another user. Please refresh.';
+      return 'One of the selected fees has already been collected by another user. Refresh to see the latest balance.';
     }
   }
   if (lower.contains('no schema found')) {
-    return 'Institution schema is missing. Contact the super admin.';
+    return 'This institution\'s data for the selected academic year could not be found. Contact the super admin.';
   }
 
   // A deliberate RAISE EXCEPTION from one of our own functions (code P0001).
@@ -81,7 +81,7 @@ String friendlyError(Object e) {
 
   // Storage / file issues
   if (lower.contains('bucket not found')) {
-    return 'Storage bucket is missing on the server. Contact the super admin.';
+    return 'Storage bucket for files is not set up on the server. Contact the super admin.';
   }
   if (lower.contains('payload too large') || lower.contains('413')) {
     return 'File is too large to upload. Please use a smaller file.';

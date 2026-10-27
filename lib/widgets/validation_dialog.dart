@@ -88,7 +88,7 @@ Future<bool> showValidationDialog(
             SizedBox(width: 12.w),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Validation', style: AppUI.cardTitle),
+                Text('Validation Results', style: AppUI.cardTitle),
                 Text(subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -312,7 +312,7 @@ Widget _issueTable(List<RowIssue> issues, String rowLabel) {
         padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
         child: Row(children: [
           SizedBox(width: 60.w, child: Text(rowLabel.toUpperCase(), style: head())),
-          Expanded(flex: 2, child: Text(schoolTerm('REG NO'), style: head())),
+          Expanded(flex: 2, child: Text(schoolTerm('REGISTER NO.'), style: head())),
           Expanded(flex: 3, child: Text('NAME', style: head())),
           Expanded(flex: 7, child: Text('PROBLEM', style: head())),
         ]),

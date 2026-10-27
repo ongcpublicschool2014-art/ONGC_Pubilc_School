@@ -176,7 +176,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() => _activateError =
-          'Invalid file — expected the activation file sent by the office');
+          'This is not an activation file. Choose the file the office sent you.');
     }
   }
 
@@ -197,7 +197,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
     } else {
       setState(() {
         _activating = false;
-        _activateError = result.error ?? 'Activation failed';
+        _activateError = result.error ?? 'Activation failed. Check the code and try again.';
       });
     }
   }
@@ -250,8 +250,8 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
         setState(() {
           _requesting = false;
           _requestError = data is Map
-              ? (data['error']?.toString() ?? 'Server error (${resp.status})')
-              : 'Server error (${resp.status})';
+              ? (data['error']?.toString() ?? 'The server could not process the request (error ${resp.status}). Try again in a moment.')
+              : 'The server could not process the request (error ${resp.status}). Try again in a moment.';
         });
         return;
       }
@@ -331,7 +331,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                     ),
                     SizedBox(height: 12.h),
                     Text(
-                      'Activate this PC',
+                      'Activate This PC',
                       textAlign: TextAlign.center,
                       style: AppUI.cardTitle,
                     ),
@@ -546,7 +546,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
           controller: _usernameController,
           onChanged: (_) => setState(() {}),
           style: _valueStyle(_usernameController.text.trim().isNotEmpty),
-          decoration: _inputDecoration('Your login username / email', 'user',
+          decoration: _inputDecoration('Enter your username or email', 'user',
               filled: _usernameController.text.trim().isNotEmpty),
         ),
       ],
@@ -555,7 +555,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
     final mobileField = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _fieldLabel('Mobile *'),
+        _fieldLabel('Mobile Number *'),
         TextField(
           controller: _mobileController,
           keyboardType: TextInputType.phone,
@@ -652,6 +652,8 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
               ),
             ),
           ),
+          SizedBox(height: 10.h),
+          Center(child: AppUI.requiredNote()),
         ],
       ),
     );

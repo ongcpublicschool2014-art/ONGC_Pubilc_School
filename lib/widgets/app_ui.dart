@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
+import '../utils/app_text.dart';
 import '../utils/app_theme.dart';
 import 'app_icon.dart';
 
@@ -346,7 +347,12 @@ class AppFormFooter extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
         decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.divider))),
         child: Row(children: [
-          if (note != null) Expanded(child: Text(note!, style: AppUI.muted, maxLines: 2, overflow: TextOverflow.ellipsis)) else const Spacer(),
+          if (note == AppText.requiredNote)
+            Expanded(child: Align(alignment: Alignment.centerLeft, child: AppUI.requiredNote()))
+          else if (note != null)
+            Expanded(child: Text(note!, style: AppUI.muted, maxLines: 2, overflow: TextOverflow.ellipsis))
+          else
+            const Spacer(),
           if (onCancel != null) ...[SizedBox(width: 12.w), OutlinedButton(onPressed: onCancel, child: Text(cancelLabel))],
           for (final a in actions) ...[SizedBox(width: 10.w), a],
         ]),

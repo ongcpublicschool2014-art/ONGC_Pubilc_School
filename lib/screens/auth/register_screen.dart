@@ -10,6 +10,7 @@ import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/app_text.dart';
 class RegisterScreen extends StatefulWidget {
   final VoidCallback? onRegistered;
   final Map<String, dynamic>? editInstitution; // when set, the wizard edits this institution
@@ -244,7 +245,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isCreating = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e'), backgroundColor: AppColors.error));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not update the institution. ${friendlyError(e)}'), backgroundColor: AppColors.error));
       }
     }
   }
@@ -379,7 +380,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (insName.isEmpty || email.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('Enter Institution Name and Email first, then request a code.'),
+          content: Text('Enter the institution name and email first, then request a code.'),
           backgroundColor: AppColors.warning,
         ),
       );
@@ -438,7 +439,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       setState(() {
         _validatingCode = false;
         _codeValidated = ok;
-        _codeValidationMsg = (result['message'] as String?) ?? (ok ? 'Activation code verified' : 'Invalid activation code');
+        _codeValidationMsg = (result['message'] as String?) ?? (ok ? 'Activation code verified' : 'This activation code is not valid. Check it and try again.');
         _validatedCodeSnapshot = ok ? code : '';
       });
     } catch (e) {
@@ -523,7 +524,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (regResult == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Registration failed'), backgroundColor: AppColors.error),
+            const SnackBar(content: Text('Could not register the institution. Try again.'), backgroundColor: AppColors.error),
           );
           setState(() => _isCreating = false);
         }
@@ -563,8 +564,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Institution created, but student photo bucket setup failed: $e\n'
-                  'Run: SELECT public.ensure_student_photo_bucket(\'${regResult['inscode']}\') in Supabase SQL Editor.',
+                  'Institution created, but student photo storage could not be set up. Ask support to finish the storage setup.',
                 ),
                 backgroundColor: AppColors.warning,
                 duration: const Duration(seconds: 10),
@@ -607,7 +607,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (mounted) {
         setState(() => _isCreating = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Institution created successfully!'), backgroundColor: AppColors.success),
+          const SnackBar(content: Text('Institution created'), backgroundColor: AppColors.success),
         );
         _resetForm();
         widget.onRegistered?.call();
@@ -645,7 +645,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   String _formatDate(DateTime date) {
-    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+    return formatDmy(date);
   }
 
   @override
@@ -982,9 +982,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   InkWell(
                     onTap: _pickInstitutionStartDate,
                     child: InputDecorator(
-                      decoration: _inputDec('Select date', filled: _institutionStartDate != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
+                      decoration: _inputDec('Select institution start date', filled: _institutionStartDate != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
                       child: Text(
-                        _institutionStartDate != null ? _formatDate(_institutionStartDate!) : 'Select date',
+                        _institutionStartDate != null ? _formatDate(_institutionStartDate!) : 'Select institution start date',
                         style: _pickerText(_institutionStartDate != null),
                       ),
                     ),
@@ -1038,7 +1038,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       elevation: 6,
-                      decoration: _inputDec('Select', filled: true),
+                      decoration: _inputDec('Select yes or no', filled: true),
                       icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
                       style: _fieldStyle(),
                       items: [DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))), DropdownMenuItem(value: 'No', child: Text('No', style: AppUI.fieldText(context)))],
@@ -1091,7 +1091,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       final s = v?.trim() ?? '';
                       if (s.isEmpty) return 'Activation code is required';
                       if (_codeValidated != true || s != _validatedCodeSnapshot) {
-                        return 'Verify the activation code before proceeding';
+                        return 'Validate the activation code before continuing';
                       }
                       return null;
                     },
@@ -1342,7 +1342,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       onChanged: (_) => setState(() {}),
                       validator: _editMode
                           ? null
-                          : (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                          : (v) => v == null || v.trim().isEmpty ? 'Enter the year label' : null,
                     ),
                   ]),
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1442,7 +1442,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         items: _designationOptions.map((d) => DropdownMenuItem(value: d, child: Text(d, style: AppUI.fieldText(context)))).toList(),
                         selectedItemBuilder: (context) => _designationOptions.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d, style: AppUI.fieldText(context)))).toList(),
                         onChanged: (v) => setState(() => _adminDesignation = v ?? 'Principal'),
-                        validator: (v) => v == null || v.isEmpty ? 'Required' : null,
+                        validator: (v) => v == null || v.isEmpty ? 'Select a designation' : null,
                       ),
                     ),
                   ]),
@@ -1562,6 +1562,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                   ),
                 ),
+                SizedBox(height: 10.h),
+                Center(child: AppUI.requiredNote()),
               ],
             ),
           ),
@@ -1609,14 +1611,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // ── Validators (mapped to public.institution column types) ───
   String? _vRequiredMax(String? v, int max, String label) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length > max) return '$label must be less than $max characters';
+    if (s.isEmpty) return '$label is required';
+    if (s.length > max) return '$label can be at most $max characters';
     return null;
   }
   String? _vOptionalMax(String? v, int max, String label) {
     final s = v?.trim() ?? '';
     if (s.isEmpty) return null;
-    if (s.length > max) return '$label must be less than $max characters';
+    if (s.length > max) return '$label can be at most $max characters';
     return null;
   }
   String? _vEmail(String? v) {
@@ -1627,14 +1629,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
   String? _vMobile10(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length != 10) return 'Mobile must be 10 digits';
+    if (s.isEmpty) return 'Enter a mobile number';
+    if (s.length != 10) return 'Enter a 10-digit mobile number';
     return null;
   }
   String? _vPincode(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length != 6) return 'Pin code must be 6 digits';
+    if (s.isEmpty) return 'Enter a PIN code';
+    if (s.length != 6) return 'Enter a 6-digit PIN code';
     return null;
   }
   String? _vPassword(String? v) {

@@ -285,7 +285,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         style: _fieldStyle(_emailController.text.trim().isNotEmpty),
         onChanged: (_) => setState(() {}),
         decoration: _dec(
-          'you@school.edu',
+          'name@example.com',
           filled: _emailController.text.trim().isNotEmpty,
           prefixIcon: const AppIcon.linear('sms', size: 20, color: AppColors.textLight),
         ),
@@ -315,7 +315,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         style: _fieldStyle(_otpController.text.trim().isNotEmpty),
         onChanged: (_) => setState(() {}),
         decoration: _dec(
-          '6-digit OTP',
+          'Enter the 6-digit OTP',
           filled: _otpController.text.trim().isNotEmpty,
           counterText: '',
           prefixIcon: const AppIcon.linear('shield-tick', size: 20, color: AppColors.textLight),

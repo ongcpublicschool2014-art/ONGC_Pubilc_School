@@ -195,7 +195,7 @@ class _CollectionChartsState extends State<CollectionCharts> {
     return LayoutBuilder(builder: (context, c) {
       final trend = _chartCard(
         title: 'Collection Trend',
-        subtitle: 'last ${widget.days} days',
+        subtitle: 'Last ${widget.days} days',
         icon: 'chart-1',
         action: IconButton(
           onPressed: _load,
@@ -206,14 +206,14 @@ class _CollectionChartsState extends State<CollectionCharts> {
         child: _dailyChart(),
       );
       final month = _chartCard(
-        title: 'Monthwise Collection',
-        subtitle: 'last ${widget.months} months',
+        title: 'Monthly Collection',
+        subtitle: 'Last ${widget.months} months',
         icon: 'calendar-1',
         child: _monthlyChart(),
       );
       final methods = _chartCard(
-        title: 'Payment Methods',
-        subtitle: 'last ${widget.months} months',
+        title: 'Collection by Mode',
+        subtitle: 'Last ${widget.months} months',
         icon: 'wallet-money',
         child: _methodsChart(),
       );

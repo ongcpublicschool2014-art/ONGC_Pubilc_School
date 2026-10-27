@@ -674,7 +674,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-            Text('Sign in', style: AppUI.pageTitle),
+            Text('Sign In', style: AppUI.pageTitle),
             const SizedBox(height: 6),
             Text(
               'Welcome back. Choose your access type to continue.',
@@ -682,13 +682,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             ),
             const SizedBox(height: 24),
 
-            _fieldLabel('Login as'),
+            _fieldLabel('Sign In As'),
             const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
                   child: _buildPillTab(
-                    'Institute Login',
+                    'Institution',
                     !_isSuperAdmin,
                     () => _switchTab(false),
                     disabled: isMobile,
@@ -748,7 +748,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     )
                   : _buildFilledDropdown<int>(
                       value: _selectedInsId,
-                      hint: 'Select Institution',
+                      hint: 'Select institution',
                       icon: Icons.school_outlined,
                       items: _institutions
                           .map((ins) => DropdownMenuItem<int>(
@@ -785,7 +785,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       )
                     : _buildFilledDropdown<String>(
                         value: _selectedYear,
-                        hint: 'Academic Year',
+                        hint: 'Select academic year',
                         icon: Icons.calendar_today_outlined,
                         items: _availableYears.map((y) {
                           final label = y['yrlabel']?.toString() ?? '';
@@ -801,7 +801,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               ],
             ],
 
-            _fieldLabel(_isSuperAdmin ? 'Username' : 'Email'),
+            _fieldLabel(_isSuperAdmin ? 'Username' : 'Email Address'),
             const SizedBox(height: 6),
             _buildFilledField(
               controller: _emailController,
@@ -886,7 +886,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                               strokeWidth: 2.5,
                             ),
                           )
-                        : const Text('LOGIN'),
+                        : const Text('Sign In'),
                   ),
                 );
               },
@@ -909,7 +909,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           child: TextButton.icon(
             onPressed: _closeForgotPassword,
             icon: const Icon(Icons.chevron_left_rounded, size: 18, color: AppColors.primary),
-            label: const Text('Back to sign in'),
+            label: const Text('Back to Sign In'),
           ),
         ),
         const SizedBox(height: 8),
@@ -977,7 +977,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           const SizedBox(height: 6),
           _buildFilledField(
             controller: _otpController,
-            hint: '6-digit OTP',
+            hint: 'Enter the 6-digit OTP',
             icon: Icons.shield_outlined,
             keyboardType: TextInputType.number,
             textInputAction: TextInputAction.done,

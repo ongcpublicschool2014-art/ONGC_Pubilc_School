@@ -24,6 +24,7 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 class SuperAdminDashboard extends StatefulWidget {
   const SuperAdminDashboard({super.key});
 
@@ -248,7 +249,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final mm = t.minute.toString().padLeft(2, '0');
     final dd = t.day.toString().padLeft(2, '0');
     final mo = t.month.toString().padLeft(2, '0');
-    return '$dd/$mo ${h12.toString().padLeft(2, '0')}:$mm $ampm';
+    return '$dd-$mo ${h12.toString().padLeft(2, '0')}:$mm $ampm';
   }
 
   /// Full date + time for the header pill. Falls back to the current
@@ -260,7 +261,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final mm = d.minute.toString().padLeft(2, '0');
     final dd = d.day.toString().padLeft(2, '0');
     final mo = d.month.toString().padLeft(2, '0');
-    return '$dd/$mo/${d.year}  ${h12.toString().padLeft(2, '0')}:$mm $ampm';
+    return '$dd-$mo-${d.year}  ${h12.toString().padLeft(2, '0')}:$mm $ampm';
   }
 
   /// Resolve each institution's CURRENT-year schema (the year whose date range
@@ -664,7 +665,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Dashboard load failed. ${friendlyError(e)}',
+            content: Text('Could not load the dashboard. ${friendlyError(e)}',
                 style: const TextStyle(fontSize: 12)),
             backgroundColor: AppColors.error,
             duration: const Duration(seconds: 10),
@@ -1271,7 +1272,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 }
               },
               icon: const AppIcon('logout', size: 22, color: AppColors.textSecondary),
-              tooltip: 'Sign out',
+              tooltip: 'Sign Out',
             )
           else
           PopupMenuButton<String>(
@@ -1302,7 +1303,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   children: [
                     AppIcon('logout', size: 18),
                     SizedBox(width: 8.w),
-                    const Text('Sign out'),
+                    const Text('Sign Out'),
                   ],
                 ),
               ),
@@ -1541,7 +1542,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final topN = top.take(5).toList();
     Widget h(String t, {int flex = 2, TextAlign a = TextAlign.left}) => AppUI.th(t, flex: flex, align: a);
     return _scPanel(
-      icon: 'buildings-2', title: 'Institution Overview', subtitle: 'across every institution',
+      icon: 'buildings-2', title: 'Institution Overview', subtitle: 'Across every institution',
       trailing: TextButton(onPressed: _openAllInstitutions, child: const Text('View all')),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -1630,7 +1631,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   }
 
   Widget _scCollectionOverview() => _scPanel(
-        icon: 'chart-1', title: 'Collection Overview', subtitle: 'this year, reconciled',
+        icon: 'chart-1', title: 'Collection Overview', subtitle: 'This year, reconciled payments',
         child: Column(children: [_scDonutWithLegend(), SizedBox(height: 16.h), _scMonthlyBars()]),
       );
 
@@ -1639,7 +1640,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final online = _superByMethod['Online'] ?? 0;
     final onlinePct = total <= 0 ? 0 : (online / total * 100);
     return _scPanel(
-      icon: 'grid-1', title: 'Collection by Mode', subtitle: 'this year, reconciled',
+      icon: 'grid-1', title: 'Collection by Mode', subtitle: 'This year, reconciled payments',
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _scDonutWithLegend(),
         if (total > 0) ...[
@@ -1723,8 +1724,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   }
 
   Widget _scAllInstitutions(BuildContext context) => _scPanel(
-        icon: 'buildings-2', title: 'All Institutions', subtitle: 'detailed finance',
-        trailing: Text('${_institutionSummaries.length} institutes', style: AppUI.muted),
+        icon: 'buildings-2', title: 'All Institutions', subtitle: 'Detailed finance',
+        trailing: Text('${_institutionSummaries.length} institutions', style: AppUI.muted),
         child: ListView.separated(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -1850,13 +1851,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 _miniStatCard('tick-circle', 'Collection', _formatAmount(totalCollection), AppColors.success,
                     onTap: () => _showAggregateDrilldown(context, 'collection')),
                 const SizedBox(width: 12),
-                _miniStatCard('calendar', 'Today Collection', _formatAmount(totalTodayCollection), AppColors.success,
+                _miniStatCard('calendar', "Today's Collection", _formatAmount(totalTodayCollection), AppColors.success,
                     onTap: () => _showAggregateDrilldown(context, 'today_collection')),
                 const SizedBox(width: 12),
                 _miniStatCard('timer', 'Total Pending', _formatAmount(totalPending), AppColors.error,
                     onTap: () => _showAggregateDrilldown(context, 'pending')),
                 const SizedBox(width: 12),
-                _miniStatCard('buildings-2', 'Institutes', '$activeCount of ${_institutionSummaries.length}', AppColors.accent,
+                _miniStatCard('buildings-2', 'Institutions', '$activeCount of ${_institutionSummaries.length}', AppColors.accent,
                     onTap: () => _showAggregateDrilldown(context, 'active')),
               ],
             ),
@@ -2109,7 +2110,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             icon: 'calendar',
             color: AppColors.today,
             value: _formatAmount(s.todayCollected),
-            label: 'Today Collection',
+            label: "Today's Collection",
             onTap: () => _showCourseWiseTodayCollection(context, s),
           ),
           cell(
@@ -2149,8 +2150,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         // Non-interactive KPI cards (no drill-down), with real subtitles.
         SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _formatAmount(totalDemand), 'Total Demand', subtitle: 'For the trust')),
         SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _formatAmount(totalCollection), 'Total Collection', subtitle: '${collectedPct.toStringAsFixed(1)}% collected', subtitleColor: AppColors.success)),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('receipt-2', AppColors.accent, _formatAmount(totalMisc), 'Misc Collection', subtitle: 'Miscellaneous fees')),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), "Today's Collection", subtitle: "Today's reconciled")),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('receipt-2', AppColors.accent, _formatAmount(totalMisc), 'Miscellaneous Collection', subtitle: 'Miscellaneous fees')),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), "Today's Collection", subtitle: 'Reconciled today')),
         SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _formatAmount(totalPending), 'Total Pending', subtitle: '${pendingPct.toStringAsFixed(1)}% pending', subtitleColor: AppColors.error)),
         SizedBox(width: cardWidth, child: _buildSummaryCard('buildings-2', AppColors.primary, '$activeCount of ${_institutionSummaries.length}', 'Institutions', subtitle: 'Active Institutions')),
         SizedBox(width: cardWidth, child: _buildSummaryCard('people', AppColors.today, '$totalStudents', 'Total Students', subtitle: 'Across institutions')),
@@ -2261,10 +2262,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 icon: 'receipt-2', onTap: () => _showRegArrDialog(context, s.insId, 'demand', 'Total Fees Due', AppColors.demand, 'receipt-2', s.totalDemand));
             final collected = _buildFinanceTile('Total Collected', s.totalCollected, AppColors.success,
                 icon: 'tick-circle', onTap: () => _showRegArrDialog(context, s.insId, 'paid', 'Total Collected', AppColors.success, 'money-recive', s.totalCollected));
-            final misc = _buildFinanceTile('Misc Collection', s.totalMisc, AppColors.accent, icon: 'receipt-2');
+            final misc = _buildFinanceTile('Miscellaneous Collection', s.totalMisc, AppColors.accent, icon: 'receipt-2');
             final fine = _buildFinanceTile('Fine Collected', s.totalFine, AppColors.error, icon: 'receipt-edit');
             final concession = _buildFinanceTile('Concession', s.totalConcession, AppColors.info, icon: 'discount-shape');
-            final today = _buildFinanceTile('Today Collection', s.todayCollected + s.todayMisc, AppColors.today,
+            final today = _buildFinanceTile("Today's Collection", s.todayCollected + s.todayMisc, AppColors.today,
                 icon: 'calendar', onTap: () => _showTodayBreakdown(context, s));
             final pendingApproval = _buildFinanceTile('Pending Approval', s.pendingApproval, AppColors.warning,
                 icon: 'money-remove', onTap: () => _showPendingApprovalDialog(context, s));
@@ -2528,7 +2529,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 AppUI.iconTile('calendar', color: AppColors.today),
                 SizedBox(width: 12.w),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                  Text('Today Collection', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cardTitle),
+                  Text("Today's Collection", maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cardTitle),
                   Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
                 ])),
                 IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close, size: 18), color: AppColors.textSecondary),
@@ -2536,7 +2537,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
               SizedBox(height: 12.h),
               line('tick-circle', 'Fee Collection', fee, AppColors.success),
               Divider(height: 1, color: AppColors.divider),
-              line('receipt-2', 'Misc Collection', misc, AppColors.accent),
+              line('receipt-2', 'Miscellaneous Collection', misc, AppColors.accent),
               SizedBox(height: 12.h),
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
@@ -2582,7 +2583,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                   head,
                   SizedBox(height: 4.h),
-                  Text('${list.length} payment${list.length == 1 ? '' : 's'} • ${_formatAmount(total)} awaiting reconcile', style: AppUI.muted),
+                  Text('${list.length} payment${list.length == 1 ? '' : 's'} • ${_formatAmount(total)} awaiting reconciliation', style: AppUI.muted),
                   SizedBox(height: 14.h),
                   if (list.isEmpty)
                     SizedBox(height: 160.h, child: AppUI.empty(icon: 'tick-circle', title: 'Nothing pending', why: 'Every payment for this institution has been reconciled.'))
@@ -2660,7 +2661,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           Row(
             children: [
               Text(
-                'All Colleges Fee Overview',
+                'All Institutions Fee Overview',
                 style: AppUI.cardTitle,
               ),
               const Spacer(),
@@ -2692,7 +2693,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 headingRowColor: WidgetStateProperty.all(
                     AppColors.tableHeadBg),
                 columns: const [
-                  DataColumn(label: Text('COLLEGE')),
+                  DataColumn(label: Text('INSTITUTION')),
                   DataColumn(label: Text('CODE')),
                   DataColumn(label: Text('FEE COLLECTION'), numeric: true),
                   DataColumn(label: Text('PENDING FEES'), numeric: true),
@@ -2732,7 +2733,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Recent Transactions Across Colleges',
+            'Recent Transactions Across Institutions',
             style: AppUI.cardTitle,
           ),
           SizedBox(height: 16.h),
@@ -2747,7 +2748,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             AppUI.empty(
               icon: 'receipt-2',
               title: 'No transactions found.',
-              why: 'No payment has been recorded across the colleges yet.',
+              why: 'No payment has been recorded across the institutions yet.',
             )
           else
             Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2760,10 +2761,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 headingRowColor: WidgetStateProperty.all(
                     AppColors.tableHeadBg),
                 columns: const [
-                  DataColumn(label: Text('COLLEGE')),
-                  DataColumn(label: Text('RECEIPT NO')),
+                  DataColumn(label: Text('INSTITUTION')),
+                  DataColumn(label: Text('RECEIPT NO.')),
                   DataColumn(label: Text('AMOUNT'), numeric: true),
-                  DataColumn(label: Text('METHOD')),
+                  DataColumn(label: Text('MODE')),
                   DataColumn(label: Text('REFERENCE')),
                   DataColumn(label: Text('DATE')),
                   DataColumn(label: Text('STATUS')),
@@ -2812,9 +2813,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     return formatIndianNumber(value);
   }
 
-  String _formatDate(DateTime date) {
-    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
-  }
+  String _formatDate(DateTime date) => formatDmy(date);
 
   Future<void> _loadManageList() async {
     if (_manageLoading) return;
@@ -2855,7 +2854,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       });
     } catch (e) {
       if (idx >= 0 && mounted) setState(() => _manageList[idx]['activestatus'] = prev);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Status update failed: $e'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not update the status. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -2864,8 +2863,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     if (s.length < 10) return s;
     try {
       final d = DateTime.parse(s.substring(0, 10));
-      const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${d.day} ${m[d.month - 1]} ${d.year}';
+      return formatDmy(d);
     } catch (_) {
       return s;
     }
@@ -2905,7 +2903,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                       icon: 'buildings-2',
                       title: 'No institutions found',
                       why: all.isEmpty
-                          ? 'No institution has been registered yet. Use Register New to add one.'
+                          ? 'No institution has been registered yet. Use Register Institution to add one.'
                           : 'No institution matches this filter or search. Clear the search or pick All.')
                   : _manageTable(filtered)),
         ]),
@@ -2933,7 +2931,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             ElevatedButton.icon(
               onPressed: () => setState(() { _editInstitution = null; _selectedNavIndex = 1; }),
               icon: const AppIcon('add', size: 16, color: Colors.white),
-              label: const Text('Register New'),
+              label: const Text('Register Institution'),
             ),
           ]),
         ]),
@@ -2964,7 +2962,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       SizedBox(width: 320, child: TextField(
         onChanged: (v) => setState(() { _manageSearch = v; _managePage = 0; }),
         style: AppUI.fieldText(context),
-        decoration: AppUI.field(context, 'Search by institution name or code...').copyWith(
+        decoration: AppUI.field(context, 'Search by institution name or code').copyWith(
           prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
         ),
       )),
@@ -3122,7 +3120,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       ],
       navBtn(Icons.chevron_right, _managePage < pageCount - 1 ? () => setState(() => _managePage++) : null),
       const SizedBox(width: 14),
-      Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9), border: Border.all(color: AppColors.border)), child: Text('$_managePerPage / page', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
+      Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9), border: Border.all(color: AppColors.border)), child: Text('$_managePerPage per page', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
     ]));
   }
 }
@@ -3769,14 +3767,14 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                         to = DateTime(now.year, now.month, now.day);
                       });
                     }),
-                    presetChip('7 Days', () {
+                    presetChip('Last 7 Days', () {
                       final now = DateTime.now();
                       setStateDialog(() {
                         from = now.subtract(const Duration(days: 7));
                         to = DateTime(now.year, now.month, now.day);
                       });
                     }),
-                    presetChip('30 Days', () {
+                    presetChip('Last 30 Days', () {
                       final now = DateTime.now();
                       setStateDialog(() {
                         from = now.subtract(const Duration(days: 30));
@@ -3896,7 +3894,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
         padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 7),
         child: Row(
           children: [
-            cell('S.Total', 3,
+            cell('Subtotal', 3,
                 weight: FontWeight.w700, color: AppColors.textPrimary),
             cell('', 2),
             cell('$secStudents', 2,
@@ -3939,7 +3937,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
       default:
         valueLabel = 'Collection';
         totalLabel = (widget.todayOnly || _filterFrom != null || _filterTo != null)
-            ? (widget.todayOnly ? 'Today Collection' : 'Filtered Collection')
+            ? (widget.todayOnly ? "Today's Collection" : 'Filtered Collection')
             : 'Total Collection';
         titleIcon = 'tick-circle';
     }
@@ -3968,8 +3966,8 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
             : widget.mode == 'collection'
                 ? 'PAID'
                 : widget.mode == 'approval'
-                    ? 'PEND.'
-                    : 'STU')
+                    ? 'PENDING'
+                    : 'STUDENTS')
         : (widget.mode == 'pending'
             ? 'UNPAID STUDENTS'
             : widget.mode == 'collection'
@@ -4346,7 +4344,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not save the trust settings. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -4523,7 +4521,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                 icon: _savingTrust
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : AppIcon('save-2', size: 18, color: Colors.white),
-                label: Text(_savingTrust ? 'Saving…' : 'Save Trust'),
+                label: Text(_savingTrust ? 'Saving…' : 'Save'),
               ),
             ),
           ],
@@ -4580,7 +4578,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings updated successfully'), backgroundColor: AppColors.success),
+          const SnackBar(content: Text('Account settings saved'), backgroundColor: AppColors.success),
         );
         _currentPwdCtrl.clear();
         _newPwdCtrl.clear();
@@ -4589,7 +4587,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Update failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not save your account settings. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -4597,13 +4595,13 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     }
   }
 
-  Widget _label(String text) => AppUI.fieldLabel(text);
+  Widget _label(String text, {bool required = false}) => AppUI.fieldLabel(text, required: required);
 
   TextStyle _fieldStyle() => AppUI.fieldText(context);
 
   String? _validateEmail(String? v) {
     final t = (v ?? '').trim();
-    if (t.isEmpty) return 'Email required';
+    if (t.isEmpty) return 'Enter an email address';
     if (!RegExp(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$').hasMatch(t)) {
       return 'Enter a valid email address';
     }
@@ -4644,17 +4642,17 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                     ),
               const SizedBox(height: 24),
               if (isMobile) ...[
-                _label('Username'),
+                _label('Username', required: true),
                 TextFormField(
                   controller: _usernameCtrl,
                   readOnly: true,
                   canRequestFocus: false,
                   decoration: _inputDec('Enter username', filled: _usernameCtrl.text.trim().isNotEmpty),
                   style: _fieldStyle().copyWith(color: _usernameCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Username required' : null,
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter a username' : null,
                 ),
                 const SizedBox(height: 14),
-                _label('Email'),
+                _label('Email', required: true),
                 TextFormField(
                   controller: _emailCtrl,
                   readOnly: true,
@@ -4668,19 +4666,19 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
               ] else
                 Row(children: [
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _label('Username'),
+                    _label('Username', required: true),
                     TextFormField(
                       controller: _usernameCtrl,
                       readOnly: true,
                       canRequestFocus: false,
                       decoration: _inputDec('Enter username', filled: _usernameCtrl.text.trim().isNotEmpty),
                       style: _fieldStyle().copyWith(color: _usernameCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
-                      validator: (v) => (v == null || v.trim().isEmpty) ? 'Username required' : null,
+                      validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter a username' : null,
                     ),
                   ])),
                   const SizedBox(width: 14),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _label('Email'),
+                    _label('Email', required: true),
                     TextFormField(
                       controller: _emailCtrl,
                       readOnly: true,
@@ -4694,7 +4692,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                   ])),
                 ]),
               const SizedBox(height: 14),
-              _label('Mobile No'),
+              _label('Mobile Number'),
               TextFormField(
                 controller: _phoneCtrl,
                 readOnly: true,
@@ -4725,7 +4723,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
               const SizedBox(height: 16),
               Align(
                 alignment: Alignment.centerLeft,
-                child: _label('Current Password *'),
+                child: _label('Current Password', required: true),
               ),
               TextFormField(
                 controller: _currentPwdCtrl,
@@ -4740,7 +4738,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                   ),
                 ),
                 style: _fieldStyle().copyWith(color: _currentPwdCtrl.text.isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
-                validator: (v) => (v == null || v.isEmpty) ? 'Required to confirm changes' : null,
+                validator: (v) => (v == null || v.isEmpty) ? 'Enter your current password to save changes' : null,
               ),
               const SizedBox(height: 14),
               if (isMobile) ...[
@@ -4759,7 +4757,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                   ),
                   style: _fieldStyle().copyWith(color: _newPwdCtrl.text.isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
                   validator: (v) {
-                    if (v != null && v.isNotEmpty && v.length < 6) return 'Min 6 characters';
+                    if (v != null && v.isNotEmpty && v.length < 6) return 'Use at least 6 characters';
                     return null;
                   },
                 ),
@@ -4802,7 +4800,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                       ),
                       style: _fieldStyle().copyWith(color: _newPwdCtrl.text.isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
                       validator: (v) {
-                        if (v != null && v.isNotEmpty && v.length < 6) return 'Min 6 characters';
+                        if (v != null && v.isNotEmpty && v.length < 6) return 'Use at least 6 characters';
                         return null;
                       },
                     ),
@@ -4838,9 +4836,11 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                   icon: _saving
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : AppIcon('save-2', size: 18, color: Colors.white),
-                  label: Text(_saving ? 'Saving...' : 'Save Changes'),
+                  label: Text(_saving ? 'Saving…' : 'Save'),
                 ),
               ),
+              const SizedBox(height: 10),
+              Center(child: AppUI.requiredNote()),
             ],
                   ),
                 ),
@@ -4868,13 +4868,13 @@ class _AggregateDrilldownPage extends StatelessWidget {
       case 'collection':
         return 'Total Collection';
       case 'today_collection':
-        return 'Today Collection';
+        return "Today's Collection";
       case 'approval':
         return 'Pending Approval';
       case 'pending':
         return 'Total Pending';
       default:
-        return 'Drilldown';
+        return 'Details';
     }
   }
 
@@ -4887,7 +4887,7 @@ class _AggregateDrilldownPage extends StatelessWidget {
       case 'collection':
         return 'COLLECTION';
       case 'today_collection':
-        return 'TODAY COLLECTION';
+        return "TODAY'S COLLECTION";
       case 'approval':
         return 'PENDING APPROVAL';
       case 'pending':
@@ -5020,7 +5020,7 @@ class _AggregateDrilldownPage extends StatelessWidget {
                         children: [
                           const CardTitleBlock(icon: 'buildings-2', title: 'Institution Breakdown', subtitle: 'fee performance per institution'),
                           const Spacer(),
-                          Text('${filtered.length} institutes', style: AppUI.muted),
+                          Text('${filtered.length} institutions', style: AppUI.muted),
                         ],
                       ),
                     ),

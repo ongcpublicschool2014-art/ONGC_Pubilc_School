@@ -57,11 +57,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       await Process.start(path, [], mode: ProcessStartMode.detached, runInShell: true);
       await Future.delayed(const Duration(milliseconds: 400));
       exit(0);
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _downloading = false;
-          _error = 'Download failed. Please try again or contact support. ($e)';
+          _error = 'Could not download the update. Check your internet connection and try again.';
         });
       }
     }
@@ -88,7 +88,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       title: Row(children: [
         const Icon(Icons.system_update_rounded, color: AppColors.primary),
         const SizedBox(width: 10),
-        Expanded(child: Text('Update available', style: AppUI.cardTitle)),
+        Expanded(child: Text('Update Available', style: AppUI.cardTitle)),
       ]),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
@@ -138,7 +138,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               if (!i.mandatory || _error != null)
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: Text(i.mandatory ? 'Continue for now' : 'Later'),
+                  child: Text(i.mandatory ? 'Continue Without Updating' : 'Later'),
                 ),
               ElevatedButton.icon(
                 onPressed: _downloadAndInstall,

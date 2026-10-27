@@ -1109,7 +1109,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     color: on ? AppColors.primary : AppColors.textSecondary),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(schoolTerm(sub.label),
+                  child: Text(sub.navTitle,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                           fontSize: 14,
@@ -1175,7 +1175,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         SizedBox(width: 10.w),
                         Expanded(
                           child: Text(
-                            schoolTerm(sub.label),
+                            sub.navTitle,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
                             style: TextStyle(
@@ -1369,7 +1369,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     AppIcon('logout', size: 18),
                     SizedBox(width: 8.w),
-                    const Text('Sign out'),
+                    const Text('Sign Out'),
                   ],
                 ),
               ),

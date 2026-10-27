@@ -87,7 +87,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Students',
           icon: 'profile-2user',
           tint: Color(0xFF6FB3FF),
-          previewLabels: ['Roll', 'Class', 'Year'],
+          previewLabels: ['Roll No.', 'Class', 'Year'],
         ),
         _ModuleCard(
           label: 'Fee Collection',
@@ -134,7 +134,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           previewLabels: ['Cash', 'UPI', 'Receipt'],
         ),
         _ModuleCard(
-          label: 'Bank Recon',
+          label: 'Bank Reconciliation',
           icon: 'bank',
           tint: Color(0xFF6FB3FF),
           previewLabels: ['Match', 'Auto', 'Diff'],
@@ -169,7 +169,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           label: 'Ledger',
           icon: 'book-1',
           tint: Color(0xFF6FB3FF),
-          previewLabels: ['Roll', 'Term', 'Bal'],
+          previewLabels: ['Roll No.', 'Term', 'Balance'],
         ),
         _ModuleCard(
           label: 'Pending',
