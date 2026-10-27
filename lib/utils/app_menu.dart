@@ -95,8 +95,8 @@ const List<AppNavItem> kAppNavItems = [
   // TC -- its own module, as the old product (PsTc.dll): issue the TC,
   // fill the certificate, approve it, print it on the school's own Word
   // format. 'Transfer Certificate' keeps its label (role grants are by label).
-  AppNavItem('document-text', 'Transfer Certificate', title: 'TC Entry', section: 'TC', adminOnly: true),
-  AppNavItem('edit-2', 'TC Certificate', section: 'TC', adminOnly: true),
+  AppNavItem('document-text', 'Transfer Certificate', title: 'Transfer Certificate Entry', section: 'TC', adminOnly: true),
+  AppNavItem('edit-2', 'TC Certificate', title: 'TC Details', section: 'TC', adminOnly: true),
   AppNavItem('tick-square', 'TC Approval', section: 'TC', adminOnly: true),
   AppNavItem('printer', 'TC Print', section: 'TC', adminOnly: true),
   AppNavItem('document-upload', 'TC Format', section: 'TC', adminOnly: true),
@@ -110,7 +110,7 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('tick-square', 'Fee Demand Approval', section: 'FEES', adminOnly: true),
   AppNavItem('discount-shape', 'Fee Concession', section: 'FEES', accountantOnly: true),
   AppNavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
-  AppNavItem('receipt-2', 'Misc Collection', section: 'FEES', accountantOnly: true),
+  AppNavItem('receipt-2', 'Misc Collection', title: 'Miscellaneous Collection', section: 'FEES', accountantOnly: true),
   // Money taken before any fee is due. Spent on Fee Collection, which
   // highlights a student who still has an unused advance.
   AppNavItem('empty-wallet-add', 'Advance Collection', section: 'FEES', accountantOnly: true),
@@ -122,7 +122,7 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('empty-wallet-change', 'Advance Adjustment', section: 'FEES', accountantOnly: true),
   AppNavItem('document-upload', 'Fee Collection Import', section: 'FEES', accountantOnly: true),
   AppNavItem('money-recive', 'Fee Refund', section: 'FEES', accountantOnly: true),
-  AppNavItem('receipt-discount', 'Fee Cancel Receipt', section: 'FEES', accountantOnly: true),
+  AppNavItem('receipt-discount', 'Fee Cancel Receipt', title: 'Cancel Fee Receipt', section: 'FEES', accountantOnly: true),
 
   // REPORTS — each report is its own submenu (opens the Reports screen at that
   // tab with the in-screen tab bar hidden). NOTE: no 'Collection Summary' entry

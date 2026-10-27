@@ -47,12 +47,11 @@ String schoolTerm(String text) {
   t = t.replaceAllMapped(_numberRe, (m) {
     final s = m.group(0)!;
     final low = s.toLowerCase();
-    // "... Numbers" -> plural; "... Number" (or Register/Registration ... No)
-    // reads in full; the short "Reg No" / "Roll No" forms stay short.
-    final out = low.endsWith('numbers')
-        ? 'Admission Numbers'
-        : RegExp(r'number|register|registration').hasMatch(low) ? 'Admission No' : 'Adm No';
-    return keepCase(s, out);
+    // Always the full "Admission No." ("... Numbers" -> plural). The dot is
+    // left off when the text already follows with ':' or '.'.
+    if (low.endsWith('numbers')) return keepCase(s, 'Admission Numbers');
+    final next = m.end < m.input.length ? m.input[m.end] : '';
+    return keepCase(s, next == ':' || next == '.' ? 'Admission No' : 'Admission No.');
   });
   // the long menu / tab name does not fit the sidebar or a card header
   t = t.replaceAll('Advance Fee Receipt No', 'Advance Receipt No');
@@ -61,9 +60,9 @@ String schoolTerm(String text) {
 }
 
 /// The college's register / roll number is a school's ADMISSION number:
-/// Reg No, Reg. No, RegNo, Roll No, RollNo -> Adm No; Register No/Number,
-/// Registration No/Number, Roll Number, Reg Number -> Admission No;
-/// Roll/Register Numbers -> Admission Numbers.
+/// Reg No, Reg. No, RegNo, Roll No, Register No/Number, Registration No,
+/// Roll Number ... -> Admission No.; Roll/Register Numbers -> Admission
+/// Numbers.
 final RegExp _numberRe = RegExp(
     r'\b(?:Registration|Register|Reg\.?|Roll)\s?(?:No\.?|Numbers?)(?![A-Za-z])',
     caseSensitive: false);

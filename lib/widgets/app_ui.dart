@@ -117,6 +117,13 @@ class AppUI {
         minimumSize: Size(0, controlHeight(context)),
       );
 
+  /// "* Required fields" -- shown near the submit button of every data-entry
+  /// form that has required (*) fields.
+  static Widget requiredNote() => Text.rich(TextSpan(children: [
+        const TextSpan(text: '* ', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800)),
+        TextSpan(text: 'Required fields', style: muted),
+      ]));
+
   // ── page / card headers ────────────────────────────────────────────────
   /// Icon tile + title (17/800) + optional muted subtitle + trailing widgets.
   static Widget cardHeader({required String icon, required String title, String? subtitle, List<Widget> trailing = const []}) => Row(children: [

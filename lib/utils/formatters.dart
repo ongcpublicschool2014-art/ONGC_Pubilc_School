@@ -1,14 +1,14 @@
 // Pure formatting helpers shared across the app. Extracted so they can be
 // unit-tested without spinning up Flutter.
 
-/// Format a date string as `DD/MM/YYYY`. Accepts ISO `YYYY-MM-DD` or any
+/// Format a date string as `DD-MM-YYYY`. Accepts ISO `YYYY-MM-DD` or any
 /// `DateTime.parse`-compatible string. Returns `'-'` for null/empty and the
 /// raw input when parsing fails.
 String formatDate(String? dateStr) {
   if (dateStr == null || dateStr.isEmpty) return '-';
   try {
     final dt = DateTime.parse(dateStr);
-    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    return '${dt.day.toString().padLeft(2, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.year}';
   } catch (_) {
     return dateStr;
   }
