@@ -464,7 +464,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Adjust ${byAdv.length} advance${byAdv.length == 1 ? '' : 's'}?'),
+        title: Text('Adjust ${byAdv.length} Advance${byAdv.length == 1 ? '' : 's'}?'),
         content: Text(
           '${todo.length} fee line${todo.length == 1 ? '' : 's'} · '
           '${formatIndianNumber(_total)} will come off the matching demands.\n\n'
@@ -477,7 +477,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
               onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Adjust'),
+            child: const Text('Apply Adjustment'),
           ),
         ],
       ),
@@ -530,7 +530,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('$done done, ${failures.length} could not be adjusted'),
+          title: Text('$done Adjusted, ${failures.length} Not Adjusted'),
           content: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: 320.h, maxWidth: 460.w),
             child: SingleChildScrollView(
@@ -557,7 +557,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_loadError != null) {
       return AppUI.empty(
-        title: 'Could not load.',
+        title: 'Could not load advance adjustments.',
         why: '$_loadError',
         icon: 'danger',
         action: OutlinedButton(onPressed: _loadMasters, child: const Text('Retry')),
@@ -672,7 +672,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
                   style: _txt,
                   decoration: AppUI.field(
                     context,
-                    schoolTerm('Type reg no / name / advance / fee type'),
+                    schoolTerm('Search by register no., name, advance no. or fee type'),
                     leadingIcon: 'search-normal',
                     filled: _search.text.isNotEmpty,
                     suffix: _search.text.isEmpty
@@ -698,7 +698,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: AppColors.primary)),
               SizedBox(width: 8.w),
-              Text('Finding…', style: AppUI.muted),
+              Text('Searching…', style: AppUI.muted),
             ]),
           ),
       ]);
@@ -738,10 +738,10 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
                       }),
             ),
           ),
-          SizedBox(width: 108.w, child: _th(schoolTerm('REG NO'))),
+          SizedBox(width: 108.w, child: _th(schoolTerm('REGISTER NO.'))),
           Expanded(flex: 3, child: _th('STUDENT')),
           SizedBox(width: 104.w, child: _th(schoolTerm('CLASS'))),
-          SizedBox(width: 98.w, child: _th('ADV NO')),
+          SizedBox(width: 98.w, child: _th('ADVANCE NO.')),
           Expanded(flex: 3, child: _th('FEE TYPE')),
           SizedBox(width: 96.w, child: _th('ADVANCE (₹)', right: true)),
           SizedBox(width: 96.w, child: _th('DEMAND (₹)', right: true)),
@@ -906,7 +906,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             const AppIcon('tag', size: 15, color: AppColors.demand),
             SizedBox(width: 8.w),
-            Text('ADJUSTING: ', style: AppUI.caps.copyWith(color: AppColors.textPrimary)),
+            Text('Adjusting: ', style: AppUI.caps.copyWith(color: AppColors.textPrimary)),
             Text('₹${_total.toStringAsFixed(0)}',
                 style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.demand)),
           ]),

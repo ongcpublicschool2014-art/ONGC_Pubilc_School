@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/app_text.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
@@ -219,8 +220,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     if (p['mc_id'] != null) return _miscReceiptFor(p);
     final payId = p['pay_id'] as int?;
     final date = DateTime.tryParse(p['paydate']?.toString() ?? '') ?? DateTime.now();
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
 
     final feeTypesOnReceipt = <String>{};
     List<ReceiptTermDetail> feeDetails = [];
@@ -311,9 +311,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   Future<ReceiptData> _advanceReceiptFor(Map<String, dynamic> p) async {
     final advId = p['adv_id'];
     final date = DateTime.tryParse(p['paydate']?.toString() ?? '') ?? DateTime.now();
-    const months = ['January','February','March','April','May','June','July',
-                    'August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
     final total = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
 
     final items = <ReceiptFeeItem>[];
@@ -391,9 +389,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   Future<ReceiptData> _miscReceiptFor(Map<String, dynamic> p) async {
     final mcId = p['mc_id'];
     final date = DateTime.tryParse(p['paydate']?.toString() ?? '') ?? DateTime.now();
-    const months = ['January','February','March','April','May','June','July',
-                    'August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
 
     final items = <ReceiptFeeItem>[];
     try {
@@ -413,7 +409,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
 
     final total = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
     if (items.isEmpty) {
-      items.add(ReceiptFeeItem(type: 'Misc Collection', amount: total));
+      items.add(ReceiptFeeItem(type: 'Miscellaneous Collection', amount: total));
     }
 
     // Contact details: the misc row carries its own address (it can be raised
@@ -451,7 +447,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       schoolLogoUrl: _insLogo,
       schoolMobile: _insMobile,
       schoolEmail: _insEmail,
-      feeDetails: [ReceiptTermDetail(term: 'Misc Collection', fees: items)],
+      feeDetails: [ReceiptTermDetail(term: 'Miscellaneous Collection', fees: items)],
       paymentMethod: p['paymethod']?.toString() ?? '-',
       paymentDate: dateStr,
       status: 'pending',
@@ -570,7 +566,10 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         title: Row(children: [
           AppUI.iconTile('clock', color: AppColors.warning, size: 18),
           SizedBox(width: 12.w),
-          Text('Pending Approval', style: AppUI.cardTitle),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('Pending Approval', style: AppUI.cardTitle),
+            Text('Payments awaiting reconciliation', style: AppUI.muted),
+          ]),
         ]),
         actions: [
           IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh, size: 20), tooltip: 'Refresh'),
@@ -655,11 +654,11 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 11.h),
       child: Row(children: [
         h('STUDENT', flex: 4),
-        h('RECEIPT', flex: 2),
+        h('RECEIPT NO.', flex: 3),
         h('MODE', flex: 2),
         h('DATE', flex: 2),
         h('AMOUNT', flex: 2, align: TextAlign.right),
-        h('RECEIPT', flex: 3, align: TextAlign.right),
+        h('ACTION', flex: 3, align: TextAlign.right),
       ]),
     );
   }
@@ -731,12 +730,12 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         // The Misc tag lives INSIDE the receipt column, not beside it. As a
         // sibling of the Expanded columns it consumed width on misc rows only,
         // so every column after it sat further right than on a fee row.
-        Expanded(flex: 2, child: Row(children: [
+        Expanded(flex: 3, child: Row(children: [
           // Misc and Advance DO earn a tag: unlike "pending", they are true of
           // some rows and not others, and they change which table the receipt
           // is built from.
           if (isMisc) ...[
-            AppUI.chip('Misc', AppStatus.info),
+            AppUI.chip('Miscellaneous', AppStatus.info),
             SizedBox(width: 6.w),
           ],
           // Not amber -- amber is the banner's, and a tag that borrows it

@@ -11,6 +11,7 @@ import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/app_text.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 
@@ -709,18 +710,18 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
 
       final rowStaged = <String, Map<String, dynamic>>{};
       if (reg.isEmpty) {
-        flag(regCol, schoolTerm('Reg No blank'), schoolTerm('Reg No is blank'));
+        flag(regCol, schoolTerm('Register No. blank'), schoolTerm("Register No. is blank. Enter the student's number"));
       } else {
         final stu = students[_regKey(reg)];
         if (stu == null) {
-          flag(regCol, schoolTerm('Reg No not found'), '${schoolTerm('Reg No')} $reg is not an active student');
+          flag(regCol, schoolTerm('Register No. not found'), '${schoolTerm('Register No.')} $reg is not an active student');
         } else {
           // The name must be this student's -- catches a Reg No typed on the
           // wrong row. Spacing, dots and case are ignored.
           final stuName = stu['stuname']?.toString().trim() ?? '';
           if (name.isNotEmpty && _alnum(name) != _alnum(stuName)) {
             flag(nameCol, 'Name mismatch',
-                'Name "$name" does not belong to ${schoolTerm('Reg No')} $reg (on record: ${stuName.isEmpty ? 'no name' : stuName})');
+                'Name "$name" does not belong to ${schoolTerm('Register No.')} $reg (on record: ${stuName.isEmpty ? 'no name' : stuName})');
             if (regCol >= 0) bad.add(regCol);
           }
           final stuClass = stu['stuclass']?.toString().trim() ?? '';
@@ -740,7 +741,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
           if (due == null) {
             dueRaw.isEmpty
                 ? flag(dueCol, 'Due date blank', 'Due date is blank')
-                : flag(dueCol, 'Invalid due date', 'Due date "$dueRaw" is not DD-MM-YYYY');
+                : flag(dueCol, 'Invalid due date', 'Due date "$dueRaw" is not a valid date. Use DD-MM-YYYY');
           }
 
           final stuId = (stu['stu_id'] as num).toInt();
@@ -914,7 +915,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
       _errors
         ..clear()
         ..addAll(c.issues.map((x) =>
-            'Row ${x.row}${x.regNo.isEmpty ? '' : ' · ${schoolTerm('Reg No')} ${x.regNo}'}: ${x.message}.'));
+            'Row ${x.row}${x.regNo.isEmpty ? '' : ' · ${schoolTerm('Register No.')} ${x.regNo}'}: ${x.message}.'));
     });
     try {
       // Approved staging rows (activestatus 9) still hold the demnos reused here.
@@ -970,7 +971,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
               _staged++;
             } catch (e) {
               _skipped++;
-              _errors.add('${schoolTerm('Reg No')} ${r['stuadmno']} · ${r['demfeetype']} (${r['demfeeterm']}): '
+              _errors.add('${schoolTerm('Register No.')} ${r['stuadmno']} · ${r['demfeetype']} (${r['demfeeterm']}): '
                   '${friendlyError(e)}');
             }
           }
@@ -978,7 +979,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
         if (mounted) setState(() {});
       }
     } catch (e) {
-      _errors.insert(0, 'Stopped: ${friendlyError(e)}');
+      _errors.insert(0, 'Import stopped: ${friendlyError(e)}');
     } finally {
       if (mounted) {
         setState(() {
@@ -1196,8 +1197,8 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                   onPressed: () => Navigator.pop(ctx, true),
                   icon: const Icon(Icons.send_rounded, size: 16),
                   label: Text(hasIssues
-                      ? 'Send $ready valid, skip ${c.errorRows} row${c.errorRows == 1 ? '' : 's'}'
-                      : 'Send $ready for approval'),
+                      ? 'Send $ready Valid, Skip ${c.errorRows} Row${c.errorRows == 1 ? '' : 's'}'
+                      : 'Send $ready for Approval'),
                 ),
               ],
             ]),
@@ -1240,7 +1241,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
           padding: EdgeInsets.symmetric(horizontal: 12.w),
           child: Row(children: [
             SizedBox(width: 60.w, child: _headText('Row')),
-            Expanded(flex: 2, child: _headText(schoolTerm('Reg No'))),
+            Expanded(flex: 2, child: _headText(schoolTerm('Register No.'))),
             Expanded(flex: 3, child: _headText('Name')),
             Expanded(flex: 7, child: _headText('Problem')),
           ]),
@@ -1313,7 +1314,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_loadError != null) {
       return AppUI.empty(
-        title: 'Could not load masters.',
+        title: 'Could not load master data. Check your connection and click Retry.',
         why: _loadError,
         action: OutlinedButton(onPressed: _loadMasters, child: const Text('Retry')),
       );
@@ -1351,7 +1352,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
               child: AppUI.cardHeader(
                 icon: 'document-upload',
                 title: 'Fee Demand Import',
-                subtitle: schoolTerm('export a class, fill in the fee amounts, import and validate for approval'),
+                subtitle: schoolTerm('Export a class, fill in the fee amounts, then import and validate for approval'),
               ),
             ),
             IconButton(
@@ -1403,12 +1404,12 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                 icon: _arrow(),
                 style: _fieldText(),
                 decoration: _dec(_pickedClasses.isEmpty
-                    ? schoolTerm('Choose class first')
+                    ? schoolTerm('Select class first')
                     : semOptions.isEmpty
                         ? (_pickedClasses.length > 1
                             ? schoolTerm('No shared semester')
                             : schoolTerm('No class fees'))
-                        : 'Choose'),
+                        : schoolTerm('Select semester')),
                 items: semOptions
                     .map((n) => DropdownMenuItem(
                         value: n, child: Text(n, overflow: TextOverflow.ellipsis)))
@@ -1421,11 +1422,11 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                         }),
               )),
               SizedBox(width: 10.w),
-              _field(schoolTerm('Reg No'), flex: 4, TextField(
+              _field('Search Student', flex: 4, TextField(
                 controller: _stuSearch,
                 enabled: _classStudents.isNotEmpty,
                 style: _fieldText(),
-                decoration: _dec(schoolTerm('Search reg no / name')).copyWith(
+                decoration: _dec(schoolTerm('Search by register no. or name')).copyWith(
                   prefixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary),
                   suffixIcon: _stuSearch.text.isEmpty
                       ? null
@@ -1499,7 +1500,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                             ? schoolTerm('Choose a semester to tick its class fees.')
                             : _pickedClasses.length > 1
                                 ? schoolTerm('These $_classLabel share no semester in Class Fee Demand, so they cannot go in one sheet. '
-                                    'A sheet carries ONE semester for every row -- untick until the classes agree.')
+                                    'A sheet carries one semester for every row. Untick classes until they share one.')
                                 : schoolTerm('Class Fee Demand defines no fees for this class.'),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -1542,7 +1543,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                 child: Text(schoolTerm(
                   'Only ticked students and fee types go into the sheet. Import checks the sheet first and saves '
                   'nothing until you choose to send: fix problems with Export with Errors, or send the valid rows. '
-                  'Reg No, Name, due date (DD-MM-YYYY) and every fee amount are required; enter 0 where there is no fee. '
+                  'Register No., Name, Due Date (DD-MM-YYYY) and every fee amount are required; enter 0 where there is no fee. '
                   'Demands are Regular and wait in Fee '
                   'Demand Approval; importing a corrected sheet again updates them instead of duplicating.'),
                   style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.35),
@@ -1573,7 +1574,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
       child: InputDecorator(
         decoration: _dec('').copyWith(enabled: !busy, suffixIcon: _arrow()),
         child: Text(
-          n == 0 ? schoolTerm('Choose class') : _classLabel,
+          n == 0 ? schoolTerm('Select class') : _classLabel,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: n == 0
@@ -1597,7 +1598,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
           suffixIcon: _arrow(),
         ),
         child: Text(
-          n == 0 ? 'Choose fee types' : '$n fee type${n == 1 ? '' : 's'} selected',
+          n == 0 ? 'Select fee types' : '$n fee type${n == 1 ? '' : 's'} selected',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: n == 0
@@ -1707,7 +1708,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
               ),
             ),
             SizedBox(width: 50.w, child: _headText('#')),
-            Expanded(flex: 3, child: _headText(schoolTerm('Reg No'))),
+            Expanded(flex: 3, child: _headText(schoolTerm('Register No.'))),
             Expanded(flex: 6, child: _headText('Student Name')),
             Expanded(flex: 3, child: _headText(schoolTerm('Class'))),
           ]),
@@ -1786,7 +1787,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                         ),
                         TextButton(
                             onPressed: () => update(() => _pickedClasses.addAll(shown)),
-                            child: const Text('Select all')),
+                            child: const Text('Select All')),
                         TextButton(
                             onPressed: () => update(() => _pickedClasses.removeAll(shown)),
                             child: const Text('Clear')),
@@ -1940,7 +1941,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                         ),
                         TextButton(
                             onPressed: () => update(() => _pickedFees.addAll(ids)),
-                            child: const Text('Select all')),
+                            child: const Text('Select All')),
                         TextButton(
                             onPressed: () => update(() => _pickedFees.removeAll(ids)),
                             child: const Text('Clear')),
@@ -2050,7 +2051,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                   SizedBox(width: 12.w),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Import result', style: AppUI.cardTitle),
+                      Text('Import Result', style: AppUI.cardTitle),
                       if (_fileName != null)
                         Text(_fileName!,
                             maxLines: 1,
@@ -2108,7 +2109,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                   alignment: Alignment.centerRight,
                   child: ElevatedButton(
                     onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Done'),
+                    child: const Text(AppText.close),
                   ),
                 ),
               ],

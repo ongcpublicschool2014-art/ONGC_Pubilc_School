@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/formatters.dart';
 import '../../utils/school_terms.dart';
@@ -320,7 +321,7 @@ class _AdvanceAdjustDialogState extends State<_AdvanceAdjustDialog> {
     final s = v?.toString() ?? '';
     final d = DateTime.tryParse(s);
     if (d == null) return s.length >= 10 ? _dmy(s.substring(0, 10)) : s;
-    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+    return formatDmy(d);
   }
 
   double _amt(String k) => double.tryParse(_ctrls[k]?.text.trim() ?? '') ?? 0;
@@ -536,9 +537,9 @@ class _AdvanceAdjustDialogState extends State<_AdvanceAdjustDialog> {
             }
           }
           setState(() => _error =
-              '"${d['demfeetype'] ?? ''}" owes ${formatIndianNumber(_due(d))} but the plan '
-              'gives it ${formatIndianNumber(perRow[e.key]!)} — ${who.join(' + ')}. '
-              'Open the receipt that is overpaying it and lower that figure.');
+              '"${d['demfeetype'] ?? ''}" has ${formatIndianNumber(_due(d))} due, but the advances '
+              'cover ${formatIndianNumber(perRow[e.key]!)} (${who.join(' + ')}). '
+              'Lower the amount on one of these advances.');
           return;
         }
         lines.add({'dem_id': d['dem_id'], 'amount': e.value});
@@ -582,8 +583,8 @@ class _AdvanceAdjustDialogState extends State<_AdvanceAdjustDialog> {
       _error = null;
       _applied = true;
       _appliedNote =
-          'Staged ${formatIndianNumber(grand)} from ${plans.length == 1 ? plans.first['advno'] : '${plans.length} advances'}. '
-          'Nothing is written until you take the payment. Adjust and press Apply again, or Close.'
+          'Planned ${formatIndianNumber(grand)} from ${plans.length == 1 ? plans.first['advno'] : '${plans.length} advances'}. '
+          'Nothing is saved until you take the payment. Change the amounts and press Apply again, or Close.'
           '${trims.isEmpty ? '' : '\n${trims.join('\n')}'}';
     });
   }
@@ -1089,9 +1090,9 @@ class _AdvanceAdjustDialogState extends State<_AdvanceAdjustDialog> {
         // Staged on the other receipts and not visible in this grid. Without
         // it the totals here look like the whole plan, and they are not.
         if (_plannedTotal - _total > 0.005)
-          cell('Staged elsewhere', '₹${_plain(_plannedTotal - _total)}',
+          cell('Planned on Other Advances', '₹${_plain(_plannedTotal - _total)}',
               AppColors.demand),
-        cell('Left on ${_advance['advno']}', '₹${_plain(remaining < 0 ? 0 : remaining)}',
+        cell('Balance on ${_advance['advno']}', '₹${_plain(remaining < 0 ? 0 : remaining)}',
             over ? AppColors.error : AppColors.success),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: _narrow ? 190.w : 260.w),
@@ -1110,7 +1111,7 @@ class _AdvanceAdjustDialogState extends State<_AdvanceAdjustDialog> {
                   over
                       ? 'That is more than this advance has left.'
                       : (_isAdmission
-                          ? 'Fees below will be REDUCED\nby these amounts.'
+                          ? 'Fees below will be reduced\nby these amounts.'
                           : 'Advance will be adjusted\nagainst the selected dues.'),
                   style: TextStyle(
                       fontSize: 11.5.sp,

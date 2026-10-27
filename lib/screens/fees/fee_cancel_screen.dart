@@ -10,6 +10,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 
 /// Fee Cancel Receipt — void a whole fee-collection receipt from one place.
 /// Look up a student, pick one of their receipts, review the fee lines it
@@ -60,6 +61,14 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
 
   static bool _isMisc(Map<String, dynamic> r) => r['mc_id'] != null;
   static bool _isAdvance(Map<String, dynamic> r) => r['adv_id'] != null;
+
+  /// A stored 'yyyy-mm-dd[T...]' date shown as DD-MM-YYYY (display only).
+  static String _dmy(dynamic v, [String empty = '']) {
+    final s = (v?.toString() ?? '').split('T').first;
+    final d = DateTime.tryParse(s);
+    return d == null ? (s.isEmpty ? empty : s) : formatDmy(d);
+  }
+
   List<Map<String, dynamic>> _lines = [];
 
   bool _searching = false, _loading = false, _loadingLines = false, _saving = false;
@@ -329,7 +338,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
           for (final d in List<Map<String, dynamic>>.from(det as List))
             {
               'demfeetype': d['feetype'],
-              'demfeeterm': 'Misc',
+              'demfeeterm': 'Miscellaneous',
               'feeamount': d['amount'],
               'collectedamount': d['amount'],
             }
@@ -474,7 +483,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
       _popup(
           'Only Today’s Receipts',
           'This receipt was collected on '
-              '${_selectedReceipt?['paydate']?.toString().split('T').first ?? 'an earlier date'}. '
+              '${_dmy(_selectedReceipt?['paydate'], 'an earlier date')}. '
               'Only a receipt collected today can be cancelled here — use a fee refund for an earlier one.',
           AppColors.error,
           Icons.event_busy);
@@ -512,8 +521,8 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
                   'cancelled at all.\n\n'
                   'The receipt is kept for audit and stamped CANCELLED. This cannot be undone.'
               : _selectedKey!.startsWith('M:')
-                  ? 'This voids misc receipt $no for ${_student!['stuname']} '
-                      '(₹${_totalCollected.toStringAsFixed(2)}). A misc receipt settles no '
+                  ? 'This voids miscellaneous receipt $no for ${_student!['stuname']} '
+                      '(₹${_totalCollected.toStringAsFixed(2)}). A miscellaneous receipt settles no '
                       'fee demand, so nothing returns to pending.\n\n'
                       'The receipt is kept for audit and stamped CANCELLED. This cannot be undone.'
                   : 'This voids receipt $no for ${_student!['stuname']} and restores the '
@@ -570,7 +579,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        _popup('Cancel Failed', friendlyError(e), AppColors.error, Icons.error_outline);
+        _popup('Could Not Cancel Receipt', friendlyError(e), AppColors.error, Icons.error_outline);
       }
     }
   }
@@ -682,9 +691,9 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
           SizedBox(width: 12.w),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text('Fee Cancel Receipt', style: AppUI.cardTitle),
+              Text('Cancel Fee Receipt', style: AppUI.cardTitle),
               SizedBox(height: 2.h),
-              Text('Void a fee-collection receipt and restore its fees', style: AppUI.muted),
+              Text('Cancel today\'s receipt and return its fees to pending', style: AppUI.muted),
             ]),
           ),
           Builder(builder: (context) {
@@ -707,7 +716,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
             style: _fieldTextStyle(),
-            decoration: _fieldDec(schoolTerm('Select Course')),
+            decoration: _fieldDec(schoolTerm('Select course')),
             items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
             onChanged: (v) => setState(() {
               _selectedCourse = v;
@@ -725,7 +734,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
             style: _fieldTextStyle(),
-            decoration: _fieldDec(schoolTerm('Select Class')),
+            decoration: _fieldDec(schoolTerm('Select class')),
             items: _classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
             onChanged: (v) => setState(() {
               _selectedClass = v;
@@ -760,7 +769,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
             controller: controller,
             focusNode: focusNode,
             style: _fieldTextStyle(),
-            decoration: _fieldDec('Type reg no or name',
+            decoration: _fieldDec(schoolTerm('Search by register no. or name'),
                 prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight)),
           ),
           optionsViewBuilder: (context, onSelected, options) => Align(
@@ -803,7 +812,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
         return AppUI.empty(
           icon: 'people',
           title: 'No student selected',
-          why: 'Type a reg no or name above, or pick a Course and Class to list its students.',
+          why: schoolTerm('Search by register no. or name above, or select a course and class to list its students.'),
         );
       }
       return ListView.separated(
@@ -836,8 +845,8 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
     if (_isAdvance(r)) {
       return AppUI.chip(r['advtype']?.toString() == 'A' ? 'Advance (Admission)' : 'Advance', AppStatus.info);
     }
-    if (_isMisc(r)) return AppUI.chip('Misc', AppStatus.neutral);
-    if (r['paystatus']?.toString() == 'R') return AppUI.chip('Part refunded', AppStatus.warning);
+    if (_isMisc(r)) return AppUI.chip('Miscellaneous', AppStatus.neutral);
+    if (r['paystatus']?.toString() == 'R') return AppUI.chip('Partly Refunded', AppStatus.warning);
     return null;
   }
 
@@ -853,7 +862,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
             action: OutlinedButton.icon(
               onPressed: _searching ? null : _newRecord,
               icon: const AppIcon('refresh', size: 15, color: AppColors.accent),
-              label: const Text('Reset Filters'),
+              label: const Text(AppText.clearFilters),
             ),
           ),
         ),
@@ -867,7 +876,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
         final r = _receipts[i];
         final key = _receiptKey(r);
         final amt = (r['transtotalamount'] as num?)?.toDouble() ?? 0;
-        final date = r['paydate']?.toString().split('T').first ?? '';
+        final date = _dmy(r['paydate']);
         final method = r['paymethod']?.toString() ?? '';
         return _tile(
           selected: key == _selectedKey,
@@ -931,7 +940,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
             SizedBox(height: 2.h),
-            Text('Adm No: ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${schoolTerm('Register No.:')} ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         ),
         IconButton(
@@ -952,7 +961,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
       return AppUI.empty(
         icon: 'receipt-discount',
         title: 'Select a student',
-        why: 'Search a student by reg no / name, or pick a Course and Class on the left, then choose the receipt to cancel.',
+        why: schoolTerm('Search for a student by register no. or name, or select a course and class on the left, then choose the receipt to cancel.'),
       );
     }
     if (!_loading && _receipts.isEmpty) {
@@ -1015,7 +1024,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
   // Receipt No dropdown here).
   Widget _cancelForm() {
     final r = _selectedReceipt;
-    final dateStr = r?['paydate']?.toString().split('T').first ?? '-';
+    final dateStr = _dmy(r?['paydate'], '-');
     final mode = r?['paymethod']?.toString() ?? '-';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1031,7 +1040,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
           controller: _reasonCtrl,
           style: _fieldTextStyle(),
           maxLines: 2,
-          decoration: _fieldDec('Why is this receipt being cancelled?'),
+          decoration: _fieldDec('Enter reason for cancellation'),
         ), required: true),
         // Same banner treatment as the reconciled lock, so a disabled Cancel
         // button always has a visible reason next to it.
@@ -1050,7 +1059,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
               Expanded(
                   child: Text(
                       'Only a receipt collected today can be cancelled. This one is dated '
-                      '${_selectedReceipt?['paydate']?.toString().split('T').first ?? '-'}.',
+                      '${_dmy(_selectedReceipt?['paydate'], '-')}.',
                       style: TextStyle(fontSize: 12.sp, color: AppColors.error, fontWeight: FontWeight.w600))),
             ]),
           ),
@@ -1098,13 +1107,13 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
       final title = _error != null
           ? 'Something went wrong'
           : _student == null
-              ? 'No receipts found'
+              ? 'No student selected'
               : _selectedKey == null
                   ? 'Select a receipt to cancel'
-                  : 'No line preview for this receipt';
+                  : 'No fee lines to show for this receipt';
       final subtitle = _error ??
           (_student == null
-              ? 'Try adjusting your filters or search for a student'
+              ? schoolTerm('Search for a student or select a course and class')
               : _selectedKey == null
                   ? 'Pick a receipt from the list on the left'
                   : 'Its fees may have been re-billed since — you can still cancel it below.');
@@ -1119,7 +1128,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
           action: OutlinedButton.icon(
             onPressed: _searching ? null : _newRecord,
             icon: const AppIcon('refresh', size: 15, color: AppColors.accent),
-            label: const Text('Reset Filters'),
+            label: const Text(AppText.clearFilters),
           ),
         ),
       );
@@ -1131,7 +1140,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
         color: AppColors.tableHeadBg,
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
         child: Row(children: [
-          SizedBox(width: 70.w, child: Text('SEM', style: h())),
+          SizedBox(width: 110.w, child: Text(schoolTerm('SEMESTER'), style: h())),
           Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
           Expanded(flex: 2, child: Text('STATUS', style: h())),
           SizedBox(width: 130.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('AMOUNT', textAlign: TextAlign.right, style: h()))),
@@ -1151,7 +1160,7 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
             color: i.isEven ? Colors.white : AppColors.surface,
             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
             child: Row(children: [
-              SizedBox(width: 70.w, child: Text(term, style: c())),
+              SizedBox(width: 110.w, child: Text(term, style: c())),
               Expanded(flex: 3, child: Text(group.isEmpty ? feeType : '$feeType  ($group)', style: AppUI.cell)),
               Expanded(flex: 2, child: _paidChip()),
               SizedBox(width: 130.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('₹${_lineAmount(d).toStringAsFixed(2)}', textAlign: TextAlign.right, style: AppUI.money))),
@@ -1173,6 +1182,8 @@ class _FeeCancelScreenState extends State<FeeCancelScreen> {
       padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
       decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.divider))),
       child: Row(children: [
+        AppUI.requiredNote(),
+        SizedBox(width: 16.w),
         Text('Receipt Total  ', style: AppUI.muted),
         Text('₹${_totalCollected.toStringAsFixed(2)}', style: AppUI.money.copyWith(fontSize: 16.sp, fontWeight: FontWeight.w800)),
         const Spacer(),

@@ -285,7 +285,7 @@ Future<String?> showPaytmCheckout(
                               Padding(
                                 padding: const EdgeInsets.only(top: 2),
                                 child: Text(
-                                  'Settling to  ${settlingTo.trim()}',
+                                  'Settles to: ${settlingTo.trim()}',
                                   style: const TextStyle(
                                       color: Colors.white70,
                                       fontWeight: FontWeight.w500,
@@ -340,25 +340,25 @@ Future<String?> showPaytmCheckout(
                               context: ctx,
                               barrierDismissible: false,
                               builder: (c) => AlertDialog(
-                                title: const Text('Payment still in progress'),
+                                title: const Text('Payment Still in Progress'),
                                 content: const Text(
                                   'This payment has been submitted to the bank and has '
                                   'not finished yet.\n\n'
                                   'If you close now and the bank debits the amount, the '
-                                  'student will be charged with NO receipt, and it will '
+                                  'student will be charged with no receipt, and the receipt will '
                                   'have to be entered by hand later.\n\n'
                                   'Please wait until it completes.',
                                 ),
                                 actions: [
                                   TextButton(
                                     onPressed: () => Navigator.pop(c, false),
-                                    child: const Text('Keep waiting'),
+                                    child: const Text('Keep Waiting'),
                                   ),
                                   TextButton(
                                     onPressed: () => Navigator.pop(c, true),
                                     style: TextButton.styleFrom(
                                         foregroundColor: AppColors.error),
-                                    child: const Text('Close anyway'),
+                                    child: const Text('Close Anyway'),
                                   ),
                                 ],
                               ),
@@ -393,7 +393,7 @@ Future<String?> showPaytmCheckout(
                             const Icon(Icons.error_outline,
                                 color: AppColors.error, size: 48),
                             const SizedBox(height: 16),
-                            Text('Payment not completed',
+                            Text('Payment Not Completed',
                                 style: AppUI.cardTitle),
                             const SizedBox(height: 10),
                             Text(msg,

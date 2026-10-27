@@ -256,7 +256,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         setState(() => _approving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error approving. ${friendlyError(e)}'),
+            content: Text('Could not approve the fee demands. ${friendlyError(e)}'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -359,7 +359,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         // Search
         AppSearchField(
           controller: _searchController,
-          hintText: 'Search by student name or ad...',
+          hintText: schoolTerm('Search by roll no. or name'),
           onChanged: (v) {
             setState(() {
               _searchQuery = v.trim().toLowerCase();
@@ -564,7 +564,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                           child: Row(
                             children: [
                               SizedBox(width: 40.w),
-                              _headerCell(schoolTerm('Roll No'), 3),
+                              _headerCell(schoolTerm('Roll No.'), 3),
                               _headerCell('Student Name', 5),
                               _headerCell(schoolTerm('Class'), 3),
                               _headerCell(schoolTerm('Semester'), 3, center: true),

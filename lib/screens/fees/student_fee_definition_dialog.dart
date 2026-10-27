@@ -381,7 +381,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Load failed. ${friendlyError(e)}', AppColors.error);
+        _snack("Could not load this student's fees. ${friendlyError(e)}", AppColors.error);
       }
     }
   }
@@ -499,7 +499,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not save the fee definition. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -726,12 +726,12 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
           child: Row(children: [
             SizedBox(width: 56.w, child: Text('OPTED', style: h())),
             Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: h())),
-            if (!isSchool) Expanded(flex: 2, child: Text('ADM TYPE', style: h())),
+            if (!isSchool) Expanded(flex: 2, child: Text('ADMISSION TYPE', style: h())),
             Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
             SizedBox(width: 90.w, child: Text('AMOUNT', textAlign: TextAlign.right, style: h())),
             SizedBox(width: 12.w),
             SizedBox(width: 80.w, child: Text('BALANCE', textAlign: TextAlign.right, style: h())),
-            SizedBox(width: 80.w, child: Text('CONC.', textAlign: TextAlign.right, style: h())),
+            SizedBox(width: 96.w, child: Text('CONCESSION', textAlign: TextAlign.right, style: h())),
           ]),
         ),
         Expanded(
@@ -815,7 +815,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                   ),
                   SizedBox(width: 12.w),
                   SizedBox(width: 80.w, child: Text(r.balance.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
-                  SizedBox(width: 80.w, child: Text(r.concession.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
+                  SizedBox(width: 96.w, child: Text(r.concession.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
                 ]),
               ));
             },

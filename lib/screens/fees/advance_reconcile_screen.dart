@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
@@ -131,7 +132,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load advance receipts. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -311,10 +312,10 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Reconcile advance'),
+        title: const Text('Reconcile Advance'),
         content: Text(
             'Settle ₹${_money(total)} of ${_studentRow?['stuname']}\'s $_prevYear advance (${_advance?['advno']}) against $_curYear fees?\n\n'
-            'No receipt is issued -- the fees are marked paid from the advance (as the old Advance Reconcile). Reverse it later from Reconciled if needed.'),
+            'No receipt is issued. The fees are marked paid from the advance. You can reverse it later from View Reconciled.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: _solidBtn(), child: const Text('Reconcile')),
@@ -333,7 +334,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       _snack('Reconciled ₹${_money(_num(m['reconciled']))} from ${m['advno'] ?? _advance?['advno']} -- the fees are marked paid.', AppColors.success);
       await _load();
     } catch (e) {
-      _snack('Reconcile failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not reconcile the advance. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -348,7 +349,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
           .rpc('advance_reconcile_history', params: {'p_token': SupabaseService.sessionToken, 'p_stu_id': stuId});
       rows = List<Map<String, dynamic>>.from((res as List).map((e) => Map<String, dynamic>.from(e as Map)));
     } catch (e) {
-      _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load reconciled entries. ${friendlyError(e)}', AppColors.error);
       return;
     }
     if (!mounted) return;
@@ -357,7 +358,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setD) => AlertDialog(
-          title: Text('Reconciled -- ${_studentRow?['stuname']}', style: AppUI.cardTitle),
+          title: Text('Reconciled Entries: ${_studentRow?['stuname']}', style: AppUI.cardTitle),
           content: SizedBox(
             width: 640.w,
             child: rows.isEmpty
@@ -422,11 +423,11 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Reverse this reconcile?'),
+        title: const Text('Reverse This Reconciliation?'),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('The $_curYear fees are owed again and ₹${_money(_num(r['amount']))} goes back to ${r['advno']}.'),
           SizedBox(height: 12.h),
-          TextField(controller: reason, style: AppUI.fieldText(context), decoration: AppUI.field(context, '', label: 'Reason')),
+          TextField(controller: reason, style: AppUI.fieldText(context), decoration: AppUI.field(context, 'Enter reason (optional)', label: 'Reason')),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -444,17 +445,17 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
     try {
       await SupabaseService.client.rpc('reverse_previous_advance',
           params: {'p_token': SupabaseService.sessionToken, 'p_adv_id': r['adv_id'], 'p_batch_id': r['batch_id'], 'p_reason': why.isEmpty ? null : why});
-      _snack('Reconcile of ₹${_money(_num(r['amount']))} reversed -- ${r['advno']} has it back.', AppColors.success);
+      _snack('Reconciliation of ₹${_money(_num(r['amount']))} reversed. The amount is back on ${r['advno']}.', AppColors.success);
       return true;
     } catch (e) {
-      _snack('Reverse failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not reverse the reconciliation. ${friendlyError(e)}', AppColors.error);
       return false;
     }
   }
 
   static String _dmy(dynamic v) {
     final x = DateTime.tryParse('${v ?? ''}');
-    return x == null ? '-' : '${x.day.toString().padLeft(2, '0')}/${x.month.toString().padLeft(2, '0')}/${x.year}';
+    return x == null ? '-' : formatDmy(x);
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────
@@ -480,11 +481,17 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
       decoration: _inputDec(hint, filled: value != null),
       hint: Text(hint, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+      // A list filter: the first item (null) clears it, labelled "All ...".
       items: [
+        DropdownMenuItem<int>(value: null, child: Text(hint, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
         for (final e in items)
           DropdownMenuItem(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
       ],
       selectedItemBuilder: (_) => [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(hint, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context)),
+        ),
         for (final e in items)
           Align(
             alignment: Alignment.centerLeft,
@@ -621,7 +628,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         ),
         SizedBox(
           width: _compact ? 150.w : 180.w,
-          child: _filterDrop(schoolTerm('Select Course'), _fCour, [for (final c in _courseList) (_id(c['cour_id'])!, '${c['courname']}')],
+          child: _filterDrop(schoolTerm('All courses'), _fCour, [for (final c in _courseList) (_id(c['cour_id'])!, '${c['courname']}')],
               (v) => setState(() {
                     _fCour = v;
                     _fCla = null;
@@ -631,7 +638,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         SizedBox(
           width: _compact ? 150.w : 180.w,
           child: _filterDrop(
-              schoolTerm('Select Class'),
+              schoolTerm('All classes'),
               _fCla,
               [
                 for (final c in _classes)
@@ -646,7 +653,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
             controller: _searchCtrl,
             onChanged: (_) => setState(() {}),
             style: AppUI.fieldText(context, filled: _searchCtrl.text.isNotEmpty),
-            decoration: AppUI.field(context, 'Receipt / Adm No / Name', filled: _searchCtrl.text.isNotEmpty, leadingIcon: 'search-normal-1'),
+            decoration: AppUI.field(context, 'Search by receipt no., admission no. or name', filled: _searchCtrl.text.isNotEmpty, leadingIcon: 'search-normal-1'),
           ),
         ),
         SizedBox(width: 10.w),
@@ -714,8 +721,8 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
           color: AppColors.tableHeadBg,
           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
           child: Row(children: [
-            head('Receipt No', 4),
-            head(schoolTerm('Roll No'), 4),
+            head('Receipt No.', 4),
+            head(AppText.admissionNo, 4),
             head('Student Name', 5),
             head('Balance', 4, align: TextAlign.right),
           ]),
@@ -817,7 +824,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Carry Forward advances'),
+        title: const Text('Carry Forward Advances'),
         content: Text('Bring the $_prevYear advance receipts into $_curYear (Year End Process).\n\n'
             'Running it again also picks up advances collected since, refunds, and cancelled or bounced advances. '
             'If a cancelled advance had already been reconciled, that reconcile is undone and the fees are owed again.'),
@@ -838,7 +845,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Carry Forward done'),
+          title: const Text('Carry Forward Complete'),
           content: Text([
             '$added advance line${added == 1 ? '' : 's'} carried into $_curYear.',
             if (upd > 0) '$upd changed by a refund in $_prevYear.',
@@ -853,7 +860,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       _clearSelection();
       await _load();
     } catch (e) {
-      _snack('Carry Forward failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not carry forward the advances. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -881,7 +888,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       context: context,
       builder: (ctx) => _bulkDialog(
         ctx,
-        title: 'Reconcile ${_scopeName()} -- preview',
+        title: 'Reconcile Preview: ${_scopeName()}',
         subtitle: willDo.isEmpty
             ? 'Nothing to reconcile: none of these students has an open $_curYear demand for this money.'
             : '${willDo.length} of ${items.length} receipts will be reconciled with Auto Reconcile (same ${schoolTerm('semester')} and fee type first). No receipts are issued -- the fees are marked paid from each advance.',
@@ -906,7 +913,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
           params: {'p_token': SupabaseService.sessionToken, 'p_adv_ids': [for (final i in willDo) i['adv_id']], 'p_apply': true});
       out = Map<String, dynamic>.from(res as Map);
     } catch (e) {
-      _snack('Reconcile failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not reconcile the advances. ${friendlyError(e)}', AppColors.error);
       if (mounted) setState(() => _busy = false);
       return;
     }
@@ -922,7 +929,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
             '${failed > 0 ? ' -- $failed could not be (see below); the rest are saved.' : '.'}',
         items: List<Map<String, dynamic>>.from((out['items'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map))),
         done: true,
-        actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text('Done'))],
+        actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text(AppText.close))],
       ),
     );
     _clearSelection();
@@ -951,11 +958,11 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
                 color: AppColors.tableHeadBg,
                 padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
                 child: Row(children: [
-                  h('Receipt', 3),
-                  h(schoolTerm('Roll No'), 3),
+                  h('Receipt No.', 3),
+                  h(AppText.admissionNo, 3),
                   h('Student', 4),
                   h(schoolTerm('Class'), 2),
-                  h('Left (₹)', 3, a: TextAlign.right),
+                  h('Balance (₹)', 3, a: TextAlign.right),
                   h(done ? 'Result' : 'Reconcile (₹)', 4, a: TextAlign.right),
                 ]),
               ),
@@ -1021,7 +1028,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         alignment: Alignment.center,
         child: AppUI.empty(
           icon: 'search-normal-1',
-          title: schoolTerm('Choose a class and an advance receipt to reconcile'),
+          title: schoolTerm('Select a class and an advance receipt to reconcile'),
         ),
       );
     }
@@ -1080,7 +1087,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text('${s['stuname'] ?? ''}', overflow: TextOverflow.ellipsis, style: AppUI.cardTitle),
           SizedBox(height: 3.h),
-          Text('${schoolTerm('Roll No')}: ${s['stuadmno']}', style: AppUI.muted),
+          Text('${AppText.admissionNo}: ${s['stuadmno']}', style: AppUI.muted),
         ]),
       ),
       sep(),
@@ -1088,12 +1095,12 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       sep(),
       Expanded(flex: 4, child: info('receipt-item', 'Advance Receipt', '${_advance!['advno']}  •  ${_dmy(_advance!['advdate'])}')),
       sep(),
-      Expanded(flex: 2, child: info('wallet-money', 'Left Amount', '₹${_money(_available)}', color: _orange, size: 16.sp)),
+      Expanded(flex: 2, child: info('wallet-money', 'Balance', '₹${_money(_available)}', color: _orange, size: 16.sp)),
       SizedBox(width: 14.w),
       OutlinedButton.icon(
         onPressed: _busy ? null : _openHistory,
         icon: const Icon(Icons.check_circle, size: 17),
-        label: const Text('Reconciled'),
+        label: const Text('View Reconciled'),
         style: _outlineBtn(),
       ),
     ]);
@@ -1106,7 +1113,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         _text('FEE TYPE', 3, style: _headStyle),
         _text('ADVANCE AMOUNT (₹)', 3, align: TextAlign.right, style: _headStyle),
         _text('RECONCILED (₹)', 3, align: TextAlign.right, style: _headStyle),
-        _text('LEFT (₹)', 3, align: TextAlign.right, style: _headStyle),
+        _text('BALANCE (₹)', 3, align: TextAlign.right, style: _headStyle),
       ]),
     ];
     for (final l in _advLines) {
@@ -1162,10 +1169,10 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         _text(schoolTerm('Semester').toUpperCase(), 2, style: _headStyle),
         _text('FEE TYPE', 3, style: _headStyle),
         _text('DUE DATE', 2, style: _headStyle),
-        _text('FEE AMT (₹)', 2, align: TextAlign.right, style: _headStyle),
+        _text('FEE AMOUNT (₹)', 2, align: TextAlign.right, style: _headStyle),
         _text('PAID (₹)', 2, align: TextAlign.right, style: _headStyle),
-        _text('BAL. AMT (₹)', 2, align: TextAlign.right, style: _headStyle),
-        _text('REC. AMOUNT (₹)', 3, align: TextAlign.center, style: _headStyle),
+        _text('BALANCE AMOUNT (₹)', 2, align: TextAlign.right, style: _headStyle),
+        _text('RECONCILE AMOUNT (₹)', 3, align: TextAlign.center, style: _headStyle),
       ]),
     ];
     var fee = 0.0, paid = 0.0;
@@ -1240,7 +1247,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
             borderRadius: BorderRadius.circular(AppUI.controlRadius),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text('RECONCILE: ', style: AppUI.label.copyWith(letterSpacing: 0.3)),
+            Text('Reconciling: ', style: AppUI.label.copyWith(letterSpacing: 0.3)),
             Text('₹${_money(total)}', style: AppUI.money.copyWith(fontSize: 15.sp, color: AppColors.primary)),
           ]),
         ),

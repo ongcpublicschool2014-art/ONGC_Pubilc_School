@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 
 import '../../services/paytm_service.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -526,7 +527,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
 
   Future<void> _onSave() async {
     if (_student == null) {
-      _snack('Choose a student — an advance is always against a student.',
+      _snack('Select a student to collect an advance.',
           AppColors.warning);
       return;
     }
@@ -617,9 +618,8 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
     }
     if (!_routing.hasBank) {
       _snack(
-          'No bank account is mapped to ${_routing.fgName}, so this advance '
-          'would be banked nowhere. Map one in Setup -> Bank Details, then '
-          'Fee Master -> Fee Group.',
+          'No bank account is mapped to ${_routing.fgName}. Map one in '
+          'Setup → Bank Accounts → Fee Group Assignments before collecting.',
           AppColors.error);
       return;
     }
@@ -863,7 +863,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
       // two-minute fix into a guessing game.
       if (mounted) {
         final msg = e.toString().replaceFirst('Exception: ', '');
-        _snack('Paytm error. $msg', AppColors.error);
+        _snack('Could not start the Paytm payment. $msg', AppColors.error);
       }
       return null;
     }
@@ -895,7 +895,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                     Row(children: [
                       const AppIcon('wallet-money', size: 20, color: AppColors.accent),
                       SizedBox(width: 8.w),
-                      Text(isUpi ? 'UPI Payment' : '$doc Payment',
+                      Text(isUpi ? 'UPI Payment Details' : '$doc Payment Details',
                           style: AppUI.cardTitle),
                       const Spacer(),
                       Text('₹${_amount.toStringAsFixed(2)}',
@@ -973,6 +973,8 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                     ],
                     SizedBox(height: 22.h),
                     Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      AppUI.requiredNote(),
+                      const Spacer(),
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
                         child: const Text('Cancel',
@@ -1164,14 +1166,14 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
             SizedBox(height: 12.h),
             Text('Advance Collected', style: AppUI.cardTitle),
             SizedBox(height: 8.h),
-            Text('Receipt No: $advno',
+            Text('Receipt No.: $advno',
                 style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
             Text('Amount: ₹${total.toStringAsFixed(2)}',
                 style: TextStyle(
                     fontSize: 14.sp,
                     fontWeight: FontWeight.w600,
                     color: AppColors.accent)),
-            Text('Mode: ${_paymode ?? 'Cash'}',
+            Text('${AppText.paymentMode}: ${_paymode ?? 'Cash'}',
                 style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
             if (recon != 'R') ...[
               SizedBox(height: 6.h),
@@ -1199,7 +1201,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               Navigator.pop(ctx);
               _newRecord();
             },
-            child: const Text('Done'),
+            child: const Text(AppText.close),
           ),
         ],
       ),
@@ -1213,12 +1215,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
   /// breakdown to invent.
   Future<void> _showReceipt(
       String advno, double total, List<ReceiptFeeItem> lines) async {
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    final d = _date;
-    final dateStr = '${months[d.month - 1]} ${d.day}, ${d.year}';
+    final dateStr = formatDmy(_date);
     final stu = _student ?? const <String, dynamic>{};
     final data = ReceiptData(
       receiptNo: advno,
@@ -1427,7 +1424,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
       );
 
   Widget _dateBox(DateTime? value, ValueChanged<DateTime> onPicked,
-          {String hint = 'dd/mm/yyyy'}) =>
+          {String hint = 'Select date (${AppText.dateHint})'}) =>
       InkWell(
         onTap: () async {
           final picked = await showDatePicker(
@@ -1457,8 +1454,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
         ),
       );
 
-  static String _dmy(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  static String _dmy(DateTime d) => formatDmy(d);
 
   static String _money(Object? v) {
     final d = (v as num?)?.toDouble() ?? 0;
@@ -1475,7 +1471,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
     if (_loadError != null) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('Could not load. $_loadError',
+          Text('Could not load advance collection data. $_loadError',
               style: TextStyle(fontSize: 13.sp, color: AppColors.error)),
           SizedBox(height: 12.h),
           OutlinedButton(onPressed: _load, child: const Text('Retry')),
@@ -1671,7 +1667,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               size: 13.sp, color: AppColors.warning),
           SizedBox(width: 5.w),
           Flexible(
-            child: Text('NO FEE GROUP MAPPED — set it in Utilities',
+            child: Text('No fee group mapped. Set it in Setup → Utilities → Advance Settlement.',
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                     fontSize: 11.sp,
@@ -1693,10 +1689,10 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
     final parts = <String>[
       // "NOT MAPPED" first, because it qualifies everything after it: the group
       // named next is where this WOULD go, not where anybody said it should.
-      if (!r.mapped) 'NOT MAPPED',
+      if (!r.mapped) 'Not mapped',
       r.fgName.toUpperCase(),
-      if (!r.hasSequence) 'NO RECEIPT SEQUENCE',
-      if (r.hasBank) r.bankName else 'NO BANK ACCOUNT',
+      if (!r.hasSequence) 'No receipt sequence',
+      if (r.hasBank) r.bankName else 'No bank account',
       if (r.hasBank && r.hasSequence)
         r.hasMerchant ? 'Paytm ${r.paytmMid}' : 'Paytm: institution merchant',
     ];
@@ -1716,15 +1712,14 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               'exists. Create it in Setup → Sequence Master → Receipt Sequence.'
           : bad
           ? 'No bank account is mapped to ${r.fgName}. Map one in Setup → Bank '
-              'Details, then Fee Master → Fee Group; until then this advance is '
-              'banked nowhere.'
+              'Accounts → Fee Group Assignments before collecting.'
           : r.hasMerchant
               ? 'Cash and cheque are banked into ${r.bankName}. An online '
                   'payment settles to merchant ${r.paytmMid}, which is '
                   'registered against that account.'
-              : '${r.bankName} names no Paytm merchant, so an online payment '
-                  'settles to the institution merchant — the college account. '
-                  'Set the MID in Setup → Bank Details.',
+              : '${r.bankName} has no Paytm merchant ID, so online payments '
+                  'settle to the institution\'s default merchant account. '
+                  'Set the Paytm MID in Setup → Bank Accounts.',
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(bad ? Icons.warning_amber_rounded : Icons.account_balance,
             size: 13.sp, color: colour),
@@ -1796,9 +1791,9 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
       // bank account, admission and student to the college one. The routing is
       // decided server-side in save_advance_collection, not here.
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        seg('ADMISSION', 'A'),
-        seg('STUDENT', 'S'),
-        seg('MESS', 'M'),
+        seg('Admission Advance', 'A'),
+        seg('Student Advance', 'S'),
+        seg('Mess Advance', 'M'),
       ]),
     );
   }
@@ -1875,7 +1870,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               children: [
                 Text(name, style: AppUI.label, overflow: TextOverflow.ellipsis),
                 Text(
-                    '${schoolTerm('Reg No')}: ${s['stuadmno'] ?? ''}'
+                    '${schoolTerm('Register Number')}: ${s['stuadmno'] ?? ''}'
                     "${cls.isEmpty ? '' : '  •  $cls'}",
                     style: AppUI.muted,
                     overflow: TextOverflow.ellipsis),
@@ -1919,9 +1914,9 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                               // Says what to DO. "No hostellers" on its own
                               // reads as a broken screen; the flag simply has
                               // never been set on this database.
-                              ? 'No hostel students. Set hostel = Y in Student Details first'
-                              : 'Hostel students only (${_hostellers.length}) — type reg no or name')
-                      : 'Type reg no or name'))
+                              ? 'No hostel students found. Mark students as hostellers in Student Details first.'
+                              : schoolTerm('Hostel students only (${_hostellers.length}): search by register no. or name'))
+                      : schoolTerm('Search by register no. or name')))
               .copyWith(
                   prefixIcon:
                       Icon(Icons.search, size: 18.sp, color: AppColors.textLight),
@@ -1991,7 +1986,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(
                 child: _labeled(
-                    'Date',
+                    'Collection Date',
                     // Read-only on purpose: the collection date is stamped by
                     // the DATABASE server inside save_advance_collection, so a
                     // workstation with a wrong clock cannot misdate a receipt.
@@ -2036,7 +2031,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                     TextField(
                         controller: _remarksCtrl,
                         style: _txt,
-                        decoration: _dec('Why the advance was taken')),
+                        decoration: _dec('Enter reason for the advance (optional)')),
                     icon: 'receipt-edit')),
           ]),
       );
@@ -2145,7 +2140,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               OutlinedButton.icon(
                 onPressed: _saving ? null : () => setState(() => _lines.add(_AdvLine())),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add'),
+                label: const Text(AppText.addRow),
               ),
               const Spacer(),
               Text('Total', style: AppUI.muted),
@@ -2208,7 +2203,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                   prefixIconConstraints:
                       const BoxConstraints(minWidth: 40, minHeight: 0),
                   errorText:
-                      needsType ? 'Pick a fee type for this amount' : null,
+                      needsType ? 'Select a fee type for this amount' : null,
                   errorStyle: TextStyle(fontSize: 10.5.sp, height: 1.1),
                   enabledBorder: needsType
                       ? OutlineInputBorder(
@@ -2287,7 +2282,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                     }),
             icon: Icon(Icons.remove_circle_outline,
                 size: 20, color: _lines.length == 1 ? AppColors.textLight : AppColors.error),
-            tooltip: 'Remove',
+            tooltip: AppText.deleteRow,
             padding: EdgeInsets.zero,
           ),
         ),
@@ -2317,6 +2312,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
       // asking: what matters here is what THIS student holds, and the strip
       // above the form says that.
       child: Row(children: [
+        AppUI.requiredNote(),
         const Spacer(),
         // What is about to be collected.
         Container(
@@ -2333,9 +2329,9 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                 size: 15, color: AppColors.accent),
             SizedBox(width: 8.w),
             Text(switch (_advType) {
-              'A' => 'ADMISSION ADVANCE: ',
-              'M' => 'MESS ADVANCE: ',
-              _ => 'ADVANCE AMOUNT: '
+              'A' => 'Admission Advance: ',
+              'M' => 'Mess Advance: ',
+              _ => 'Advance Amount: '
             },
                 style: TextStyle(
                     fontSize: 13.sp,
@@ -2364,7 +2360,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               value: _paymode,
               isExpanded: true,
               isDense: false,
-              hint: Text('SELECT MODE',
+              hint: Text('Select payment mode',
                   style: TextStyle(
                       fontSize: 13.sp,
                       fontWeight: FontWeight.w600,
@@ -2382,10 +2378,10 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               // Same five modes as Misc Collection and Fee Collection, in the
               // same order. Paytm runs the real gateway (see _payWithPaytm).
               items: const [
-                DropdownMenuItem(value: 'Cash', child: Text('CASH')),
-                DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
-                DropdownMenuItem(value: 'Paytm', child: Text('PAYTM')),
-                DropdownMenuItem(value: 'Cheque', child: Text('CHEQUE')),
+                DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                DropdownMenuItem(value: 'QR/UPI', child: Text('QR / UPI')),
+                DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
+                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
                 DropdownMenuItem(value: 'DD', child: Text('DD')),
               ],
               onChanged: _saving ? null : (v) => setState(() => _paymode = v),

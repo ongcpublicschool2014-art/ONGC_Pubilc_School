@@ -20,6 +20,7 @@ import '../../widgets/receipt_widget.dart';
 import '../../widgets/empty_state.dart';
 import '../../services/pending_collection_sweep.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 
 /// Miscellaneous Fee Collection — a standalone counter collection (BONAFIDE
 /// CERTIFICATE, APPLICATION, …) that does NOT reduce any demand. It is stored in
@@ -270,7 +271,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load fee types and students. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -501,7 +502,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     // the guard for the paths that do not go through it -- Enter on a field,
     // or a student picked after the amounts were typed.
     if (_studentHasTc) {
-      _snack('This student has been issued a TC — no collection allowed',
+      _snack('This student has been issued a TC, so fees cannot be collected.',
           AppColors.error);
       return;
     }
@@ -522,9 +523,9 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           .map((l) => '₹${l.amount.text.trim()}')
           .join(', ');
       _snack(
-          '${unnamed.length == 1 ? 'A line has' : '${unnamed.length} lines have'} '
-          'an amount ($missing) with no fee type chosen. Pick the fee type, or '
-          'clear the amount -- it cannot be put on the receipt as it stands.',
+          '${unnamed.length == 1 ? '1 line has' : '${unnamed.length} lines have'} '
+          'an amount ($missing) but no fee type. Select a fee type or clear '
+          'the amount.',
           AppColors.error);
       return;
     }
@@ -797,7 +798,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
       // a two-minute fix into a guessing game.
       if (mounted) {
         final msg = e.toString().replaceFirst('Exception: ', '');
-        _snack('Paytm error. $msg', AppColors.error);
+        _snack('Paytm could not complete the payment. $msg', AppColors.error);
       }
       return null;
     }
@@ -814,6 +815,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     _transDate = _date;
     final isUpi = _paymode == 'QR/UPI';
     final doc = _paymode == 'DD' ? 'DD' : 'Cheque';
+    final docWord = _paymode == 'DD' ? 'DD' : 'cheque'; // in sentences
     String? refErr, dateErr, bankErr;
 
     final result = await showDialog<bool>(
@@ -851,19 +853,19 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                       flex: 2,
                       child: _labeled('Transaction Date',
                           _dateBox(_transDate, (dt) => setD(() => _transDate = dt),
-                              hint: 'dd/mm/yyyy')),
+                              hint: AppText.dateHint)),
                     ),
                   ])
                 else ...[
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _labeled('$doc No *', TextField(
+                    Expanded(child: _labeled('$doc No. *', TextField(
                       controller: _transRefCtrl, style: _txt, autofocus: true,
                       onChanged: (_) { if (refErr != null) setD(() => refErr = null); },
                       decoration: _dec('Enter $doc number').copyWith(errorText: refErr),
                     ))),
                     SizedBox(width: 12.w),
                     Expanded(child: _labeled('$doc Date *',
-                        _dateBox(_transDate, (dt) => setD(() { _transDate = dt; dateErr = null; }), hint: 'dd/mm/yyyy'))),
+                        _dateBox(_transDate, (dt) => setD(() { _transDate = dt; dateErr = null; }), hint: AppText.dateHint))),
                   ]),
                   if (dateErr != null) ...[
                     SizedBox(height: 5.h),
@@ -878,6 +880,8 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                 ],
                 SizedBox(height: 22.h),
                 Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  AppUI.requiredNote(),
+                  const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
                     child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
@@ -886,7 +890,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                   ElevatedButton(
                     onPressed: () {
                       if (_transRefCtrl.text.trim().isEmpty) {
-                        setD(() => refErr = isUpi ? 'Enter the UPI Transaction ID' : '$doc number is required');
+                        setD(() => refErr = isUpi ? 'Enter the UPI transaction ID' : 'Enter the $docWord number');
                         return;
                       }
                       if (!isUpi) {
@@ -894,8 +898,8 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                         final noBank = _bankNameCtrl.text.trim().isEmpty;
                         if (noDate || noBank) {
                           setD(() {
-                            dateErr = noDate ? '$doc date is required' : null;
-                            bankErr = noBank ? 'Bank name is required' : null;
+                            dateErr = noDate ? 'Select the $docWord date' : null;
+                            bankErr = noBank ? 'Enter the bank name' : null;
                           });
                           return;
                         }
@@ -1004,7 +1008,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           setState(() => _saving = false);
           _snack(
             'This payment has already been receipted automatically. '
-            'Open Misc Collection to print it.',
+            'Open View Receipts on Miscellaneous Collection to print it.',
             AppColors.warning,
           );
           return;
@@ -1064,9 +1068,9 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      // Surface the real DB message — misc collection is a new path, so show
-      // the actual error (not the generic fallback) to aid diagnosis.
-      _snack('Save failed: $e', AppColors.error);
+      // friendlyError keeps the useful part of a database refusal while
+      // hiding raw exception text from the counter.
+      _snack('Could not save the collection. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -1075,9 +1079,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     // receipt under.
     final lhFg = await SupabaseService.feeGroupOfFeeTypes(
         [for (final l in lines) l.feeType.trim()]);
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final d = _date;
-    final dateStr = '${months[d.month - 1]} ${d.day}, ${d.year}';
+    final dateStr = formatDmy(_date);
     final data = ReceiptData(
       receiptNo: mcno,
       date: dateStr,
@@ -1126,13 +1128,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           children: [
             AppIcon('tick-circle', color: AppColors.success, size: 56.sp),
             SizedBox(height: 12.h),
-            Text('Collection Successful', style: AppUI.cardTitle),
+            Text('Collection Saved', style: AppUI.cardTitle),
             SizedBox(height: 8.h),
-            Text('Receipt No: $mcno',
+            Text('Receipt No.: $mcno',
                 style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
             Text('Amount: ₹${total.toStringAsFixed(2)}',
                 style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-            Text('Mode: ${_paymode ?? 'Cash'}',
+            Text('${AppText.paymentMode}: ${_paymode ?? 'Cash'}',
                 style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
             SizedBox(height: 16.h),
             OutlinedButton.icon(
@@ -1189,14 +1191,14 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                           );
                           if (res != null) {
                             await File(res).writeAsBytes(bytes);
-                            if (mounted) _snack('Receipt saved', AppColors.success);
+                            if (mounted) _snack('Receipt PDF saved', AppColors.success);
                           }
                         } catch (e) {
                           if (mounted) _snack(friendlyError(e), AppColors.error);
                         }
                       },
                       icon: AppIcon('document-download', size: 18),
-                      label: const Text('Download'),
+                      label: const Text('Download PDF'),
                     ),
                     SizedBox(width: 8.w),
                     ElevatedButton.icon(
@@ -1257,7 +1259,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           .limit(200);
       rows = List<Map<String, dynamic>>.from(res as List);
     } catch (e) {
-      if (mounted) _snack('Could not load receipts: $e', AppColors.error);
+      if (mounted) _snack('Could not load receipts. ${friendlyError(e)}', AppColors.error);
       return;
     }
     if (!mounted) return;
@@ -1282,14 +1284,14 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                 child: Row(children: [
                   AppUI.iconTile('receipt-2', size: 18),
                   SizedBox(width: 12.w),
-                  Text('Misc Receipts', style: AppUI.cardTitle),
+                  Text('Miscellaneous Receipts', style: AppUI.cardTitle),
                   const Spacer(),
                   IconButton(onPressed: () => Navigator.pop(ctx), icon: AppIcon.linear('close-circle', size: 20)),
                 ]),
               ),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16.w),
-                child: TextField(controller: search, style: _txt, decoration: _dec(schoolTerm('Search by receipt no / name / reg no')), onChanged: (_) => setSt(() {})),
+                child: TextField(controller: search, style: _txt, decoration: _dec(schoolTerm('Search by receipt no., name or register no.')), onChanged: (_) => setSt(() {})),
               ),
               SizedBox(height: 8.h),
               const Divider(height: 1),
@@ -1302,7 +1304,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                           : AppUI.empty(
                               icon: 'receipt-2',
                               title: 'No matching receipts',
-                              why: 'Nothing matches "${search.text.trim()}". Try another receipt no, name or reg no.'))
+                              why: 'Nothing matches "${search.text.trim()}". ${schoolTerm('Try another receipt no., name or register no.')}'))
                       : Builder(builder: (_) {
                           // Group receipts by date (rows already come newest-first).
                           final groups = <String, List<Map<String, dynamic>>>{};
@@ -1331,8 +1333,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
   String _prettyDate(String iso) {
     final d = DateTime.tryParse(iso);
     if (d == null) return iso.isEmpty ? '—' : iso;
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
+    return formatDmy(d);
   }
 
   Widget _dateHeader(String iso, int count, double total) => Padding(
@@ -1398,7 +1399,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           .eq('activestatus', 1);
       lines = List<Map<String, dynamic>>.from(res as List);
     } catch (e) {
-      if (mounted) _snack('Could not load receipt lines: $e', AppColors.error);
+      if (mounted) _snack('Could not load the receipt details. ${friendlyError(e)}', AppColors.error);
       return;
     }
     // From the receipt's own lines, not from the picker: a saved receipt is
@@ -1409,8 +1410,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     DateTime d = DateTime.now();
     final ds = mc['mcdate']?.toString();
     if (ds != null && ds.isNotEmpty) d = DateTime.tryParse(ds) ?? d;
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final dateStr = '${months[d.month - 1]} ${d.day}, ${d.year}';
+    final dateStr = formatDmy(d);
     final data = ReceiptData(
       receiptNo: mc['mcno']?.toString() ?? '',
       date: dateStr,
@@ -1526,7 +1526,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                   children: [
                     _sectionCard(
                       icon: _selection == 'S' ? 'people' : 'user-add',
-                      title: _selection == 'S' ? 'Student' : 'Party Details',
+                      title: _selection == 'S' ? 'Student' : 'Payer Details',
                       tint: AppColors.accent,
                       child: _partyRow(),
                     ),
@@ -1560,7 +1560,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Misc Fee Collection', style: AppUI.cardTitle),
+                Text('Miscellaneous Collection', style: AppUI.cardTitle),
                 Text('Counter collections that do not settle a fee demand',
                     style: AppUI.muted),
               ]),
@@ -1571,7 +1571,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
             child: Text(
                 _selection == 'S'
                     ? 'Against a registered student'
-                    : schoolTerm('Against a name — no reg no needed'),
+                    : schoolTerm('Against a name — no register no. needed'),
                 overflow: TextOverflow.ellipsis,
                 style: AppUI.muted),
           ),
@@ -1580,12 +1580,12 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
             return Row(mainAxisSize: MainAxisSize.min, children: [
               _toolButton(
                   icon: 'receipt-2',
-                  label: 'Receipts',
+                  label: 'View Receipts',
                   compact: compact,
                   onTap: _openReceiptsList),
               SizedBox(width: 8.w),
               _toolButton(
-                  icon: 'trash', label: 'Clear', compact: compact, onTap: _newRecord),
+                  icon: 'trash', label: AppText.clear, compact: compact, onTap: _newRecord),
             ]);
           }),
         ]),
@@ -1629,7 +1629,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     return Container(
       padding: EdgeInsets.all(3.w),
       decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [seg('STUDENT', 'S'), seg('OTHERS', 'O')]),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [seg('Student', 'S'), seg('Others', 'O')]),
     );
   }
 
@@ -1657,7 +1657,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           controller: controller,
           focusNode: focusNode,
           style: _txt,
-          decoration: _dec(_students.isEmpty ? 'Loading students…' : schoolTerm('Type reg no or name'))
+          decoration: _dec(_students.isEmpty ? 'Loading students…' : schoolTerm('Search by register no. or name'))
               .copyWith(
                   prefixIcon: Icon(Icons.search, size: 18.sp, color: AppColors.textLight),
                   prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0)),
@@ -1703,7 +1703,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           ),
           if (hasTc) ...[
             SizedBox(width: 8.w),
-            AppUI.chip('TC ISSUED', AppStatus.danger),
+            AppUI.chip('TC Issued', AppStatus.danger),
           ],
         ]),
       ),
@@ -1746,10 +1746,10 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     // Others mode — free text.
     return Wrap(spacing: 12.w, runSpacing: 10.h, children: [
       SizedBox(width: 260.w, child: _labeled('Name *', TextField(controller: _nameCtrl, style: _txt, decoration: _dec('Enter name')))),
-      SizedBox(width: 160.w, child: _labeled(schoolTerm('Reg No'), TextField(controller: _regnoCtrl, style: _txt, decoration: _dec('Optional')))),
-      SizedBox(width: 160.w, child: _labeled(schoolTerm('Class'), TextField(controller: _classCtrl, style: _txt, decoration: _dec('Optional')))),
-      SizedBox(width: 160.w, child: _labeled('City', TextField(controller: _cityCtrl, style: _txt, decoration: _dec('Optional')))),
-      SizedBox(width: 300.w, child: _labeled('Address', TextField(controller: _addressCtrl, style: _txt, decoration: _dec('Optional')))),
+      SizedBox(width: 200.w, child: _labeled(schoolTerm('Register No.'), TextField(controller: _regnoCtrl, style: _txt, decoration: _dec(schoolTerm('Enter register no. (optional)'))))),
+      SizedBox(width: 180.w, child: _labeled(schoolTerm('Class'), TextField(controller: _classCtrl, style: _txt, decoration: _dec(schoolTerm('Enter class (optional)'))))),
+      SizedBox(width: 180.w, child: _labeled('City', TextField(controller: _cityCtrl, style: _txt, decoration: _dec('Enter city (optional)')))),
+      SizedBox(width: 300.w, child: _labeled('Address', TextField(controller: _addressCtrl, style: _txt, decoration: _dec('Enter address (optional)')))),
     ]);
   }
 
@@ -1771,7 +1771,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
               children: [
                 Text(name, style: AppUI.label, overflow: TextOverflow.ellipsis),
                 Text(
-                    '${schoolTerm('Reg No')}: ${s['stuadmno'] ?? ''}'
+                    '${schoolTerm('Register No.:')} ${s['stuadmno'] ?? ''}'
                     "${cls.isEmpty ? '' : '  •  $cls'}",
                     style: AppUI.muted,
                     overflow: TextOverflow.ellipsis),
@@ -1799,7 +1799,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('TC ISSUED — NO COLLECTION',
+                  Text('TC Issued — Fees Cannot Be Collected',
                       style: TextStyle(
                           fontSize: 13.sp,
                           fontWeight: FontWeight.w800,
@@ -1807,9 +1807,9 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                           color: Colors.white)),
                   SizedBox(height: 2.h),
                   Text(
-                    'This student has been issued a Transfer Certificate. No '
-                    'misc fee can be collected against them. Re-activate them '
-                    'on Admission → Transfer Certificate first.',
+                    'This student has been issued a Transfer Certificate, so '
+                    'miscellaneous fees cannot be collected. Re-activate the '
+                    'student on TC → Transfer Certificate Entry first.',
                     style: TextStyle(
                         fontSize: 11.5.sp,
                         color: Colors.white.withValues(alpha: 0.92)),
@@ -1837,7 +1837,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           child: Row(children: [
             const AppIcon('calendar-1', size: 14, color: AppColors.success),
             SizedBox(width: 8.w),
-            Expanded(child: Text('${_date.day.toString().padLeft(2, '0')}/${_date.month.toString().padLeft(2, '0')}/${_date.year}', style: _txt)),
+            Expanded(child: Text(formatDmy(_date), style: _txt)),
             Icon(Icons.lock_outline, size: 13.sp, color: AppColors.textLight),
           ]),
         ), icon: 'calendar-1')),
@@ -1846,13 +1846,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           controller: TextEditingController(text: context.read<AuthProvider>().userName ?? ''),
           enabled: false, style: _txt, decoration: _dec('', enabled: false)), icon: 'people')),
         SizedBox(width: 12.w),
-        Expanded(flex: 2, child: _labeled('Remarks', TextField(controller: _remarksCtrl, style: _txt, decoration: _dec('Optional')), icon: 'receipt-edit')),
+        Expanded(flex: 2, child: _labeled('Remarks', TextField(controller: _remarksCtrl, style: _txt, decoration: _dec('Add remarks (optional)')), icon: 'receipt-edit')),
       ]),
     );
   }
 
 
-  Widget _dateBox(DateTime? value, ValueChanged<DateTime> onPicked, {String hint = 'dd/mm/yyyy'}) => InkWell(
+  Widget _dateBox(DateTime? value, ValueChanged<DateTime> onPicked, {String hint = AppText.dateHint}) => InkWell(
         onTap: () async {
           final picked = await showDatePicker(
             context: context,
@@ -1869,7 +1869,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           padding: EdgeInsets.symmetric(horizontal: AppUI.compact(context) ? 12 : 14),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.border)),
           child: Text(
-            value == null ? hint : '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}',
+            value == null ? hint : formatDmy(value),
             style: value == null
                 ? AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)
                 : AppUI.fieldText(context),
@@ -1940,7 +1940,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
               Icon(Icons.warning_amber_rounded,
                   size: 15.sp, color: AppColors.error),
               SizedBox(width: 5.w),
-              Text('NO RECEIPT SEQUENCE',
+              Text('No receipt sequence',
                   style: TextStyle(
                       fontSize: 11.sp,
                       fontWeight: FontWeight.w800,
@@ -1952,13 +1952,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           Tooltip(
             message:
                 'No bank account is mapped to ${chosen['fgdesc']}. Map one in '
-                'Setup → Bank Details, then Fee Master → Fee Group. Until then '
-                'this group cannot be collected.',
+                'Setup → Bank Accounts, then Fee Master → Fee Group. Until then '
+                'fees in this group cannot be collected.',
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.warning_amber_rounded,
                   size: 15.sp, color: AppColors.warning),
               SizedBox(width: 5.w),
-              Text('NO BANK ACCOUNT',
+              Text('No bank account',
                   style: TextStyle(
                       fontSize: 11.sp,
                       fontWeight: FontWeight.w800,
@@ -2024,7 +2024,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
             ElevatedButton.icon(
               onPressed: _saving ? null : () => setState(() => _lines.add(_MiscLine())),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add'),
+              label: const Text(AppText.addRow),
             ),
             const Spacer(),
             Text('Total', style: AppUI.muted),
@@ -2090,7 +2090,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                   size: 18.sp,
                   color: needsType ? AppColors.error : AppColors.textLight),
               prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0),
-              errorText: needsType ? 'Pick a fee type for this amount' : null,
+              errorText: needsType ? 'Select a fee type for this amount' : null,
               errorStyle: TextStyle(fontSize: 10.5.sp, height: 1.1),
               enabledBorder: needsType
                   ? OutlineInputBorder(
@@ -2159,7 +2159,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           child: IconButton(
             onPressed: _lines.length == 1 ? null : () => setState(() { _lines[i].amount.dispose(); _lines.removeAt(i); }),
             icon: Icon(Icons.remove_circle_outline, size: 20, color: _lines.length == 1 ? AppColors.textLight : AppColors.error),
-            tooltip: 'Remove',
+            tooltip: AppText.deleteRow,
             padding: EdgeInsets.zero,
           ),
         ),
@@ -2181,6 +2181,8 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
         Icon(Icons.info_outline, size: 15.sp, color: AppColors.textLight),
         SizedBox(width: 7.w),
         Text('$count fee ${count == 1 ? 'type' : 'types'}', style: AppUI.label),
+        SizedBox(width: 16.w),
+        AppUI.requiredNote(),
         const Spacer(),
         // What is about to be collected.
         Container(
@@ -2195,7 +2197,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             const AppIcon('tag', size: 15, color: AppColors.accent),
             SizedBox(width: 8.w),
-            Text('NET AMOUNT: ',
+            Text('Net Amount: ',
                 style: TextStyle(
                     fontSize: 13.sp,
                     fontWeight: FontWeight.w600,
@@ -2208,7 +2210,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
         ),
         SizedBox(width: 12.w),
         Container(
-          width: 168.w,
+          width: 190.w,
           height: AppUI.controlHeight(context),
           padding: EdgeInsets.symmetric(horizontal: 12.w),
           alignment: Alignment.center,
@@ -2223,7 +2225,8 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
               value: _paymode,
               isExpanded: true,
               isDense: false,
-              hint: Text('SELECT MODE',
+              hint: Text('Select payment mode',
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       fontSize: 13.sp,
                       fontWeight: FontWeight.w600,
@@ -2239,10 +2242,10 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                   color: AppColors.accent,
                   letterSpacing: 0.3),
               items: const [
-                DropdownMenuItem(value: 'Cash', child: Text('CASH')),
+                DropdownMenuItem(value: 'Cash', child: Text('Cash')),
                 DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
-                DropdownMenuItem(value: 'Paytm', child: Text('PAYTM')),
-                DropdownMenuItem(value: 'Cheque', child: Text('CHEQUE')),
+                DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
+                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
                 DropdownMenuItem(value: 'DD', child: Text('DD')),
               ],
               onChanged: (v) => setState(() => _paymode = v),
@@ -2260,7 +2263,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                 : Icon(_paymode == 'Paytm' ? Icons.open_in_new : Icons.send, size: 16.sp),
             label: Text(_saving
                 ? 'Saving…'
-                : (_paymode == 'Cash' ? 'Save & Print' : 'Proceed to Pay')),
+                : (_paymode == 'Cash' ? 'Save Receipt' : 'Proceed to Pay')),
         ),
       ]),
     );

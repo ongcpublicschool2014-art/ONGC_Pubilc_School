@@ -18,6 +18,7 @@ import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/formatters.dart';
 
@@ -151,12 +152,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   // horizontally (17 columns don't fit an Expanded/flex layout — long headers
   // like "Arrear Class" overflowed the container), so header + data cells share
   // these exact widths and _gridTotalW is their sum (+ slack for the error icon).
-  static const double _wSno = 60, _wDemno = 120, _wType = 90, _wRoll = 130,
-      _wClass = 120, _wSem = 110, _wFeeType = 150, _wYear = 100, _wDueAmt = 100,
-      _wConCat = 100, _wConAmt = 100, _wDueDate = 120, _wClaId = 85,
-      _wSemId = 75, _wFeeId = 75, _wCfId = 75, _wArrear = 130;
-  // Sum of the 17 column widths above (1740) + slack for the data-row error icon.
-  static const double _gridTotalW = 1800;
+  static const double _wSno = 60, _wDemno = 120, _wType = 90, _wRoll = 150,
+      _wClass = 120, _wSem = 110, _wFeeType = 150, _wYear = 105, _wDueAmt = 125,
+      _wConCat = 190, _wConAmt = 170, _wDueDate = 120, _wClaId = 105,
+      _wSemId = 115, _wFeeId = 75, _wCfId = 145, _wArrear = 145;
+  // Sum of the 17 column widths above (2095) + slack for the data-row error icon.
+  static const double _gridTotalW = 2155;
 
   @override
   void initState() {
@@ -588,13 +589,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     // Due date must parse to a real calendar date (accepts DD-MM-YYYY etc.).
     final dueRaw = _cellByKey(row, 'duedate');
     if (dueRaw != null && _parseDate(dueRaw) == null) {
-      errors['duedate'] = 'Invalid Due Date "$dueRaw" (use YYYY-MM-DD or DD-MM-YYYY)';
+      errors['duedate'] = 'Due date "$dueRaw" is not a valid date. Use YYYY-MM-DD or DD-MM-YYYY';
     }
     final ft = _cellByKey(row, 'demfeetype');
     if (ft != null && _feeTypes.isNotEmpty) {
       final ftLower = ft.toLowerCase();
       if (!_feeTypes.any((f) => f.toLowerCase() == ftLower)) {
-        errors['demfeetype'] = 'Fee Type "$ft" not found - import it first';
+        errors['demfeetype'] = 'Fee type "$ft" is not in Fee Master. Add it there, then validate again';
       }
     }
     String norm(String s) => s.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
@@ -602,17 +603,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (admRaw != null && _importStudentByAdmno.isNotEmpty) {
       final student = _importStudentByAdmno[norm(admRaw)];
       if (student == null) {
-        errors['stuadmno'] = '${schoolTerm('Roll No')} "$admRaw" not found in students master';
+        errors['stuadmno'] = '${schoolTerm('Roll No.')} "$admRaw" does not match any student. Check the number and validate again';
       } else {
         final clsRaw = _cellByKey(row, 'stuclass');
         if (clsRaw != null && (student['stuclass'] ?? '').isNotEmpty
             && norm(clsRaw) != norm(student['stuclass']!)) {
-          errors['stuclass'] = schoolTerm('Class "$clsRaw" doesn\'t match student (registered as "${student['stuclass']}")');
+          errors['stuclass'] = schoolTerm('Class "$clsRaw" does not match this student\'s class "${student['stuclass']}". Correct it and validate again');
         }
         final courRaw = _cellByKey(row, 'courname');
         if (courRaw != null && (student['courname'] ?? '').isNotEmpty
             && norm(courRaw) != norm(student['courname']!)) {
-          errors['courname'] = schoolTerm('Course "$courRaw" doesn\'t match student (registered as "${student['courname']}")');
+          errors['courname'] = schoolTerm('Course "$courRaw" does not match this student\'s course "${student['courname']}". Correct it and validate again');
         }
       }
     }
@@ -637,7 +638,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       }
     });
     final parts = <String>[];
-    if (missing.isNotEmpty) parts.add('Missing: ${missing.join(', ')}');
+    if (missing.isNotEmpty) parts.add('Required values are blank: ${missing.join(', ')}');
     parts.addAll(detail);
     return parts.join(' • ');
   }
@@ -893,21 +894,21 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         final feeId = int.tryParse(_cellByKey(row, 'fee_id') ?? '');
         if (feeId != null && feeIds.isNotEmpty && !feeIds.contains(feeId)) {
           _skipped++;
-          _importErrors.add('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Fee Id $feeId not found in Fee Types — fix the file');
+          _importErrors.add('${schoolTerm('Roll No.')} ${_cellByKey(row, 'stuadmno') ?? ''}: Fee ID $feeId is not in Fee Master. Correct it in the file and import again.');
           continue;
         }
         // Reject a row whose Class Fee Id doesn't match a class-fee template, so
         // an unmatched id errors instead of importing an unlinked demand.
         if (cfId != null && cfIds.isNotEmpty && !cfIds.contains(cfId)) {
           _skipped++;
-          _importErrors.add(schoolTerm('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Class Fee Id $cfId not found in Class Fees — fix the file'));
+          _importErrors.add(schoolTerm('Roll No. ${_cellByKey(row, 'stuadmno') ?? ''}: Class Fee ID $cfId is not in Class Fee Demand. Correct it in the file and import again.'));
           continue;
         }
         // Reject a row whose Semester Id doesn't exist in this institution.
         final semId = int.tryParse(_cellByKey(row, 'sem_id') ?? '');
         if (semId != null && semIds.isNotEmpty && !semIds.contains(semId)) {
           _skipped++;
-          _importErrors.add(schoolTerm('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Semester Id $semId not found in Semesters — fix the file'));
+          _importErrors.add(schoolTerm('Roll No. ${_cellByKey(row, 'stuadmno') ?? ''}: Semester ID $semId is not in the Semester master. Correct it in the file and import again.'));
           continue;
         }
 
@@ -963,7 +964,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         }
         if (stuId == null) {
           _skipped++;
-          _importErrors.add('Row ${i + 2}: ${schoolTerm('Roll No')} "$admNoRaw" not found in active students');
+          _importErrors.add('Row ${i + 2}: ${schoolTerm('Roll No.')} "$admNoRaw" does not match any active student.');
           continue;
         }
 
@@ -989,8 +990,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         if (named != null) {
           if (named.stuId != stuId) {
             _skipped++;
-            _importErrors.add('Adm $admNoRaw: Demand No "$sheetDemno" belongs '
-                'to another student — remove it from the row, or use that '
+            _importErrors.add('${schoolTerm('Roll No.')} $admNoRaw: Demand No. "$sheetDemno" belongs '
+                'to another student. Remove it from the row, or enter this '
                 "student's own demand number.");
             continue;
           }
@@ -1006,10 +1007,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           // would delete a bill, adding a third would double it.
           if (already.length > 1) {
             _skipped++;
-            _importErrors.add('Adm $admNoRaw: $demType / $demTerm already has '
+            _importErrors.add('${schoolTerm('Roll No.')} $admNoRaw: $demType / $demTerm already has '
                 '${already.length} demands (${already.map((e) => e.demno).join(", ")}). '
-                'Put the Demand No of the one you mean in the row, or fix them '
-                'in Fee Definition, then re-import.');
+                'Enter the Demand No. of the one you mean in the row, or fix them '
+                'in Student Fee Definition, then import again.');
             continue;
           }
           if (already.length == 1 && already.first.demno.isNotEmpty) {
@@ -1023,7 +1024,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         // would be reduced below collections). First imports have paid = 0.
         if (feeAmount + 0.005 < existingPaid + conAmount) {
           _skipped++;
-          _importErrors.add('Adm $admNoRaw: Due Amount ${feeAmount.toStringAsFixed(0)} is less than paid (${existingPaid.toStringAsFixed(0)}) + concession (${conAmount.toStringAsFixed(0)})');
+          _importErrors.add('${schoolTerm('Roll No.')} $admNoRaw: due amount ${feeAmount.toStringAsFixed(0)} is less than the amount already paid (${existingPaid.toStringAsFixed(0)}) plus concession (${conAmount.toStringAsFixed(0)}). Enter at least ${(existingPaid + conAmount).toStringAsFixed(0)}.');
           continue;
         }
 
@@ -1046,7 +1047,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         final dueParsed = _parseDate(dueRaw);
         if (dueRaw != null && dueParsed == null) {
           _skipped++;
-          _importErrors.add('Row ${i + 2}: Invalid Due Date "$dueRaw" (use YYYY-MM-DD or DD-MM-YYYY)');
+          _importErrors.add('Row ${i + 2}: due date "$dueRaw" is not a valid date. Use YYYY-MM-DD or DD-MM-YYYY.');
           continue;
         }
 
@@ -1116,7 +1117,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               _imported++;
             } catch (e2) {
               _skipped++;
-              _importErrors.add('Adm ${row['stuadmno']}: ${_friendlyError(e2.toString())}');
+              _importErrors.add('${schoolTerm('Roll No.')} ${row['stuadmno']}: ${_friendlyError(e2.toString())}');
             }
           }
         }
@@ -1148,16 +1149,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   static String _friendlyError(String msg) {
     final m = msg.toLowerCase();
-    if (m.contains('duplicate key') || m.contains('unique constraint')) return 'Duplicate record found';
+    if (m.contains('duplicate key') || m.contains('unique constraint')) return 'This fee demand already exists.';
     if (m.contains('not-null') || m.contains('null value')) {
-      final match = RegExp(r'column "(\w+)"').firstMatch(msg);
-      return '${match?.group(1) ?? 'Field'} is required';
+      // Name the column as the sheet labels it, not the database column.
+      final col = RegExp(r'column "(\w+)"').firstMatch(msg)?.group(1);
+      return col == null ? 'A required value is blank.' : '${schoolTerm(_importFieldLabels[col] ?? col)} is required.';
     }
-    if (m.contains('foreign key') || m.contains('fkey')) return 'Invalid reference - check linked values';
-    if (m.contains('check constraint')) return 'Invalid value format';
-    if (m.contains('value too long')) return 'Value too long for the field';
-    if (m.contains('invalid input syntax')) return 'Invalid data format';
-    if (m.contains('permission denied')) return 'Permission denied';
+    if (m.contains('foreign key') || m.contains('fkey')) return 'A linked value (student, class or fee type) does not exist. Check those columns and import again.';
+    if (m.contains('check constraint')) return 'A value is not in the expected format. Check amounts and dates.';
+    if (m.contains('value too long')) return 'A value is too long for its column. Shorten it and import again.';
+    if (m.contains('invalid input syntax')) return 'A value is not in the expected format. Check amounts and dates.';
+    if (m.contains('permission denied')) return 'You do not have permission to import fee demands. Ask an administrator.';
     return msg.length > 80 ? '${msg.substring(0, 80)}...' : msg;
   }
 
@@ -1282,7 +1284,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                       if (!_showImport) _resetImport();
                     }),
                     icon: AppIcon(_showImport ? 'close-circle' : 'document-upload', size: AppBtn.iconSize(context), color: Colors.white),
-                    label: Text(_showImport ? 'Close Import' : 'Import CSV/Excel'),
+                    label: Text(_showImport ? 'Close Import' : AppText.import),
                     style: _showImport ? AppUI.danger(context) : null,
                   );
                 }),
@@ -1908,9 +1910,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   String _formatDueDate(String dateStr) {
     if (dateStr == '-' || dateStr.isEmpty) return '-';
     try {
-      final dt = DateTime.parse(dateStr);
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${dt.day.toString().padLeft(2, '0')}-${months[dt.month - 1]}-${dt.year}';
+      return formatDmy(DateTime.parse(dateStr));
     } catch (_) {
       return dateStr;
     }
@@ -1930,8 +1930,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         icon: 'message-text',
         title: _searchQuery.isNotEmpty ? 'No matching students' : 'No students found',
         why: _searchQuery.isNotEmpty
-            ? 'Nothing in this class matches the search. Clear it to see every student.'
-            : 'This class has no students with fee demands yet. Use Back to pick another class.',
+            ? schoolTerm('Nothing in this class matches the search. Clear it to see every student.')
+            : schoolTerm('This class has no students with fee demands yet. Use Back to pick another class.'),
       );
     }
 
@@ -1950,7 +1950,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text(schoolTerm('ROLL NO.'), style: AppUI.tableHead)),
                     Expanded(flex: 2, child: Text('NAME', style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text('DEMAND', style: AppUI.tableHead, textAlign: TextAlign.right)),
@@ -1981,7 +1981,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final noDemand = s['no_demand'] == true;
                     final allPaid = unpaidCount == 0;
                     final statusLabel =
-                        noDemand ? 'No Demand' : (allPaid ? 'Paid' : 'Unpaid');
+                        noDemand ? 'No Demand' : (allPaid ? 'Paid' : 'Pending');
                     final statusKind = noDemand
                         ? AppStatus.neutral
                         : (allPaid ? AppStatus.success : AppStatus.warning);
@@ -2129,7 +2129,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           final widths = [for (final w in baseWidths) w * scale];
           final tableWidth = widths.reduce((a, b) => a + b) + 40;
           const headers = <String>[
-            'S No.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'CONCESSION', 'PAID',
+            'S. NO.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'CONCESSION', 'PAID',
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
           ];
           final hStyle = AppUI.tableHead;
@@ -2366,7 +2366,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               ElevatedButton.icon(
                 onPressed: _pickFile,
                 icon: AppIcon('document-upload', size: 16),
-                label: const Text('Import'),
+                label: const Text(AppText.chooseFile),
               ),
               SizedBox(width: 8.w),
               Builder(builder: (_) {
@@ -2374,14 +2374,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 return OutlinedButton.icon(
                   onPressed: hasErrors ? _exportRowsWithErrors : _exportTemplate,
                   icon: AppIcon(hasErrors ? 'document-download' : 'grid-1', size: 16),
-                  label: Text(hasErrors ? 'Export with Errors' : 'Format to Excel'),
+                  label: Text(hasErrors ? 'Export with Errors' : AppText.downloadTemplate),
                 );
               }),
               SizedBox(width: 8.w),
               OutlinedButton.icon(
                 onPressed: _exportSampleData,
                 icon: AppIcon('document-download', size: 16),
-                label: const Text('Sample Data'),
+                label: const Text(AppText.downloadSample),
               ),
             ],
           ),
@@ -2420,22 +2420,22 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     ),
                     child: Row(
                       children: [
-                        _gridHeaderCell('S.No', width: _wSno, center: true),
-                        _gridHeaderCell('Demand No', width: _wDemno),
+                        _gridHeaderCell(AppText.serialNo, width: _wSno, center: true),
+                        _gridHeaderCell('Demand No.', width: _wDemno),
                         _gridHeaderCell('Type', width: _wType),
-                        _gridHeaderCell(schoolTerm('Roll No *'), width: _wRoll),
+                        _gridHeaderCell(schoolTerm('Roll No. *'), width: _wRoll),
                         _gridHeaderCell(schoolTerm('Class *'), width: _wClass),
                         _gridHeaderCell(schoolTerm('Semester *'), width: _wSem),
                         _gridHeaderCell('Fee Type *', width: _wFeeType),
-                        _gridHeaderCell('Year *', width: _wYear),
-                        _gridHeaderCell('Due Amt *', width: _wDueAmt, center: true),
-                        _gridHeaderCell('Con. Cat', width: _wConCat),
-                        _gridHeaderCell('Con. Amt', width: _wConAmt, center: true),
+                        _gridHeaderCell('Fee Year *', width: _wYear),
+                        _gridHeaderCell('Due Amount *', width: _wDueAmt, center: true),
+                        _gridHeaderCell('Concession Category', width: _wConCat),
+                        _gridHeaderCell('Concession Amount', width: _wConAmt, center: true),
                         _gridHeaderCell('Due Date *', width: _wDueDate, center: true),
-                        _gridHeaderCell(schoolTerm('Class Id'), width: _wClaId, center: true),
-                        _gridHeaderCell('Sem Id', width: _wSemId, center: true),
-                        _gridHeaderCell('Fee Id', width: _wFeeId, center: true),
-                        _gridHeaderCell('CF Id', width: _wCfId, center: true),
+                        _gridHeaderCell(schoolTerm('Class ID'), width: _wClaId, center: true),
+                        _gridHeaderCell(schoolTerm('Semester ID'), width: _wSemId, center: true),
+                        _gridHeaderCell('Fee ID', width: _wFeeId, center: true),
+                        _gridHeaderCell(schoolTerm('Class Fee ID'), width: _wCfId, center: true),
                         _gridHeaderCell(schoolTerm('Arrear Class'), width: _wArrear),
                       ],
                     ),
@@ -2446,7 +2446,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         ? AppUI.empty(
                             icon: 'element-4',
                             title: 'No data loaded',
-                            why: 'Click Browse to load a CSV or Excel file',
+                            why: 'Click Choose File to load a CSV or Excel file.',
                           )
                         : ListView.builder(
                             itemCount: _rows.length,
@@ -2542,7 +2542,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 // Enabled only after a successful Validate (no row errors).
                 onPressed: _isValidated && _rows.isNotEmpty && _mappings.contains('stuadmno') && _mappings.contains('feeamount') ? _startImport : null,
                 icon: AppIcon('save-2', size: 16),
-                label: const Text('Save'),
+                label: const Text(AppText.import),
               ),
               SizedBox(width: 8.w),
               OutlinedButton(
@@ -2826,7 +2826,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${rowErrors.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('${rowErrors.length} row(s) have errors. Fix the cells highlighted in red and validate again.'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -2876,8 +2876,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             if (_willUpdate > 0) ...[
               SizedBox(height: 4.h),
               Text(
-                  '$_willUpdate updated a demand the student already had'
-                  ' · ${_imported - _willUpdate} newly raised',
+                  '$_willUpdate existing demand(s) updated'
+                  ' · ${_imported - _willUpdate} new demand(s) added',
                   textAlign: TextAlign.center,
                   style: AppUI.muted),
             ],
@@ -2901,7 +2901,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             SizedBox(height: 20.h),
             ElevatedButton(
               onPressed: _resetImport,
-              child: const Text('Done'),
+              child: const Text(AppText.close),
             ),
           ],
         ),

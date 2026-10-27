@@ -8,6 +8,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -472,7 +473,7 @@ class _StudentFeeCollectionScreenState
                   OutlinedButton.icon(
                     onPressed: () => _switchPayGroup(b.fgId, selectAll: true),
                     icon: Icon(Icons.swap_horiz, size: 14.sp),
-                    label: Text('Collect this group',
+                    label: Text('Collect This Group',
                         style: TextStyle(
                             fontSize: 11.sp, fontWeight: FontWeight.w700)),
                     style: OutlinedButton.styleFrom(
@@ -494,11 +495,10 @@ class _StudentFeeCollectionScreenState
                   Tooltip(
                     message: _fgWithoutBank.contains(b.fgId)
                         ? 'No bank account is mapped to ${b.label}. '
-                            'Map one in Setup → Bank Details, then Fee Master → '
-                            'Fee Group. Until then nothing on this screen can '
-                            'be collected — the group has nowhere to bank it.'
-                        : 'No payment sequence for ${b.label}. Create one in '
-                            'Fee Master → Payment Sequence.',
+                            'Map one in Setup → Bank Accounts → Fee Group '
+                            'Assignments before collecting this group\'s fees.'
+                        : 'No receipt sequence for ${b.label}. Create one in '
+                            'Setup → Sequence Master → Receipt Sequence.',
                     child: Container(
                       padding:
                           EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
@@ -514,8 +514,8 @@ class _StudentFeeCollectionScreenState
                         SizedBox(width: 4.w),
                         Text(
                             _fgWithoutBank.contains(b.fgId)
-                                ? 'NO BANK ACCOUNT'
-                                : 'NO SEQUENCE',
+                                ? 'No Bank Account'
+                                : 'No Receipt Sequence',
                             style: TextStyle(
                                 fontSize: 10.sp,
                                 fontWeight: FontWeight.w800,
@@ -614,15 +614,15 @@ class _StudentFeeCollectionScreenState
                 const _THCell('Due Date', flex: 2),
                 // The rupee sign belongs in the heading, not repeated down
                 // every cell of a money column.
-                const _THCell('Fee Amt (₹)', flex: 2, textAlign: TextAlign.right),
-                const _THCell('Bal. Amt (₹)', flex: 2, textAlign: TextAlign.right),
+                const _THCell('Fee Amount (₹)', flex: 2, textAlign: TextAlign.right),
+                const _THCell('Balance Amount (₹)', flex: 2, textAlign: TextAlign.right),
                 // Read-only: filled in by adjust_advance when an advance is
                 // applied, never typed here. School settles advances on the
                 // Advance Adjustment screen, so it has no such column.
                 if (!isSchool) const _THCell('Adjustment (₹)', flex: 2, textAlign: TextAlign.right),
                 const _THCell('Collect Amount (₹)', flex: 3, textAlign: TextAlign.center),
                 const _THCell('Fine (₹)', flex: 2, textAlign: TextAlign.center),
-                const _THCell('Net Amt (₹)', flex: 2, textAlign: TextAlign.right),
+                const _THCell('Net Amount (₹)', flex: 2, textAlign: TextAlign.right),
               ],
             ),
           ),
@@ -1397,7 +1397,7 @@ class _StudentFeeCollectionScreenState
 
       if ((studentRows as List).isEmpty) {
         setState(() {
-          _errorMsg = 'No student found matching "$admNo"';
+          _errorMsg = 'No student found for "$admNo". ${schoolTerm('Check the register no. or name and try again.')}';
           _searching = false;
         });
         return;
@@ -1996,7 +1996,7 @@ class _StudentFeeCollectionScreenState
                   children: [
                     Text('Fee Collection', style: AppUI.cardTitle),
                     SizedBox(height: 2.h),
-                    Text('Collect and manage student fees easily', style: AppUI.muted),
+                    Text('Collect fees and view receipts for a student', style: AppUI.muted),
                   ]),
               const Spacer(),
               SizedBox(
@@ -2008,9 +2008,9 @@ class _StudentFeeCollectionScreenState
                   borderRadius: BorderRadius.circular(12.r),
                   elevation: 6,
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _inputDec(schoolTerm('Select Course'), filled: _selectedCourse != null),
+                  decoration: _inputDec(schoolTerm('Select course'), filled: _selectedCourse != null),
                   style: _ddTextStyle(),
-                  hint: Text(schoolTerm('Select Course'),
+                  hint: Text(schoolTerm('Select course'),
                       style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                   items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: _ddItemStyle()))).toList(),
                   selectedItemBuilder: (context) => _courseList.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
@@ -2050,9 +2050,9 @@ class _StudentFeeCollectionScreenState
                     borderRadius: BorderRadius.circular(12.r),
                     elevation: 6,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _inputDec(schoolTerm('Select Class'), filled: value != null),
+                    decoration: _inputDec(schoolTerm('Select class'), filled: value != null),
                     style: _ddTextStyle(),
-                    hint: Text(schoolTerm('Select Class'),
+                    hint: Text(schoolTerm('Select class'),
                         style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                     items: items,
                     selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text((m.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
@@ -2076,7 +2076,7 @@ class _StudentFeeCollectionScreenState
                     controller: _admNoController,
                     onSubmitted: (_) => _search(),
                     onChanged: (v) { setState(() {}); _onSearchChanged(v); },
-                    decoration: _inputDec(schoolTerm('Reg No or Student Name'), filled: _admNoController.text.trim().isNotEmpty).copyWith(
+                    decoration: _inputDec(schoolTerm('Search by register no. or name'), filled: _admNoController.text.trim().isNotEmpty).copyWith(
                       prefixIcon: const Padding(
                         padding: EdgeInsets.only(left: 12, right: 8),
                         child: Icon(Icons.search, size: 18, color: AppColors.textLight),
@@ -2137,7 +2137,7 @@ class _StudentFeeCollectionScreenState
                   style: AppUI.body.copyWith(fontWeight: FontWeight.w800),
                   overflow: TextOverflow.ellipsis),
               SizedBox(height: 2.h),
-              Text('${schoolTerm('Roll No')}: $admNo', style: AppUI.muted),
+              Text('${schoolTerm('Roll Number')}: $admNo', style: AppUI.muted),
             ],
           ),
         ),
@@ -2199,8 +2199,7 @@ class _StudentFeeCollectionScreenState
     if (v == null) return '-';
     final dt = DateTime.tryParse(v.toString());
     if (dt == null) return v.toString();
-    final l = dt.toLocal();
-    return '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}/${l.year}';
+    return formatDmy(dt.toLocal());
   }
 
   /// Show the selected student's receipts with a per-row delete (void) option.
@@ -2600,7 +2599,7 @@ class _StudentFeeCollectionScreenState
                 // Arrear-only: pick which arrear YEAR to collect (each year =
                 // its own receipt). "All Years" collects across years.
                 if (_student != null && _seqType == 'ARREAR' && _arrearYears.isNotEmpty) ...[
-                  Text('Year:', style: AppUI.label),
+                  Text('Arrear Year:', style: AppUI.label),
                   SizedBox(width: 8.w),
                   SizedBox(
                     width: 150.w,
@@ -2641,11 +2640,11 @@ class _StudentFeeCollectionScreenState
                       icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                       decoration: _headerDropdownDec(filled: _selectedTerm != null),
                       items: [
-                        DropdownMenuItem<String?>(value: null, child: Text('All', style: AppUI.fieldText(context))),
+                        DropdownMenuItem<String?>(value: null, child: Text('All Fee Types', style: AppUI.fieldText(context))),
                         ..._terms.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t, style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis))),
                       ],
                       selectedItemBuilder: (context) => [
-                        Align(alignment: Alignment.centerLeft, child: Text('All', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                        Align(alignment: Alignment.centerLeft, child: Text('All Fee Types', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
                         ..._terms.map((t) => Align(alignment: Alignment.centerLeft, child: Text(t, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
                       ],
                       onChanged: (v) => setState(() => _selectedTerm = v),
@@ -2736,7 +2735,7 @@ class _StudentFeeCollectionScreenState
                       ? 'Admission advance: ${formatIndianNumber(_pendingAdjustTotal)} will be taken off the fees, from $_pendingAdvNo'
                       : '${_pendingPlans.length > 1 ? '${_pendingPlans.length} advances' : 'Student advance'}: '
                           '${formatIndianNumber(_pendingAdjustTotal)} will be adjusted from $_pendingAdvNo')
-                  : 'STUDENT ADVANCE — ${formatIndianNumber(avail)}',
+                  : 'Student Advance: ₹${formatIndianNumber(avail)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w700, color: AppColors.textOnPrimary),
@@ -2745,12 +2744,12 @@ class _StudentFeeCollectionScreenState
             Text(
               planned
                   ? (_pendingAdvIsAdmission
-                      ? 'Admission advance — it REDUCES the fee rather than paying it. '
-                          'Not saved yet; written when you press the button below.'
+                      ? 'Admission advance: it reduces the fee rather than paying it. '
+                          'Not saved yet. It is saved when you press the button below.'
                       : 'Not saved yet. It is written when you press the button below, along with any cash.')
                   : (_advances.length == 1
-                      ? '$nos · PAYS a demand like cash. Adjust it below instead of taking money.'
-                      : '${_advances.length} advances ($nos) · They PAY a demand like cash. Adjust them below instead of taking money.'),
+                      ? '$nos · Pays a fee demand like cash. Adjust it below instead of collecting money.'
+                      : '${_advances.length} advances ($nos) · They pay a fee demand like cash. Adjust them below instead of collecting money.'),
               style: TextStyle(fontSize: 11.5.sp, color: AppColors.sidebarText),
             ),
           ]),
@@ -2800,7 +2799,7 @@ class _StudentFeeCollectionScreenState
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('TC ISSUED — NO COLLECTION',
+                Text('TC Issued: Fees Cannot Be Collected',
                     style: TextStyle(
                         fontSize: 13.5.sp,
                         fontWeight: FontWeight.w800,
@@ -2808,10 +2807,10 @@ class _StudentFeeCollectionScreenState
                         color: Colors.white)),
                 SizedBox(height: 2.h),
                 Text(
-                  'This student has been issued a Transfer Certificate. The dues '
-                  'below are shown for reference only — no fee, advance or '
-                  'adjustment can be taken here. Re-activate them on Admission '
-                  '→ Transfer Certificate first.',
+                  'This student has been issued a Transfer Certificate (TC). The dues '
+                  'below are for reference only; no fee, advance or adjustment can '
+                  'be collected. To collect, reactivate the student in TC → '
+                  'Transfer Certificate Entry first.',
                   style: TextStyle(
                       fontSize: 11.5.sp, color: Colors.white.withValues(alpha: 0.92)),
                 ),
@@ -2854,7 +2853,7 @@ class _StudentFeeCollectionScreenState
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'ADMISSION ADVANCE — ${formatIndianNumber(avail)}',
+                  'Admission Advance: ₹${formatIndianNumber(avail)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2864,8 +2863,8 @@ class _StudentFeeCollectionScreenState
                 ),
                 SizedBox(height: 2.h),
                 Text(
-                  '${nos.isEmpty ? '' : '$nos · '}REDUCES the fee rather than '
-                  'paying it, so it cannot be adjusted here. Apply it on '
+                  '${nos.isEmpty ? '' : '$nos · '}Reduces the fee rather than '
+                  'paying it, so it cannot be adjusted here. Apply it in '
                   'Fees → Advance Adjustment.',
                   style: TextStyle(fontSize: 11.5.sp, color: AppColors.sidebarText),
                 ),
@@ -3269,12 +3268,12 @@ class _StudentFeeCollectionScreenState
                           if (hasAdjustment)
                             '${formatIndianNumber(adjustedPlanned)} '
                                 '${_pendingAdvIsAdmission ? 'will reduce this fee' : 'will settle this row'} '
-                                'from advance $_pendingAdvNo — NOT saved yet. '
-                                'Undo or Change on the banner above.',
+                                'from advance $_pendingAdvNo. Not saved yet. '
+                                'Use Undo or Change on the banner above.',
                           if (adjustedSaved > 0)
                             '${formatIndianNumber(adjustedSaved)} was settled from an '
-                                'advance earlier. It is already taken off Bal. Amt, '
-                                'and it is reversed by cancelling its receipt in '
+                                'advance earlier. It is already deducted from the balance '
+                                'amount. To reverse it, cancel its receipt in '
                                 'Fee Cancel Receipt.',
                         ].join('\n\n'),
                         child: Checkbox(
@@ -3390,7 +3389,7 @@ class _StudentFeeCollectionScreenState
                                       content: Text(planned > 0
                                           ? 'Only ${formatIndianNumber(cap)} is payable in cash — '
                                               '${formatIndianNumber(planned)} of this row is being adjusted from the advance.'
-                                          : 'Collection amount cannot exceed balance due (${formatIndianNumber(bal)})'),
+                                          : 'Collect amount cannot be more than the balance due (₹${formatIndianNumber(bal)}).'),
                                       backgroundColor: AppColors.error,
                                       duration: const Duration(seconds: 3),
                                     ),
@@ -3490,8 +3489,8 @@ class _StudentFeeCollectionScreenState
 
     if (_student == null) {
       return AppUI.empty(
-        title: 'Search a student to view pending fees',
-        why: 'Pick a course and class, or type a reg no or name in the search box above.',
+        title: 'Search for a student to view pending fees',
+        why: schoolTerm('Select a course and class, or search by register no. or name above.'),
         icon: 'search-normal-1',
       );
     }
@@ -3559,8 +3558,8 @@ class _StudentFeeCollectionScreenState
                 SizedBox(width: 10.w),
                 Flexible(
                   child: Text(
-                    '· still due: ${_otherGroupsOutstanding.entries.map((e) => '${e.key} ₹${formatIndianNumber(e.value)}').join(', ')} '
-                    '(separate receipt)',
+                    '· Still due: ${_otherGroupsOutstanding.entries.map((e) => '${e.key} ₹${formatIndianNumber(e.value)}').join(', ')} '
+                    '(collected on a separate receipt)',
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: 11.5.sp,
@@ -3585,7 +3584,7 @@ class _StudentFeeCollectionScreenState
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('NET AMOUNT: ',
+                      Text('Net Amount: ',
                           style: AppUI.label.copyWith(letterSpacing: 0.3)),
                       // Live total — subscribes to every visible row's
                       // col/fine controller so it ticks per keystroke
@@ -3648,17 +3647,17 @@ class _StudentFeeCollectionScreenState
                         value: modeEnabled ? _paymentMode : null,
                         isExpanded: true,
                         isDense: false,
-                        hint: Text('SELECT MODE', style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, letterSpacing: 0.3)),
+                        hint: Text('Select payment mode', style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, letterSpacing: 0.3)),
                         icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         elevation: 6,
                         style: AppUI.fieldText(context, filled: true).copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.3),
                         items: const [
-                          DropdownMenuItem(value: 'Cash', child: Text('CASH')),
-                          DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
-                          DropdownMenuItem(value: 'Paytm', child: Text('PAYTM')),
-                          DropdownMenuItem(value: 'Cheque', child: Text('CHEQUE')),
+                          DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                          DropdownMenuItem(value: 'QR/UPI', child: Text('QR / UPI')),
+                          DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
+                          DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
                           DropdownMenuItem(value: 'DD', child: Text('DD')),
                         ],
                         onChanged: modeEnabled
@@ -3687,7 +3686,7 @@ class _StudentFeeCollectionScreenState
                       : _selected.isEmpty
                           ? 'Tick at least one due.'
                           : (_totalNetSelected > 0 && _paymentMode == null)
-                              ? 'Pick a payment mode first.'
+                              ? 'Select a payment mode first.'
                               : '',
                   child: ElevatedButton.icon(
                   // A pure adjustment (advance covers everything) needs no
@@ -3757,7 +3756,7 @@ class _StudentFeeCollectionScreenState
                   SizedBox(height: 12.h),
                   _cashRow('Net Amount', '${formatIndianNumber(total)}', highlight: true),
                   SizedBox(height: 14.h),
-                  AppUI.fieldLabel('Tender Amount', required: true),
+                  AppUI.fieldLabel('Cash Received', required: true),
                   TextField(
                     controller: _tenderAmountController,
                     autofocus: true,
@@ -3770,16 +3769,18 @@ class _StudentFeeCollectionScreenState
                   if ((_cashTenderAmount ?? 0) < total && (_cashTenderAmount ?? 0) > 0) ...[
                     SizedBox(height: 6.h),
                     Text(
-                      'Tender must be at least ${formatIndianNumber(total)}',
+                      'Cash received must be at least ₹${formatIndianNumber(total)}.',
                       style: TextStyle(fontSize: 12.sp, color: AppColors.error, fontWeight: FontWeight.w600),
                     ),
                   ],
                   SizedBox(height: 14.h),
-                  _cashRow('Refund (Change)', '${formatIndianNumber(_cashRefundAmount ?? 0)}'),
+                  _cashRow('Change to Return', '${formatIndianNumber(_cashRefundAmount ?? 0)}'),
                   SizedBox(height: 20.h),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      AppUI.requiredNote(),
+                      const Spacer(),
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
                         child: const Text('Cancel'),
@@ -3867,7 +3868,7 @@ class _StudentFeeCollectionScreenState
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Payment sequence missing for "$fgName". Create one in Sequence Creation before collecting.'),
+                content: Text('No receipt sequence for "$fgName". Create one in Setup → Sequence Master → Receipt Sequence, then collect.'),
                 backgroundColor: AppColors.error,
                 duration: const Duration(seconds: 5),
               ),
@@ -3959,6 +3960,11 @@ class _StudentFeeCollectionScreenState
                       ),
                     ),
                     SizedBox(height: 14.h),
+                    Text(
+                      '${_paymentMode == 'QR/UPI' ? 'UPI' : (_paymentMode ?? '')} Payment Details',
+                      style: AppUI.cardTitle,
+                    ),
+                    SizedBox(height: 8.h),
                     Text(
                       'Student: ${_student!['stuname']} (${_student!['stuadmno']})',
                       style: AppUI.body.copyWith(color: AppColors.textSecondary),
@@ -4058,11 +4064,11 @@ class _StudentFeeCollectionScreenState
                                   if (picked != null) {
                                     _chequeDate = picked;
                                     _chequeDateController.text =
-                                        '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
+                                        formatDmy(picked);
                                     setDialogState(() => chequeDateErr = null);
                                   }
                                 },
-                                decoration: _dialogInputDec(hint: 'DD/MM/YYYY', filled: _chequeDateController.text.trim().isNotEmpty).copyWith(
+                                decoration: _dialogInputDec(hint: 'Select ${_paymentMode == 'DD' ? 'DD' : 'cheque'} date (${AppText.dateHint})', filled: _chequeDateController.text.trim().isNotEmpty).copyWith(
                                   suffixIcon: Padding(
                                     padding: EdgeInsets.only(right: 8.w),
                                     child: AppIcon.linear('calendar', size: 16, color: AppColors.accent),
@@ -4094,6 +4100,8 @@ class _StudentFeeCollectionScreenState
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
+                        if (_paymentMode != 'Paytm') AppUI.requiredNote(),
+                        const Spacer(),
                         OutlinedButton(
                           onPressed: () async {
                             Navigator.pop(ctx);
@@ -4192,9 +4200,9 @@ class _StudentFeeCollectionScreenState
             SizedBox(height: 12.h),
             Text('Payment Successful', style: AppUI.cardTitle),
             SizedBox(height: 8.h),
-            Text('Receipt No: $payNumber', style: AppUI.muted),
+            Text('Receipt No.: $payNumber', style: AppUI.muted),
             Text('Amount: ${formatIndianNumber(totalNet)}', style: AppUI.money.copyWith(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
-            Text('Mode: $_paymentMode', style: AppUI.muted),
+            Text('${AppText.paymentMode}: $_paymentMode', style: AppUI.muted),
             SizedBox(height: 16.h),
             OutlinedButton.icon(
               onPressed: () {
@@ -4213,7 +4221,7 @@ class _StudentFeeCollectionScreenState
               Navigator.pop(ctx);
               _clear();
             },
-            child: const Text('Done'),
+            child: const Text(AppText.close),
           ),
         ],
       ),
@@ -4231,7 +4239,7 @@ class _StudentFeeCollectionScreenState
           const Icon(Icons.account_balance_outlined, color: AppColors.warning),
           SizedBox(width: 8.w),
           Expanded(
-            child: Text('Cannot route this payment', style: AppUI.cardTitle),
+            child: Text('Cannot Route This Payment', style: AppUI.cardTitle),
           ),
         ]),
         content: SizedBox(
@@ -4314,7 +4322,7 @@ class _StudentFeeCollectionScreenState
                             await file.writeAsBytes(bytes);
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Receipt saved successfully'), backgroundColor: AppColors.success),
+                                const SnackBar(content: Text('Receipt PDF saved'), backgroundColor: AppColors.success),
                               );
                             }
                           }
@@ -4433,13 +4441,12 @@ class _StudentFeeCollectionScreenState
       }
     }
 
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     String dateStr = '-';
     final dateRaw = payment['paydate'] ?? payment['createdat'];
     if (dateRaw != null) {
       try {
         final dt = DateTime.parse(dateRaw.toString());
-        dateStr = '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+        dateStr = formatDmy(dt);
       } catch (_) {
         dateStr = dateRaw.toString();
       }
@@ -4627,7 +4634,7 @@ class _StudentFeeCollectionScreenState
             showDialog(
               context: context,
               builder: (ctx) => AlertDialog(
-                title: const Text('Already paid'),
+                title: const Text('Fees Already Paid'),
                 content: const Text(
                   'One or more selected fees have already been collected '
                   '(possibly by another user). Please refresh and try again.',
@@ -4873,7 +4880,7 @@ class _StudentFeeCollectionScreenState
             final clear = await showDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
-                title: const Text('Payment already pending'),
+                title: const Text('Online Payment Already Pending'),
                 content: const Text(
                   'An online payment for this student was started but not '
                   'completed. If that attempt failed or the payment window was '
@@ -4887,7 +4894,7 @@ class _StudentFeeCollectionScreenState
                   ),
                   ElevatedButton(
                     onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('Clear & retry'),
+                    child: const Text('Clear and Retry'),
                   ),
                 ],
               ),
@@ -5005,10 +5012,10 @@ class _StudentFeeCollectionScreenState
         if (mounted) {
           setState(() => _processing = false);
           _showPaytmRoutingError(
-              'An online payment settles into ONE account, and these dues '
-              'belong to different ones (${names.join(' and ')}). Collect them '
-              'one group at a time — untick the other card and pay this group '
-              'first. Cash, cheque and DD can still take both together.');
+              'An online payment settles into one account, but these dues '
+              'belong to different accounts (${names.join(' and ')}). Collect '
+              'one group at a time: untick the other card and pay this group '
+              'first. Cash, cheque and DD can collect both together.');
         }
         return;
       }
@@ -5174,9 +5181,9 @@ class _StudentFeeCollectionScreenState
         if (mounted) {
           setState(() => _processing = false);
           _showPaytmRoutingError(
-              'The bank has not confirmed this payment yet. Do NOT collect it '
-              'again — if the money went through, the receipt appears here '
-              'automatically within a few minutes. Attempt reference '
+              'The bank has not confirmed this payment yet. Do not collect it '
+              'again. If the money went through, the receipt appears here '
+              'automatically within a few minutes. Attempt reference: '
               '${order.orderId}.');
         }
         return;
@@ -5401,9 +5408,9 @@ class _StudentFeeCollectionScreenState
   }
 
   String _formatDate(String iso) {
-    // Convert yyyy-MM-dd → dd/MM/yyyy
+    // Convert yyyy-MM-dd → dd-MM-yyyy
     final parts = iso.split('-');
-    if (parts.length == 3) return '${parts[2]}/${parts[1]}/${parts[0]}';
+    if (parts.length == 3) return '${parts[2]}-${parts[1]}-${parts[0]}';
     return iso;
   }
 }

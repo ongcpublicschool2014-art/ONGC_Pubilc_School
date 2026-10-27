@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -136,9 +137,9 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
           return spec(b).compareTo(spec(a));
         });
       String applies(Map d) {
-        const nob = {1: 'New', 2: 'Old'}, bgb = {1: 'Boy', 2: 'Girl'}, dhb = {1: 'Dayscholar', 2: 'Hostler'};
+        const nob = {1: 'New', 2: 'Old'}, bgb = {1: 'Boy', 2: 'Girl'}, dhb = {1: AppText.dayScholar, 2: AppText.hosteller};
         final p = [nob[_id(d['afnob'])], bgb[_id(d['afbgb'])], dhb[_id(d['afdhb'])]].whereType<String>().toList();
-        return p.isEmpty ? 'Both' : p.join(' · ');
+        return p.isEmpty ? 'All Students' : p.join(' · ');
       }
 
       if (!mounted) return;
@@ -208,7 +209,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = 'Could not load. ${friendlyError(e)}';
+          _error = 'Could not load the advance fee demand. ${friendlyError(e)}';
         });
       }
     }
@@ -226,7 +227,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('Add advance fee'),
+          title: const Text('Add Advance Fee'),
           content: SizedBox(
             width: 380,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -234,7 +235,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                 initialValue: term,
                 isExpanded: true,
                 style: AppUI.fieldText(ctx),
-                decoration: AppUI.field(ctx, '', label: schoolTerm('Semester'), filled: term != null),
+                decoration: AppUI.field(ctx, schoolTerm('Select semester'), label: schoolTerm('Semester *'), filled: term != null),
                 items: [for (final t in _terms) DropdownMenuItem(value: t, child: Text(t))],
                 onChanged: (v) => setLocal(() => term = v),
               ),
@@ -243,7 +244,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                 initialValue: fee,
                 isExpanded: true,
                 style: AppUI.fieldText(ctx),
-                decoration: AppUI.field(ctx, '', label: 'Fee type', filled: fee != null),
+                decoration: AppUI.field(ctx, 'Select fee type', label: 'Fee Type *', filled: fee != null),
                 items: [for (final f in _feeTypes) DropdownMenuItem(value: f, child: Text(f))],
                 onChanged: (v) => setLocal(() => fee = v),
               ),
@@ -253,7 +254,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                 style: AppUI.fieldText(ctx),
-                decoration: AppUI.field(ctx, '', label: 'Amount'),
+                decoration: AppUI.field(ctx, 'Enter amount', label: 'Amount *'),
               ),
               SizedBox(height: 10.h),
               InkWell(
@@ -263,18 +264,20 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                   if (d != null) setLocal(() => due = d);
                 },
                 child: InputDecorator(
-                  decoration: AppUI.field(ctx, '', label: 'Pay on or before', leadingIcon: 'calendar-1', filled: due != null),
-                  child: Text(due == null ? '—' : '${due!.day.toString().padLeft(2, '0')}/${due!.month.toString().padLeft(2, '0')}/${due!.year}',
+                  decoration: AppUI.field(ctx, '', label: 'Due Date', leadingIcon: 'calendar-1', filled: due != null),
+                  child: Text(due == null ? 'Select due date (${AppText.dateHint})' : formatDmy(due),
                       style: AppUI.fieldText(ctx, filled: due != null)),
                 ),
               ),
+              SizedBox(height: 12.h),
+              Align(alignment: Alignment.centerLeft, child: AppUI.requiredNote()),
             ]),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () => Navigator.pop(ctx, term != null && fee != null && (double.tryParse(amt.text.trim()) ?? 0) > 0),
-              child: const Text('Add'),
+              child: const Text('Add Fee'),
             ),
           ],
         ),
@@ -300,7 +303,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
             due: due?.toIso8601String().split('T').first,
             paid: 0,
             original: value,
-            applies: 'Added',
+            applies: 'Added manually',
             opted: true,
           ));
     });
@@ -342,7 +345,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
       _saved = true;
       await _load();
       if (mounted) {
-        setState(() => _info = 'Saved -- ${m['added'] ?? 0} added, ${m['updated'] ?? 0} changed, ${m['removed'] ?? 0} removed.');
+        setState(() => _info = 'Advance fee demand saved: ${m['added'] ?? 0} added, ${m['updated'] ?? 0} changed, ${m['removed'] ?? 0} removed.');
       }
     } catch (e) {
       if (mounted) setState(() => _error = friendlyError(e));
@@ -417,7 +420,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
             child: Container(
               padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
               decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider))),
-              child: Text(t ?? 'All',
+              child: Text(t ?? schoolTerm('All Semesters'),
                   style: AppUI.body.copyWith(
                       fontWeight: _term == t ? FontWeight.w700 : FontWeight.w500,
                       color: _term == t ? AppColors.primary : AppColors.textPrimary)),
@@ -433,7 +436,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
     TextStyle c() => AppUI.cell;
     String d(String? v) {
       final x = DateTime.tryParse(v ?? '');
-      return x == null ? '-' : '${x.day.toString().padLeft(2, '0')}/${x.month.toString().padLeft(2, '0')}/${x.year}';
+      return x == null ? '-' : formatDmy(x);
     }
 
     final rows = _visible;
@@ -458,7 +461,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
             ? AppUI.empty(
                 title: 'No advance fees listed',
                 why: widget.nextClaId == null
-                    ? schoolTerm('This class has no Class Matching -- set it first, or use Add Fee.')
+                    ? schoolTerm('This class has no Class Matching. Set it in Setup → Fee Master → Class Matching, or use Add Fee.')
                     : 'No advance fees defined for ${widget.nextClassName} -- use Add Fee.',
                 icon: 'receipt-item')
             : ListView.separated(
@@ -479,7 +482,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                       SizedBox(
                         width: 56.w,
                         child: r.locked
-                            ? Tooltip(message: 'A collection exists -- locked', child: Icon(Icons.lock_outline, size: 16.sp, color: AppColors.textSecondary))
+                            ? Tooltip(message: 'Locked: a payment has already been collected for this fee.', child: Icon(Icons.lock_outline, size: 16.sp, color: AppColors.textSecondary))
                             : Checkbox(
                                 value: r.opted,
                                 visualDensity: VisualDensity.compact,

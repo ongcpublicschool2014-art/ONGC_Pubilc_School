@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../services/paytm_service.dart';
 import '../../services/pending_collection_sweep.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
@@ -176,7 +177,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load students and classes. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -305,7 +306,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     for (final l in pay) {
       final bal = _num(l.row['balance']);
       if ((double.tryParse(l.pay.text.trim()) ?? 0) > bal) {
-        return _snack('${l.row['afterm']} ${l.row['affeetype']}: more than the balance ${bal.toStringAsFixed(2)}.', AppColors.error);
+        return _snack('${l.row['afterm']} ${l.row['affeetype']}: the amount is more than the balance of ₹${bal.toStringAsFixed(2)}.', AppColors.error);
       }
     }
     final total = _total;
@@ -423,7 +424,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
           AppColors.warning);
       return false;
     } catch (e) {
-      _snack('Paytm error. ${e.toString().replaceFirst('Exception: ', '')}', AppColors.error);
+      _snack('Could not start the Paytm payment. ${e.toString().replaceFirst('Exception: ', '')}', AppColors.error);
       return false;
     }
   }
@@ -453,7 +454,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                 SizedBox(height: 14.h),
                 row('Net Amount', '₹${net.toStringAsFixed(2)}', hi: true),
                 SizedBox(height: 8.h),
-                AppUI.fieldLabel('Tender Amount', required: true),
+                AppUI.fieldLabel('Cash Received', required: true),
                 TextField(
                   controller: ctrl,
                   autofocus: true,
@@ -466,12 +467,14 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                 if (short)
                   Padding(
                     padding: EdgeInsets.only(top: 6.h),
-                    child: Text('Tender amount cannot be less than the net amount', style: TextStyle(fontSize: 12.sp, color: AppColors.error)),
+                    child: Text('Cash received cannot be less than the net amount.', style: TextStyle(fontSize: 12.sp, color: AppColors.error)),
                   ),
                 SizedBox(height: 8.h),
-                row('Refund (Change)', '₹${(short ? 0 : tender - net).toStringAsFixed(2)}'),
+                row('Change to Return', '₹${(short ? 0 : tender - net).toStringAsFixed(2)}'),
                 SizedBox(height: 18.h),
                 Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  AppUI.requiredNote(),
+                  const Spacer(),
                   TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
                   SizedBox(width: 8.w),
                   ElevatedButton(
@@ -502,7 +505,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               padding: EdgeInsets.all(22.w),
               child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 Row(children: [
-                  Text('${_mode!} Payment', style: AppUI.cardTitle),
+                  Text('${_mode!} Payment Details', style: AppUI.cardTitle),
                   const Spacer(),
                   IconButton(onPressed: () => Navigator.pop(ctx, false), icon: const Icon(Icons.close, size: 20)),
                 ]),
@@ -514,19 +517,19 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                 SizedBox(height: 16.h),
                 if (upi) ...[
                   label('UPI Transaction ID *'),
-                  TextField(controller: _refCtrl, autofocus: true, decoration: dec('Enter UPI transaction id', filled: ok), onChanged: (_) => setLocal(() {})),
+                  TextField(controller: _refCtrl, autofocus: true, decoration: dec('Enter UPI transaction ID', filled: ok), onChanged: (_) => setLocal(() {})),
                 ] else ...[
                   Row(children: [
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                         label('${_mode!} No *'),
-                        TextField(controller: _refCtrl, autofocus: true, decoration: dec('${_mode!} number', filled: ok), onChanged: (_) => setLocal(() {})),
+                        TextField(controller: _refCtrl, autofocus: true, decoration: dec('Enter ${_mode == 'DD' ? 'DD' : 'cheque'} number', filled: ok), onChanged: (_) => setLocal(() {})),
                       ]),
                     ),
                     SizedBox(width: 12.w),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                        label('Date'),
+                        label('${_mode!} Date'),
                         InkWell(
                           onTap: () async {
                             final now = DateTime.now();
@@ -535,7 +538,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                           },
                           child: InputDecorator(
                             decoration: dec('', filled: _refDate != null),
-                            child: Text(_refDate == null ? 'Today' : '${_refDate!.day.toString().padLeft(2, '0')}/${_refDate!.month.toString().padLeft(2, '0')}/${_refDate!.year}',
+                            child: Text(_refDate == null ? 'Today (select to change)' : formatDmy(_refDate),
                                 style: AppUI.fieldText(context, filled: _refDate != null)),
                           ),
                         ),
@@ -544,10 +547,12 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                   ]),
                   SizedBox(height: 12.h),
                   label('Bank Name'),
-                  TextField(controller: _bankCtrl, decoration: dec('Bank name', filled: _bankCtrl.text.trim().isNotEmpty), onChanged: (_) => setLocal(() {})),
+                  TextField(controller: _bankCtrl, decoration: dec('Enter bank name', filled: _bankCtrl.text.trim().isNotEmpty), onChanged: (_) => setLocal(() {})),
                 ],
                 SizedBox(height: 20.h),
                 Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  AppUI.requiredNote(),
+                  const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
                     child: const Text('Cancel'),
@@ -620,7 +625,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         );
       }
     } catch (e) {
-      _snack('Collection failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not collect the advance fee. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -631,22 +636,24 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Void receipt ${rec['advno']}'),
+        title: Text('Cancel Receipt ${rec['advno']}'),
         content: SizedBox(
           width: 380,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text('The ₹${_num(rec['transtotalamount']).toStringAsFixed(2)} goes back onto the student\'s advance fee balance.',
                 style: AppUI.muted),
             SizedBox(height: 12.h),
-            TextField(controller: reasonCtrl, style: AppUI.fieldText(context), decoration: AppUI.field(context, '', label: 'Reason')),
+            TextField(controller: reasonCtrl, style: AppUI.fieldText(context), decoration: AppUI.field(context, 'Enter reason for cancelling', label: 'Reason *')),
+            SizedBox(height: 10.h),
+            Align(alignment: Alignment.centerLeft, child: AppUI.requiredNote()),
           ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text(AppText.close)),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: AppUI.danger(context),
-            child: const Text('Void'),
+            child: const Text('Cancel Receipt'),
           ),
         ],
       ),
@@ -654,7 +661,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     final reason = reasonCtrl.text.trim();
     reasonCtrl.dispose();
     if (ok != true) return;
-    if (reason.isEmpty) return _snack('Enter a reason to void the receipt.', AppColors.warning);
+    if (reason.isEmpty) return _snack('Enter a reason to cancel the receipt.', AppColors.warning);
     if (!mounted) return;
     setState(() => _busy = true);
     try {
@@ -664,10 +671,10 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         'p_user': context.read<AuthProvider>().userName,
         'p_reason': reason,
       });
-      _snack('Receipt ${rec['advno']} voided.', AppColors.success);
+      _snack('Receipt ${rec['advno']} cancelled.', AppColors.success);
       await _loadStudentLines();
     } catch (e) {
-      _snack('Void failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not cancel the receipt. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -686,9 +693,9 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
           SizedBox(height: 12.h),
           Text('Payment Successful', style: AppUI.cardTitle),
           SizedBox(height: 8.h),
-          Text('Receipt No: $advno', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+          Text('Receipt No.: $advno', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
           Text('Amount: ₹${total.toStringAsFixed(2)}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-          Text('Mode: $mode', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+          Text('${AppText.paymentMode}: $mode', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
           SizedBox(height: 16.h),
           OutlinedButton.icon(
             onPressed: () {
@@ -706,7 +713,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               Navigator.pop(ctx);
               _clearAll();
             },
-            child: const Text('Done'),
+            child: const Text(AppText.close),
           ),
         ],
       ),
@@ -739,8 +746,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     String recon = 'R',
     bool cancelled = false,
   }) {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
     final s = _student ?? const <String, dynamic>{};
     final lh = SupabaseService.letterheadFor(fgId: fgId, settings: _settings, fallbackName: _insName, fallbackAddress: _insAddress);
     final byTerm = <String, List<ReceiptFeeItem>>{};
@@ -886,7 +892,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
 
   static String _dmy(dynamic v) {
     final x = DateTime.tryParse('${v ?? ''}');
-    return x == null ? '-' : '${x.day.toString().padLeft(2, '0')}/${x.month.toString().padLeft(2, '0')}/${x.year}';
+    return x == null ? '-' : formatDmy(x);
   }
 
   @override
@@ -926,7 +932,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         SizedBox(
           width: _compact ? 150.w : 180.w,
           child: _filterDrop(
-            schoolTerm('Select Course'),
+            schoolTerm('Select course'),
             _fCour,
             [for (final c in _courseList) (_id(c['cour_id'])!, '${c['courname']}')],
             (v) => setState(() {
@@ -940,7 +946,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         SizedBox(
           width: _compact ? 150.w : 180.w,
           child: _filterDrop(
-            schoolTerm('Select Class'),
+            schoolTerm('Select class'),
             _fCla,
             [
               for (final c in _classes)
@@ -1021,7 +1027,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
           controller: ctrl,
           focusNode: focus,
           style: _ddTextStyle().copyWith(color: ctrl.text.isNotEmpty ? AppColors.accent : null),
-          decoration: _inputDec(schoolTerm('Reg No or Student Name'), filled: ctrl.text.isNotEmpty)
+          decoration: _inputDec(schoolTerm('Search by register no. or name'), filled: ctrl.text.isNotEmpty)
               .copyWith(
                   prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
                   prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0)),
@@ -1116,7 +1122,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(name, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
           SizedBox(height: 2.h),
-          Text('${schoolTerm('Roll No')}: ${s['stuadmno']}${(_id(s['preadmission']) ?? 0) == 1 ? '  ·  Pre-admission' : ''}',
+          Text('${schoolTerm('Roll Number')}: ${s['stuadmno']}${(_id(s['preadmission']) ?? 0) == 1 ? '  ·  Pre-admission' : ''}',
               style: AppUI.muted),
         ]),
       ),
@@ -1124,12 +1130,12 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
       Expanded(child: _detailRow('teacher', schoolTerm('Class'), '${s['stuclass'] ?? '-'}')),
       sep(),
       Expanded(
-        child: _detailRow('book-1', schoolTerm('Appl. Class'),
+        child: _detailRow('book-1', schoolTerm('Applicable Class'),
             app == null ? schoolTerm('No next class') : _appName(app),
             color: app == null ? AppColors.error : AppColors.accent),
       ),
       sep(),
-      Expanded(child: _detailRow('calendar-1', 'Year', _nextYear)),
+      Expanded(child: _detailRow('calendar-1', 'Academic Year', _nextYear)),
       SizedBox(width: 16.w),
       OutlinedButton.icon(
         onPressed: _openReceipts,
@@ -1206,7 +1212,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
       return const Center(child: CircularProgressIndicator(color: AppColors.accent));
     }
     if (_student == null) {
-      return AppUI.empty(icon: 'search-normal-1', title: 'Search a student to view advance fees');
+      return AppUI.empty(icon: 'search-normal-1', title: 'Search for a student to view advance fees');
     }
     if (_lines.isEmpty && _raised > 0) {
       return AppUI.empty(
@@ -1220,7 +1226,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         icon: 'tick-circle',
         title: 'No advance fee demands',
         why: _applicable(_student!) == null
-            ? schoolTerm('No next class for this student (final course, or no class of that letter next year) -- set Class Matching in Setup -> Fee Master.')
+            ? schoolTerm('This student has no next class (final course, or no matching class next year). Set it in Setup → Fee Master → Class Matching.')
             : schoolTerm('Nothing raised for ${_appName(_applicable(_student!)!)} yet -- save its Advance Fee Definition (Setup -> Fee Master), or add fees in Fee Definition.'),
       );
     }
@@ -1315,9 +1321,9 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
             _th(schoolTerm('Semester'), 2),
             _th('Fee Type', 3),
             _th('Due Date', 2),
-            _th('Fee Amt (₹)', 2, align: TextAlign.right),
+            _th('Fee Amount (₹)', 2, align: TextAlign.right),
             _th('Paid (₹)', 2, align: TextAlign.right),
-            _th('Bal. Amt (₹)', 2, align: TextAlign.right),
+            _th('Balance Amount (₹)', 2, align: TextAlign.right),
             _th('Collect Amount (₹)', 3, align: TextAlign.center),
           ]),
         ),
@@ -1399,7 +1405,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               border: Border.all(color: AppColors.accent.withValues(alpha: 0.30)),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text('NET AMOUNT: ', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary, letterSpacing: 0.3)),
+              Text('Net Amount: ', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary, letterSpacing: 0.3)),
               Text('₹${total.toStringAsFixed(2)}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
             ]),
           ),
@@ -1419,10 +1425,10 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
             child: DropdownButton<String>(
               value: _mode,
               isExpanded: true,
-              hint: Text('SELECT MODE', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary, letterSpacing: 0.3)),
+              hint: Text('Select payment mode', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary, letterSpacing: 0.3)),
               items: [
                 for (final m in _modes)
-                  DropdownMenuItem(value: m, child: Text(m.toUpperCase(), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.accent))),
+                  DropdownMenuItem(value: m, child: Text(m == 'QR/UPI' ? 'QR / UPI' : m, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.accent))),
               ],
               onChanged: modeOn ? (v) => setState(() => _mode = v) : null,
             ),
@@ -1562,7 +1568,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                                 }),
                                 if (on) ...[
                                   SizedBox(width: 6.w),
-                                  iconBtn(Icons.block, AppColors.error, 'Void', () async {
+                                  iconBtn(Icons.block, AppColors.error, 'Cancel Receipt', () async {
                                     Navigator.pop(ctx);
                                     await _void(rec);
                                   }),

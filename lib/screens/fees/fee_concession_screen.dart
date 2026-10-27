@@ -14,6 +14,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 
 /// Fee Concession — two views:
 ///   • LIST   : every persisted concession record across the institution, with
@@ -402,7 +403,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       return;
     }
     if (_dConType == null || _dConType!.isEmpty) {
-      _popup('Concession Type Required', 'Pick a Concession Type under "Filter Concession" first — it is the category applied to these lines.', AppColors.warning, Icons.warning_amber_rounded);
+      _popup('Concession Category Required', 'Select a concession category under "Filter Concession" first. It is applied to these lines.', AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
     if (!await _hasSequence('CONNO')) {
@@ -537,7 +538,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     final s = v?.toString() ?? '';
     if (s.length < 10) return s;
     final p = s.substring(0, 10).split('-');
-    return p.length == 3 ? '${p[2]}/${p[1]}/${p[0]}' : s;
+    return p.length == 3 ? '${p[2]}-${p[1]}-${p[0]}' : s;
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -590,7 +591,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     return AppMasterDetail(
       listTitle: 'Concessions',
       listIcon: 'discount-shape',
-      listSubtitle: 'Search a student to apply a new one',
+      listSubtitle: 'Search for a student to apply a new concession',
       listActions: [
         TextButton.icon(
           onPressed: _clearFilters,
@@ -629,7 +630,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
             controller: ctrl,
             focusNode: focus,
             style: _fieldTextStyle(),
-            decoration: AppUI.field(context, 'Type admission no / name', leadingIcon: 'search-normal-1').copyWith(
+            decoration: AppUI.field(context, schoolTerm('Search by roll no. or name'), leadingIcon: 'search-normal-1').copyWith(
               suffixIcon: ctrl.text.isEmpty
                   ? null
                   : IconButton(
@@ -674,8 +675,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
         Expanded(
           child: DropdownButtonFormField<String>(
             initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
-            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('Select Course')),
-            items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('All Courses')),
+            items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All Courses'))), ..._courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
             onChanged: (v) => setState(() { _selectedCourse = v; if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) _selectedClass = null; _page = 0; _loadFromFilter(); }),
           ),
         ),
@@ -683,8 +684,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
         Expanded(
           child: DropdownButtonFormField<String>(
             initialValue: _classNamesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
-            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('Select Class')),
-            items: _classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('All Classes')),
+            items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All Classes'))), ..._classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
             onChanged: (v) => setState(() { _selectedClass = v; _page = 0; _loadFromFilter(); }),
           ),
         ),
@@ -700,7 +701,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     if (filtered.isEmpty) {
       return Center(
         child: SingleChildScrollView(
-          child: EmptyState(icon: 'receipt-discount', title: 'No concession records', subtitle: _error ?? 'Search a student above to apply a concession', action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text('Reset Filters'))),
+          child: EmptyState(icon: 'receipt-discount', title: 'No concession records', subtitle: _error ?? 'Search a student above to apply a concession', action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text(AppText.clearFilters))),
         ),
       );
     }
@@ -801,13 +802,13 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
           _kpiCard(icon: 'discount-shape', tint: AppColors.primary, value: '${filtered.length}', label: 'Total Concessions', sub: 'This Year'),
           _kpiCard(icon: 'wallet-money', tint: AppColors.success, value: _inr(totalAmt), label: 'Total Amount', sub: 'This Year'),
           _kpiCard(icon: 'people', tint: AppColors.demand, value: '$students', label: 'Total Students', sub: 'This Year'),
-          _kpiCard(icon: 'chart-1', tint: AppColors.warning, value: _inr(avg), label: 'Avg. Concession', sub: 'Per Student'),
+          _kpiCard(icon: 'chart-1', tint: AppColors.warning, value: _inr(avg), label: 'Average Concession', sub: 'Per Student'),
         ]),
         SizedBox(height: 40.h),
         AppUI.empty(
           icon: 'receipt-discount',
           title: 'Select a student',
-          why: 'Pick a concession on the left, or search a student by admission no / name, to see their fee demands and apply a concession.',
+          why: schoolTerm('Pick a concession on the left, or search for a student by roll no. or name, to see their fee demands and apply a concession.'),
         ),
       ]),
     );
@@ -830,8 +831,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     final mixed = reg.isNotEmpty && arr.isNotEmpty;
     String? split(double Function(_ConRow) f) => !mixed
         ? null
-        : 'Reg ${reg.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}'
-            '  •  Arr ${arr.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}';
+        : 'Regular ${reg.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}'
+            '  •  Arrear ${arr.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}';
     // Keyed by student so switching students straight from the list starts a
     // fresh detail (as opening it from the old list view did).
     return KeyedSubtree(
@@ -873,9 +874,9 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       items: [const DropdownMenuItem<String>(value: null, child: Text('All Fee Types')), ..._feeTypes.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
       onChanged: (v) => setState(() => _dFeeType = v),
     ));
-    // Required: Save refuses without it ("Concession Type Required").
-    final conTypeDrop = _filterCol('Concession Type', DropdownButtonFormField<String>(
-      initialValue: _dConType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('Select Type'),
+    // Required: Save refuses without it ("Concession Category Required").
+    final conTypeDrop = _filterCol('Concession Category', DropdownButtonFormField<String>(
+      initialValue: _dConType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('Select concession category'),
       items: _conTypes.map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
       onChanged: (v) => setState(() => _dConType = v),
     ), required: true);
@@ -917,7 +918,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(name, style: AppUI.label, overflow: TextOverflow.ellipsis),
               SizedBox(height: 2.h),
-              Text(schoolTerm('Adm No: ${s['stuadmno']}  |  Class: ${s['stuclass'] ?? ''}'), style: AppUI.muted, overflow: TextOverflow.ellipsis),
+              Text(schoolTerm('Roll No.: ${s['stuadmno']}  |  Class: ${s['stuclass'] ?? ''}'), style: AppUI.muted, overflow: TextOverflow.ellipsis),
             ])),
             Tooltip(
               message: 'Close',
@@ -1117,7 +1118,9 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
           ]),
         ),
         SizedBox(width: 12.w),
-        OutlinedButton(onPressed: _detailSaving ? null : _backToList, child: const Text('Cancel')),
+        AppUI.requiredNote(),
+        SizedBox(width: 12.w),
+        OutlinedButton(onPressed: _detailSaving ? null : _backToList, child: const Text(AppText.cancel)),
         SizedBox(width: 10.w),
         ElevatedButton.icon(
           onPressed: _detailSaving ? null : _saveConcession,

@@ -12,6 +12,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/app_text.dart';
 
 /// Fee Refund — raise a refund against a fee-collection receipt. Look up a
 /// student, pick one of their receipts, then enter a Refund Amount (and an
@@ -102,6 +103,13 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
 
   static String _receiptKey(Map<String, dynamic> r) =>
       r['adv_id'] != null ? 'A:${r['adv_id']}' : 'P:${r['pay_id']}';
+
+  /// A stored 'yyyy-mm-dd[T...]' date shown as DD-MM-YYYY (display only).
+  static String _dmy(dynamic v) {
+    final s = (v?.toString() ?? '').split('T').first;
+    final d = DateTime.tryParse(s);
+    return d == null ? s : formatDmy(d);
+  }
 
   bool get _isAdvanceSelected => _selectedKey?.startsWith('A:') ?? false;
   int? get _selectedAdvId =>
@@ -514,7 +522,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     }
     final lines = _rows.where((r) => r.refund > 0 || r.adjust > 0).toList();
     if (lines.isEmpty) {
-      _popup('Nothing to Refund', 'Enter a Refund Amount (or Adjustment) on at least one fee line.', AppColors.warning, Icons.warning_amber_rounded);
+      _popup('Nothing to Refund', 'Enter a refund amount or adjustment on at least one fee line.', AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
 
@@ -525,15 +533,15 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     final receipt = _receipts.firstWhere((r) => (r['pay_id'] as num?)?.toInt() == _selectedPayId, orElse: () => const {});
 
     if (!await _hasSequence('REFNO', insId)) {
-      _popup('Sequence Required', 'Create a Refund No sequence in Setup → Fee Master → Refund No first.', AppColors.warning, Icons.warning_amber_rounded);
+      _popup('Sequence Required', 'Set up the Refund No. sequence in Setup → Sequence Master → Refund No, then save again.', AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
 
     if (_isAdvanceSelected) {
       if (totalAdjust > 0) {
         _popup('Adjustment Not Applicable',
-            'An advance has no demand to write off against. Enter the amount to '
-            'give back under Refund Amt.',
+            'An advance has no fee demand to adjust. Enter the amount to '
+            'give back under Refund Amount.',
             AppColors.warning, Icons.warning_amber_rounded);
         return;
       }
@@ -578,7 +586,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       } catch (e) {
         if (mounted) {
           setState(() => _saving = false);
-          _popup('Save Failed', friendlyError(e), AppColors.error, Icons.error_outline);
+          _popup('Could Not Save Refund', friendlyError(e), AppColors.error, Icons.error_outline);
         }
       }
       return;
@@ -677,7 +685,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        _popup('Save Failed', friendlyError(e), AppColors.error, Icons.error_outline);
+        _popup('Could Not Save Refund', friendlyError(e), AppColors.error, Icons.error_outline);
       }
     }
   }
@@ -819,7 +827,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text('Fee Refund', style: AppUI.cardTitle),
               SizedBox(height: 2.h),
-              Text('Refund a fee-collection receipt easily', style: AppUI.muted),
+              Text('Refund or adjust fees on a collected receipt', style: AppUI.muted),
             ]),
           ),
           Builder(builder: (context) {
@@ -842,7 +850,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
             style: _fieldTextStyle(),
-            decoration: _fieldDec(schoolTerm('Select Course')),
+            decoration: _fieldDec(schoolTerm('Select course')),
             items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
             onChanged: (v) => setState(() {
               _selectedCourse = v;
@@ -860,7 +868,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
             style: _fieldTextStyle(),
-            decoration: _fieldDec(schoolTerm('Select Class')),
+            decoration: _fieldDec(schoolTerm('Select class')),
             items: _classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
             onChanged: (v) => setState(() {
               _selectedClass = v;
@@ -895,7 +903,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             controller: controller,
             focusNode: focusNode,
             style: _fieldTextStyle(),
-            decoration: _fieldDec('Type reg no or name',
+            decoration: _fieldDec(schoolTerm('Search by register no. or name'),
                 prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight)),
           ),
           optionsViewBuilder: (context, onSelected, options) => Align(
@@ -938,7 +946,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         return AppUI.empty(
           icon: 'people',
           title: 'No student selected',
-          why: 'Type a reg no or name above, or pick a Course and Class to list its students.',
+          why: schoolTerm('Search by register no. or name above, or select a course and class to list its students.'),
         );
       }
       return ListView.separated(
@@ -975,7 +983,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             action: OutlinedButton.icon(
               onPressed: _searching ? null : _newRecord,
               icon: const AppIcon('refresh', size: 15, color: AppColors.accent),
-              label: const Text('Reset Filters'),
+              label: const Text(AppText.clearFilters),
             ),
           ),
         ),
@@ -995,12 +1003,12 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
                 ? (r['balanceamount'] as num?)?.toDouble()
                 : (r['transtotalamount'] as num?)?.toDouble()) ??
             0;
-        final date = r['paydate']?.toString().split('T').first ?? '';
+        final date = _dmy(r['paydate']);
         final method = r['paymethod']?.toString() ?? '';
         final chip = isAdv
             ? AppUI.chip(r['advtype']?.toString() == 'A' ? 'Advance (Admission)' : 'Advance', AppStatus.info)
             : (r['paystatus']?.toString() == 'R'
-                ? AppUI.chip('Part refunded', AppStatus.warning)
+                ? AppUI.chip('Partly Refunded', AppStatus.warning)
                 : AppUI.chip('Collected', AppStatus.success));
         return _tile(
           selected: key == _selectedKey,
@@ -1064,7 +1072,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
             SizedBox(height: 2.h),
-            Text('Adm No: ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${schoolTerm('Register No.:')} ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         ),
         IconButton(
@@ -1085,7 +1093,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       return AppUI.empty(
         icon: 'receipt-2',
         title: 'Select a student',
-        why: 'Search a student by reg no / name, or pick a Course and Class on the left, then choose the receipt to refund.',
+        why: schoolTerm('Search for a student by register no. or name, or select a course and class on the left, then choose the receipt to refund.'),
       );
     }
     if (!_loading && _receipts.isEmpty) {
@@ -1112,7 +1120,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             ? (r['balanceamount'] as num?)?.toDouble()
             : (r['transtotalamount'] as num?)?.toDouble()) ??
         0;
-    final date = r['paydate']?.toString().split('T').first ?? '';
+    final date = _dmy(r['paydate']);
     final method = r['paymethod']?.toString() ?? '';
     final sub = [date, '₹${amt.toStringAsFixed(2)}${isAdv ? ' refundable' : ''}', method].where((e) => e.isNotEmpty).join('  •  ');
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1126,7 +1134,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             if (isAdv)
               AppUI.chip(r['advtype']?.toString() == 'A' ? 'Advance (Admission)' : 'Advance', AppStatus.info)
             else if (r['paystatus']?.toString() == 'R')
-              AppUI.chip('Part refunded', AppStatus.warning)
+              AppUI.chip('Partly Refunded', AppStatus.warning)
             else
               AppUI.chip('Collected', AppStatus.success),
           ],
@@ -1147,10 +1155,10 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     ]);
   }
 
-  Widget _labeled(String label, Widget child, {bool optional = false}) => Column(
+  Widget _labeled(String label, Widget child, {bool optional = false, bool required = false}) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AppUI.fieldLabel(label, optional: optional),
+          AppUI.fieldLabel(label, optional: optional, required: required),
           child,
         ],
       );
@@ -1213,7 +1221,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         child: InputDecorator(
           decoration: _fieldDec(hint, suffixIcon: const Icon(Icons.calendar_today, size: 15, color: AppColors.textSecondary)),
           child: Text(
-            value == null ? hint : '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}',
+            value == null ? hint : formatDmy(value),
             style: AppUI.fieldText(context).copyWith(color: value == null ? AppColors.textLight : null),
           ),
         ),
@@ -1228,20 +1236,23 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       children: [
         AppUI.sectionLabel('Refund Details'),
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: _labeled('Refund Date', _dateBox(_refundDate, 'Refund Date', () => _pickDate(initial: _refundDate, onPicked: (d) => setState(() => _refundDate = d))))),
+          Expanded(child: _labeled('Refund Date', _dateBox(_refundDate, 'Select refund date', () => _pickDate(initial: _refundDate, onPicked: (d) => setState(() => _refundDate = d))), required: true)),
           SizedBox(width: 14.w),
           // Auto-generated from the REFNO sequence on save — preview only.
-          Expanded(child: _labeled('Ref. Doc No', TextField(
+          // An empty preview means the sequence is missing: say where to set it.
+          Expanded(child: _labeled('Refund No.', TextField(
             controller: _docNoCtrl,
             readOnly: true,
             style: _fieldTextStyle(),
-            decoration: _fieldDec('Set Refund No sequence in Fee Master'),
+            decoration: _fieldDec(_docNo == ''
+                ? 'Set up in Setup → Sequence Master → Refund No'
+                : AppText.generated),
           ))),
         ]),
         SizedBox(height: 14.h),
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
-            child: _labeled('Refund Mode', Padding(
+            child: _labeled('Refund Mode', required: true, Padding(
               padding: EdgeInsets.only(top: 6.h),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 // Top-level: Cash or Bank. Bank refunds go by Cheque or DD.
@@ -1262,7 +1273,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             )),
           ),
           SizedBox(width: 14.w),
-          Expanded(child: _labeled('Account Code', TextField(controller: _accountCodeCtrl, style: _fieldTextStyle(), decoration: _fieldDec('Select or enter account code')), optional: true)),
+          Expanded(child: _labeled('Account Code', TextField(controller: _accountCodeCtrl, style: _fieldTextStyle(), decoration: _fieldDec('Enter account code')), optional: true)),
         ]),
         SizedBox(height: 14.h),
         _labeled('Refund Reason', TextField(controller: _refundReasonCtrl, style: _fieldTextStyle(), decoration: _fieldDec('Enter reason for refund')), optional: true),
@@ -1289,9 +1300,9 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
               )),
             ),
             SizedBox(width: 14.w),
-            Expanded(child: _labeled('Bank Ref', TextField(controller: _bankRefCtrl, style: _fieldTextStyle(), decoration: _fieldDec('Cheque/DD/UTR no')), optional: true)),
+            Expanded(child: _labeled('Bank Reference No.', TextField(controller: _bankRefCtrl, style: _fieldTextStyle(), decoration: _fieldDec('Enter cheque, DD or UTR no.')), optional: true)),
             SizedBox(width: 14.w),
-            Expanded(child: _labeled('${_refundMode == 'DD' ? 'DD' : 'Cheque'} Date', _dateBox(_chequeDate, 'dd/mm/yyyy', () => _pickDate(initial: _chequeDate ?? DateTime.now(), onPicked: (d) => setState(() => _chequeDate = d))))),
+            Expanded(child: _labeled('${_refundMode == 'DD' ? 'DD' : 'Cheque'} Date', _dateBox(_chequeDate, AppText.dateHint,() => _pickDate(initial: _chequeDate ?? DateTime.now(), onPicked: (d) => setState(() => _chequeDate = d))))),
           ]),
         ],
       ],
@@ -1334,13 +1345,13 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       final title = _error != null
           ? 'Something went wrong'
           : _student == null
-              ? 'No receipts found'
+              ? 'No student selected'
               : _selectedKey == null
                   ? 'Select a receipt to refund'
                   : 'No fee lines on this receipt';
       final subtitle = _error ??
           (_student == null
-              ? 'Try adjusting your filters or search for a student'
+              ? schoolTerm('Search for a student or select a course and class')
               : _selectedKey == null
                   ? 'Pick a receipt from the list on the left'
                   : 'This receipt has no refundable fee lines');
@@ -1355,7 +1366,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           action: OutlinedButton.icon(
             onPressed: _searching ? null : _newRecord,
             icon: const AppIcon('refresh', size: 15, color: AppColors.accent),
-            label: const Text('Reset Filters'),
+            label: const Text(AppText.clearFilters),
           ),
         ),
       );
@@ -1367,11 +1378,11 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         color: AppColors.tableHeadBg,
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
         child: Row(children: [
-          SizedBox(width: 70.w, child: Text('SEM', style: h())),
+          SizedBox(width: 90.w, child: Text(schoolTerm('SEMESTER'), style: h())),
           Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
           SizedBox(width: 100.w, child: Padding(padding: EdgeInsets.only(right: 4.w), child: Text('REFUNDABLE', textAlign: TextAlign.right, style: h()))),
-          SizedBox(width: 120.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('REFUND AMT', textAlign: TextAlign.right, style: h()))),
-          SizedBox(width: 120.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('ADJ AMT', textAlign: TextAlign.right, style: h()))),
+          SizedBox(width: 140.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('REFUND AMOUNT', textAlign: TextAlign.right, style: h()))),
+          SizedBox(width: 140.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('ADJUSTMENT AMOUNT', textAlign: TextAlign.right, style: h()))),
           Expanded(flex: 2, child: Text('ADJUSTMENT REASON', style: h())),
         ]),
       ),
@@ -1386,12 +1397,12 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             color: i.isEven ? Colors.white : AppColors.surface,
             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
             child: Row(children: [
-              SizedBox(width: 70.w, child: Text(r.term, style: c())),
+              SizedBox(width: 90.w, child: Text(r.term, style: c())),
               Expanded(flex: 3, child: Text(r.feeGroup.isEmpty ? r.feeType : '${r.feeType}  (${r.feeGroup})', style: AppUI.cell)),
               SizedBox(width: 100.w, child: Text(r.feeAmount.toStringAsFixed(2), textAlign: TextAlign.right, style: AppUI.money)),
-              SizedBox(width: 120.w, child: Padding(padding: EdgeInsets.symmetric(horizontal: 8.w), child: _amtField(r.refundCtrl, max: r.feeAmount, label: 'Refund'))),
+              SizedBox(width: 140.w, child: Padding(padding: EdgeInsets.symmetric(horizontal: 8.w), child: _amtField(r.refundCtrl, max: r.feeAmount, label: 'Refund'))),
               SizedBox(
-                  width: 120.w,
+                  width: 140.w,
                   child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8.w),
                       // An advance has no demand behind it to write off, so
@@ -1405,7 +1416,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
                 child: TextField(
                   controller: r.reasonCtrl,
                   style: AppUI.fieldText(context),
-                  decoration: AppUI.field(context, 'Optional', dense: true),
+                  decoration: AppUI.field(context, 'Add reason (optional)', dense: true),
                 ),
               )),
             ]),
@@ -1431,7 +1442,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           final clamped = cap.toStringAsFixed(cap == cap.roundToDouble() ? 0 : 2);
           ctrl.text = clamped;
           ctrl.selection = TextSelection.collapsed(offset: clamped.length);
-          _snack('$label can\'t exceed ${cap.toStringAsFixed(0)}.', AppColors.warning);
+          _snack('$label cannot exceed ₹${cap.toStringAsFixed(0)}.', AppColors.warning);
         }
         setState(() {});
       },
@@ -1452,9 +1463,11 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           child: Wrap(spacing: 20.w, runSpacing: 6.h, children: [
             tot('Refundable:', _totalCollected, AppColors.textPrimary),
             tot('Refund:', _totalRefund, AppColors.primary),
-            tot('Adjust:', _totalAdjust, AppColors.primaryHover),
+            tot('Adjustment:', _totalAdjust, AppColors.primaryHover),
           ]),
         ),
+        SizedBox(width: 12.w),
+        AppUI.requiredNote(),
         SizedBox(width: 12.w),
         OutlinedButton.icon(
           onPressed: _saving ? null : _newRecord,

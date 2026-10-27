@@ -99,7 +99,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load ${schoolTerm('classes')} and concession categories. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -142,7 +142,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
         _loaded = true;
       });
     } catch (e) {
-      _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the fee lines for this ${schoolTerm('class')}. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -221,7 +221,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Apply concession'),
+        title: const Text('Apply Concession'),
         content: Text('Give ${todo.length} student(s) of category $_catName a concession of ₹${_money(_todoTotal)} in total?\n\n'
             'Each student gets their own voucher -- CON... for the regular fees, AC... for arrears -- the same as a single-student concession.'),
         actions: [
@@ -389,7 +389,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
             SizedBox(height: 10.h),
             Row(children: [
               Expanded(
-                child: _filterCol(schoolTerm('Course'), _drop<int>(schoolTerm('Select Course'), _cour, [for (final c in _courses) (_id(c['cour_id'])!, '${c['courname']}')], (v) => setState(() {
+                child: _filterCol(schoolTerm('Course'), _drop<int>(schoolTerm('Select course'), _cour, [for (final c in _courses) (_id(c['cour_id'])!, '${c['courname']}')], (v) => setState(() {
                       _cour = v;
                       _cla = null;
                       _loaded = false;
@@ -398,7 +398,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
               ),
               SizedBox(width: 10.w),
               Expanded(
-                child: _filterCol(schoolTerm('Class'), _drop<int>(schoolTerm('Select Class'), _cla, sections, (v) {
+                child: _filterCol(schoolTerm('Class *'), _drop<int>(schoolTerm('Select class'), _cla, sections, (v) {
                   setState(() => _cla = v);
                   _load();
                 })),
@@ -412,7 +412,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _stepBadge(2, 'Concession Category'),
             SizedBox(height: 10.h),
-            _filterCol('Category', _drop<int>('Select Category', _con, [for (final c in _cats) (_id(c['con_id'])!, '${c['condesc']}')], (v) {
+            _filterCol('Concession Category *', _drop<int>('Select concession category', _con, [for (final c in _cats) (_id(c['con_id'])!, '${c['condesc']}')], (v) {
               setState(() => _con = v);
               _load();
             })),
@@ -435,30 +435,30 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
   Widget _kpis() {
     final perStudent = _rates.fold<double>(0, (t, r) => t + r.rupees);
     return Row(children: [
-      Expanded(child: _kpiCard(icon: 'people', tint: AppColors.primary, value: '$_inSection', label: 'Students in ${schoolTerm('class')}')),
+      Expanded(child: _kpiCard(icon: 'people', tint: AppColors.primary, value: '$_inSection', label: 'Students in ${schoolTerm('Class')}')),
       SizedBox(width: 12.w),
-      Expanded(child: _kpiCard(icon: 'profile-tick', tint: AppColors.demand, value: '$_withCat', label: 'With category', sub: _catName)),
+      Expanded(child: _kpiCard(icon: 'profile-tick', tint: AppColors.demand, value: '$_withCat', label: 'With Category', sub: _catName)),
       SizedBox(width: 12.w),
-      Expanded(child: _kpiCard(icon: 'discount-shape', tint: AppColors.success, value: '₹${_money(perStudent)}', label: 'Concession per student', sub: 'before New/Old etc.')),
+      Expanded(child: _kpiCard(icon: 'discount-shape', tint: AppColors.success, value: '₹${_money(perStudent)}', label: 'Concession per Student', sub: 'before New/Old etc.')),
       SizedBox(width: 12.w),
       Expanded(
         child: _kpiCard(
             icon: 'wallet-money',
             tint: AppColors.warning,
             value: _preview.isEmpty ? '—' : '₹${_money(_todoTotal)}',
-            label: 'To apply',
-            sub: _preview.isEmpty ? 'press Preview' : '${_todo.length} student(s)'),
+            label: 'To Apply',
+            sub: _preview.isEmpty ? 'Press Preview Students' : '${_todo.length} student(s)'),
       ),
     ]);
   }
 
   Widget _ratesTable() => _tableCard(
         icon: 'receipt-discount',
-        title: 'Concession per fee line',
+        title: 'Concession per Fee Line',
         trailing: "₹ = fixed amount  ·  % = of each student's fee  ·  arrear lines get their own AC voucher",
         head: Row(children: [
           _h(schoolTerm('Term'), 2),
-          _h('Fee type', 3),
+          _h('Fee Type', 3),
           _h('Fee (₹)', 2, align: TextAlign.right),
           SizedBox(width: 18.w),
           _hw('Concession', 220.w),
@@ -473,7 +473,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
           if (_rates.isEmpty)
             Padding(
               padding: EdgeInsets.all(16.w),
-              child: Text('This ${schoolTerm('class')} has no fee lines yet (Section Fee Demand / demands).',
+              child: Text(schoolTerm('This class has no fee lines yet. Add them in Class Fee Demand first.'),
                   style: AppUI.muted),
             ),
           for (var i = 0; i < _rates.length; i++) _rateRow(_rates[i], i),
@@ -542,7 +542,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
           SizedBox(width: 8.w),
           _flag(r.bgb, (x) => r.bgb = x, const ['Boy', 'Girl']),
           SizedBox(width: 8.w),
-          _flag(r.dhb, (x) => r.dhb = x, const ['Dayscholar', 'Hostler']),
+          _flag(r.dhb, (x) => r.dhb = x, const ['Day Scholar', 'Hosteller']),
         ]),
       );
 
@@ -553,9 +553,9 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
       title: 'Students (${_preview.length})',
       trailing: '$willApply of ${_preview.length} will get a voucher',
       head: Row(children: [
-        _h(schoolTerm('Roll No'), 2),
+        _h(schoolTerm('Roll No.'), 2),
         _h('Student', 4),
-        _h('Concession lines', 6),
+        _h('Concession Lines', 6),
         _h('Concession (₹)', 2, align: TextAlign.right),
         _h('Status', 2, align: TextAlign.right),
       ]),
@@ -625,6 +625,8 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
               style: AppUI.muted,
             ),
           ),
+          SizedBox(width: 12.w),
+          AppUI.requiredNote(),
           SizedBox(width: 12.w),
           OutlinedButton.icon(
             onPressed: _busy || !_hasRates ? null : () => _saveRates(),
