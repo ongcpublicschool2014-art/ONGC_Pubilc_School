@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
@@ -185,7 +186,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the students and TC details. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -304,17 +305,17 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       _snack('Select a TC sequence first.', AppColors.error);
       return;
     }
-    if (_indDocDate == null) { _snack('Doc Date is required.', AppColors.error); return; }
+    if (_indDocDate == null) { _snack('Select the document date.', AppColors.error); return; }
     // TC Date / Effect From are required when actually issuing a TC (a leaving
     // status); re-activating (Active) needs neither.
     if (_indStatus != 1) {
-      if (_indTcDate == null) { _snack('TC Date is required.', AppColors.error); return; }
-      if (_indEffectFrom == null) { _snack('Effect From is required.', AppColors.error); return; }
+      if (_indTcDate == null) { _snack('Select the TC date.', AppColors.error); return; }
+      if (_indEffectFrom == null) { _snack('Select the effective date.', AppColors.error); return; }
     }
     // TC Date must be on/after the student's Join Date (admission date).
     final join = s['stuadmdate'] == null ? null : DateTime.tryParse(s['stuadmdate'].toString());
     if (_indTcDate != null && join != null && _indTcDate!.isBefore(join)) {
-      _snack('TC Date cannot be before the Join Date (${_fmt(s['stuadmdate'])}).', AppColors.error);
+      _snack('The TC date cannot be before the date of admission (${_fmt(s['stuadmdate'])}). Select a later TC date.', AppColors.error);
       return;
     }
     // Warn about outstanding fees before issuing a TC (a leaving status).
@@ -356,11 +357,15 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           } catch (_) {/* non-fatal */}
         }
       }
-      _snack('Transfer Certificate saved. Status → ${_statusLabel(_indStatus)}.', AppColors.success);
+      _snack(
+          _indStatus == 1
+              ? 'Student re-activated. Status changed to ${_statusLabel(_indStatus)}.'
+              : 'Transfer certificate saved. Status changed to ${_statusLabel(_indStatus)}.',
+          AppColors.success);
       await _load();
       _indNew();
     } catch (e) {
-      _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save the transfer certificate. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _indSaving = false);
     }
@@ -389,7 +394,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Pending Fees'),
-          content: Text('This student has pending fees of ₹${amount.toStringAsFixed(2)}.\n\nAre you sure you want to continue with the Transfer Certificate?'),
+          content: Text('This student has pending fees of ₹${amount.toStringAsFixed(2)}.\n\nDo you want to issue the transfer certificate anyway?'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
             ElevatedButton(
@@ -487,7 +492,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
 
   Future<void> _wcGenerate() async {
     if (_wcSelected.isEmpty) { _snack('Select at least one student.', AppColors.error); return; }
-    if (_wcBulkStatus == null) { _snack('Choose a status in Bulk Action.', AppColors.error); return; }
+    if (_wcBulkStatus == null) { _snack('Select a status in Bulk Action.', AppColors.error); return; }
     // Setting the class back to Active CANCELS the TCs -- no certificate is
     // issued, so no number, no date and no sequence are needed.
     final isActivate = _wcBulkStatus == 1;
@@ -502,7 +507,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       if (missing.isNotEmpty) {
         final more = missing.length - 3;
         _snack(
-            'TC No and TC Date are required. Missing on '
+            '${schoolTerm('Enter the TC No. and TC date for register no. ')}'
             '${missing.take(3).join(', ')}${more > 0 ? ' and $more more' : ''}.',
             AppColors.error);
         return;
@@ -571,12 +576,12 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       _snack(
           isActivate
               ? 'Re-activated $saved student(s). Their TCs are cancelled.'
-              : 'Generated TC for $saved student(s) → ${_statusLabel(_wcBulkStatus!)}.',
+              : 'TC issued for $saved student(s). Status changed to ${_statusLabel(_wcBulkStatus!)}.',
           AppColors.success);
       await _load();
       _wcSelectClass(_wcClass);
     } catch (e) {
-      _snack('Generate failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not issue the TCs. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _wcSaving = false);
     }
@@ -590,7 +595,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 0),
-          child: AppUI.cardHeader(icon: 'document-text', title: 'Transfer Certificate'),
+          child: AppUI.cardHeader(icon: 'document-text', title: 'Transfer Certificate Entry'),
         ),
         // Pill tabs — same convention as Master Data / Admission Master.
         ListenableBuilder(
@@ -636,12 +641,12 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           _twoUpPanels(
             left: _sectionCard('Student Details', 'user', [
             _rowFields([
-              _labeled('Sequence *', DropdownButtonFormField<int>(
+              _labeled('TC Sequence *', DropdownButtonFormField<int>(
                 key: ValueKey('tcseq-${_indSeqId ?? 0}'),
                 initialValue: _indSeqId,
                 isExpanded: true,
                 style: AppUI.fieldText(context, filled: _indSeqId != null),
-                decoration: _dec(_sequences.isEmpty ? 'Create in Admission Master' : 'Auto doc no'),
+                decoration: _dec(_sequences.isEmpty ? 'No TC sequence yet. Add one in Admission Master' : 'Select TC sequence'),
                 items: _sequences.map((e) => DropdownMenuItem(value: (e['seq_id'] as num).toInt(), child: Text(_seqLabel(e), overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setState(() {
                   _indSeqId = v;
@@ -652,15 +657,15 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
               // Read-only: the document number comes from the chosen TC sequence
               // and is what the next save consumes, so a hand-typed value would
               // drift from the sequence counter.
-              _labeled('Doc No.', TextField(
+              _labeled('Document No.', TextField(
                 controller: _indDocNo,
                 readOnly: true,
                 style: AppUI.fieldText(context).copyWith(color: AppColors.textSecondary),
-                decoration: _dec('Auto from sequence').copyWith(
+                decoration: _dec(AppText.generated).copyWith(
                   fillColor: AppColors.tableHeadBg,
                 ),
               ), icon: 'receipt-2'),
-              _labeled('Doc Date *', _dateField(_indDocDate, (d) => setState(() => _indDocDate = d)), icon: 'calendar-1'),
+              _labeled('Document Date *', _dateField(_indDocDate, (d) => setState(() => _indDocDate = d), hint: 'Select document date'), icon: 'calendar-1'),
             ]),
             _rowFields([
               _labeled(schoolTerm('Course'), DropdownButtonFormField<String>(
@@ -668,8 +673,8 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                 initialValue: _indCourse,
                 isExpanded: true,
                 style: AppUI.fieldText(context, filled: _indCourse != null),
-                decoration: _dec(schoolTerm('All courses')),
-                items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All courses'))), ..._courses.map((e) => DropdownMenuItem(value: e['courname'].toString(), child: Text(e['courname'].toString(), overflow: TextOverflow.ellipsis)))],
+                decoration: _dec(schoolTerm('Select course (optional)')),
+                items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('Select course (optional)'))), ..._courses.map((e) => DropdownMenuItem(value: e['courname'].toString(), child: Text(e['courname'].toString(), overflow: TextOverflow.ellipsis)))],
                 onChanged: (v) => setState(() { _indCourse = v; _indClass = null; _indStudent = null; }),
               ), icon: 'ranking'),
               _labeled(schoolTerm('Class'), DropdownButtonFormField<String>(
@@ -677,11 +682,11 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                 initialValue: _indClass,
                 isExpanded: true,
                 style: AppUI.fieldText(context, filled: _indClass != null),
-                decoration: _dec(schoolTerm('All classes')),
-                items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All classes'))), ..._indClassOptions.map((e) => DropdownMenuItem(value: e['claname'].toString(), child: Text(e['claname'].toString(), overflow: TextOverflow.ellipsis)))],
+                decoration: _dec(schoolTerm('Select class (optional)')),
+                items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('Select class (optional)'))), ..._indClassOptions.map((e) => DropdownMenuItem(value: e['claname'].toString(), child: Text(e['claname'].toString(), overflow: TextOverflow.ellipsis)))],
                 onChanged: (v) => setState(() { _indClass = v; _indStudent = null; }),
               ), icon: 'grid-1'),
-              _labeled(schoolTerm('Reg No *'), _admnoAutocomplete(s), icon: 'user-add'),
+              _labeled(schoolTerm('Register No. *'), _admnoAutocomplete(s), icon: 'user-add'),
             ]),
             _rowFields([
               _labeled(
@@ -697,7 +702,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
               ),
               _labeled('Gender', _readonly(_genderLabel(s?['stugender'])), icon: 'user-tick'),
               _labeled('Date of Birth', _readonly(_fmt(s?['studob'])), icon: 'calendar-1'),
-              _labeled('Join Date', _readonly(_fmt(s?['stuadmdate'])), icon: 'calendar-1'),
+              _labeled(AppText.dateOfAdmission, _readonly(_fmt(s?['stuadmdate'])), icon: 'calendar-1'),
             ]),
           ]),
             right: _sectionCard('Transfer Certificate Details', 'document-text', [
@@ -721,32 +726,33 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                   }
                 }),
               ), icon: 'user-tick'),
-              _labeled('TC No.', TextField(controller: _indTcNo, style: AppUI.fieldText(context), decoration: _dec('TC number'))),
+              _labeled('TC No.', TextField(controller: _indTcNo, style: AppUI.fieldText(context), decoration: _dec('Enter TC number'))),
             ]),
             _rowFields([
-              _labeled('TC Date *', _dateField(_indTcDate, (d) => setState(() => _indTcDate = d))),
-              _labeled('Effect From *', _dateField(_indEffectFrom, (d) => setState(() => _indEffectFrom = d))),
+              _labeled('TC Date *', _dateField(_indTcDate, (d) => setState(() => _indTcDate = d), hint: 'Select TC date')),
+              _labeled('Effective From *', _dateField(_indEffectFrom, (d) => setState(() => _indEffectFrom = d), hint: 'Select effective date')),
             ]),
             _labeled('Remarks', TextField(
               controller: _indRemarks,
               maxLines: 3,
               maxLength: 500,
               style: AppUI.fieldText(context),
-              decoration: _dec('Enter remarks (optional)'),
+              decoration: _dec('Add remarks (optional)'),
             )),
           ]),
           ),
           SizedBox(height: AppUI.gap),
           Row(children: [
+            AppUI.requiredNote(),
             const Spacer(),
-            OutlinedButton(onPressed: _indSaving ? null : _indReset, child: const Text('Reset')),
+            OutlinedButton(onPressed: _indSaving ? null : _indReset, child: const Text(AppText.clear)),
             SizedBox(width: 10.w),
             ElevatedButton.icon(
               onPressed: _indSaving ? null : _indSave,
               icon: _indSaving
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save, size: 16),
-              label: const Text('Save'),
+              label: const Text(AppText.save),
             ),
           ]),
         ],
@@ -769,7 +775,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           controller: controller,
           focusNode: focusNode,
           style: AppUI.fieldText(context),
-          decoration: _dec('Search admn no / name').copyWith(prefixIcon: Icon(Icons.search, size: 18.sp, color: AppColors.textSecondary)),
+          decoration: _dec(schoolTerm('Search by register no. or name')).copyWith(prefixIcon: Icon(Icons.search, size: 18.sp, color: AppColors.textSecondary)),
           onSubmitted: (_) => onSubmit(),
         ),
         optionsViewBuilder: (context, onSelected, options) => Align(
@@ -813,7 +819,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
     switch (g?.toString().toUpperCase()) {
       case 'M': return 'Male';
       case 'F': return 'Female';
-      case 'T': return 'Transgender';
+      case 'T': return 'Other';
       default: return '';
     }
   }
@@ -839,18 +845,20 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           // Bulk Action (target status) + Generate TC (Selected) + refresh.
           Row(children: [
             SizedBox(
-              width: 220.w,
+              width: 280.w,
               child: DropdownButtonFormField<int>(
                 key: ValueKey('wcbulk-${_wcBulkStatus ?? 0}'),
                 initialValue: _wcBulkStatus,
                 isExpanded: true,
                 style: AppUI.fieldText(context, filled: _wcBulkStatus != null),
-                decoration: _dec('Bulk Action — set status'),
+                decoration: _dec('Select status for the ticked students'),
                 items: kTcStatuses.map((e) => DropdownMenuItem(value: e.$1, child: Text(e.$2))).toList(),
                 onChanged: (v) => setState(() => _wcBulkStatus = v),
               ),
             ),
             const Spacer(),
+            AppUI.requiredNote(),
+            SizedBox(width: 12.w),
             ElevatedButton.icon(
               onPressed: (_wcSaving || _wcSelected.isEmpty) ? null : _wcGenerate,
               icon: _wcSaving
@@ -860,7 +868,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
               // cancels TCs rather than generating them.
               label: Text(_wcBulkStatus == 1
                   ? 'Re-activate (${_wcSelected.length})'
-                  : 'Generate TC (${_wcSelected.length})'),
+                  : 'Issue TC (${_wcSelected.length})'),
             ),
             SizedBox(width: 8.w),
             IconButton(tooltip: 'Refresh', onPressed: _loading ? null : _load, icon: Icon(Icons.refresh, size: 20.sp, color: AppColors.textSecondary)),
@@ -891,7 +899,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
             SizedBox(width: 260.w, child: TextField(
               controller: _wcSearch,
               style: AppUI.fieldText(context),
-              decoration: _dec(schoolTerm('Search by reg no, name')).copyWith(prefixIcon: Icon(Icons.search, size: 18.sp, color: AppColors.textSecondary)),
+              decoration: _dec(schoolTerm('Search by register no. or name')).copyWith(prefixIcon: Icon(Icons.search, size: 18.sp, color: AppColors.textSecondary)),
               onChanged: (_) => setState(() => _wcPage = 0),
             )),
           ]),
@@ -925,8 +933,8 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                   if (v == true) { _wcSelected.addAll(ids); } else { _wcSelected.removeAll(ids); }
                 }),
               )),
-              _hc(schoolTerm('Reg No'), 2), _hc('Student Name', 3), _hc('Gender', 2), _hc('Birth', 2), _hc('Join', 2),
-              _hc('Status', 2), _hc('TC No *', 2), _hc('TC Date *', 2), _hc('Remarks', 3), SizedBox(width: 44.w),
+              _hc(schoolTerm('Register No.'), 2), _hc('Student Name', 3), _hc('Gender', 2), _hc(AppText.dateOfBirth, 2), _hc(AppText.dateOfAdmission, 2),
+              _hc('Status', 2), _hc('TC No. *', 2), _hc('TC Date *', 2), _hc('Remarks', 3), SizedBox(width: 44.w),
             ]),
           ),
           Expanded(
@@ -989,7 +997,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                                 style: AppUI.cell)
                             : InkWell(
                                 onTap: () async { final d = await _pickDate(row.tcDate); if (d != null) setState(() => row.tcDate = d); },
-                                child: Text(row.tcDate == null ? 'dd/mm/yyyy' : _fmt(_ymd(row.tcDate)),
+                                child: Text(row.tcDate == null ? AppText.dateHint : _fmt(_ymd(row.tcDate)),
                                     style: AppUI.cell.copyWith(color: row.tcDate == null ? AppColors.textLight : AppColors.textPrimary)),
                               )),
                     Expanded(flex: 3, child: Padding(padding: EdgeInsets.symmetric(horizontal: 4.w), child: TextField(controller: row.remarks, style: AppUI.fieldText(context), decoration: _decDense()))),
@@ -1119,17 +1127,20 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           borderRadius: BorderRadius.circular(AppUI.controlRadius),
           border: Border.all(color: AppColors.cardBorder),
         ),
-        child: Text(v.isEmpty ? '—' : v, style: AppUI.fieldText(context)),
+        child: Text(v.isEmpty ? AppText.autoFilled : v,
+            style: v.isEmpty
+                ? AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)
+                : AppUI.fieldText(context)),
       );
 
-  Widget _dateField(DateTime? value, ValueChanged<DateTime> onPick) => InkWell(
+  Widget _dateField(DateTime? value, ValueChanged<DateTime> onPick, {String hint = 'Select date'}) => InkWell(
         onTap: () async {
           final d = await _pickDate(value);
           if (d != null) onPick(d);
         },
         child: InputDecorator(
-          decoration: _dec('Select date'),
-          child: Text(value == null ? 'Select date' : _fmt(_ymd(value)),
+          decoration: _dec(hint),
+          child: Text(value == null ? hint : _fmt(_ymd(value)),
               style: value == null
                   ? AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)
                   : AppUI.fieldText(context, filled: true)),

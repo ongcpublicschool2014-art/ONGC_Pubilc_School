@@ -76,7 +76,7 @@ class _TcListScreenState extends State<_TcListScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load the certificates. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -105,7 +105,7 @@ class _TcListScreenState extends State<_TcListScreen> {
   Future<void> _approve(bool approve) async {
     final ids = _visible.where((i) => _picked.contains(_id(i)) && _approved(i) != approve).map(_id).toList();
     if (ids.isEmpty) {
-      _snack(approve ? 'Tick certificates awaiting approval first.' : 'Tick approved certificates first.', AppColors.warning);
+      _snack(approve ? 'Tick the certificates to approve.' : 'Tick the approved certificates whose approval you want to cancel.', AppColors.warning);
       return;
     }
     setState(() => _busy = true);
@@ -115,7 +115,7 @@ class _TcListScreenState extends State<_TcListScreen> {
       _picked.clear();
       await _load();
     } catch (e) {
-      _snack('Failed. ${friendlyError(e)}', AppColors.error);
+      _snack(approve ? 'Could not approve the certificates. ${friendlyError(e)}' : 'Could not cancel the approval. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -135,11 +135,11 @@ class _TcListScreenState extends State<_TcListScreen> {
       final path = await TcService.printTc(certs, _copy);
       if (path == null) return;
       await TcService.markPrinted([for (final c in certs) (c['tcc_id'] as num).toInt()]);
-      _snack('${certs.length} TC(s) filled into $path -- opened to print.', AppColors.success);
+      _snack('${certs.length} TC(s) saved to $path and opened for printing.', AppColors.success);
       _picked.clear();
       await _load();
     } catch (e) {
-      _snack(e is StateError ? e.message : 'Could not print. ${friendlyError(e)}', AppColors.error);
+      _snack(e is StateError ? e.message : 'Could not print the certificates. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -160,7 +160,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 5),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    SizedBox(width: 200, child: Text(e.key, style: AppUI.muted)),
+                    SizedBox(width: 200, child: Text(tcFieldLabel(e.key), style: AppUI.muted)),
                     Expanded(child: Text('${e.value}', style: AppUI.body)),
                   ]),
                 ),
@@ -187,13 +187,13 @@ class _TcListScreenState extends State<_TcListScreen> {
           icon: _approval ? 'tick-square' : 'printer',
           title: _approval ? 'TC Approval' : 'TC Print',
           subtitle: _approval
-              ? 'Approve the saved certificates -- only approved ones can be printed. Approval Cancel re-opens one for editing.'
+              ? 'Approve the saved certificates; only approved certificates can be printed. Cancel Approval re-opens a certificate for editing.'
               : 'Fill the school\'s TC format for the ticked certificates and open it to print.',
           trailing: [IconButton(tooltip: 'Refresh', onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh))],
         ),
         SizedBox(height: 14.h),
         Row(children: [
-          SizedBox(width: 320.w, child: AppSearchField(controller: _search, hintText: 'Search name / adm no / TC no', onChanged: (_) => setState(() {}))),
+          SizedBox(width: 320.w, child: AppSearchField(controller: _search, hintText: 'Search by name, admission no. or TC no.', onChanged: (_) => setState(() {}))),
           SizedBox(width: 12.w),
           Wrap(spacing: 8.w, children: [
             for (final f in filters) ChoiceChip(label: Text(f.$2), selected: _filter == f.$1, onSelected: (_) => setState(() => _filter = f.$1)),
@@ -201,14 +201,14 @@ class _TcListScreenState extends State<_TcListScreen> {
           const Spacer(),
           if (!_approval) ...[
             SizedBox(
-              width: 220.w,
+              width: 300.w,
               child: DropdownButtonFormField<String>(
                 initialValue: _copy,
                 isExpanded: true,
-                decoration: AppUI.field(context, 'Copy', leadingIcon: 'document-text', filled: true),
+                decoration: AppUI.field(context, 'Copy', label: 'Copy Type', leadingIcon: 'document-text', filled: true),
                 style: AppUI.fieldText(context, filled: true),
                 items: const [
-                  DropdownMenuItem(value: 'AUTO', child: Text('Auto (Original / Duplicate)')),
+                  DropdownMenuItem(value: 'AUTO', child: Text('Automatic (Original first, then Duplicate)')),
                   DropdownMenuItem(value: 'ORIGINAL', child: Text('Original')),
                   DropdownMenuItem(value: 'DUPLICATE', child: Text('Duplicate')),
                 ],
@@ -218,7 +218,7 @@ class _TcListScreenState extends State<_TcListScreen> {
             SizedBox(width: 10.w),
           ],
           if (_approval) ...[
-            OutlinedButton.icon(onPressed: _busy ? null : () => _approve(false), icon: const Icon(Icons.undo, size: 16), label: const Text('Cancel approval')),
+            OutlinedButton.icon(onPressed: _busy ? null : () => _approve(false), icon: const Icon(Icons.undo, size: 16), label: const Text('Cancel Approval')),
             SizedBox(width: 10.w),
             ElevatedButton.icon(onPressed: _busy ? null : () => _approve(true), icon: const Icon(Icons.verified, size: 16), label: Text('Approve (${_picked.length})')),
           ] else
@@ -233,7 +233,7 @@ class _TcListScreenState extends State<_TcListScreen> {
             margin: EdgeInsets.only(top: 10.h),
             padding: EdgeInsets.all(12.w),
             decoration: BoxDecoration(color: AppColors.warningBg, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
-            child: Text('Upload the school\'s TC format (Word .docx or PDF) in TC -> TC Format before printing.', style: AppUI.label.copyWith(color: AppColors.warning)),
+            child: Text('No TC format uploaded. Upload the school\'s TC format (Word .docx or PDF) in TC > TC Format before printing.', style: AppUI.label.copyWith(color: AppColors.warning)),
           ),
         SizedBox(height: 14.h),
         Expanded(
@@ -256,7 +256,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                   ),
                   AppUI.th('Student', flex: 4),
                   AppUI.th('Section', flex: 2),
-                  AppUI.th('TC No', flex: 2),
+                  AppUI.th('TC No.', flex: 2),
                   AppUI.th(_approval ? 'Saved by' : 'Approved by', flex: 3),
                   AppUI.th(_approval ? 'Status' : 'Printed', flex: 2),
                   const SizedBox(width: 48),
@@ -265,9 +265,9 @@ class _TcListScreenState extends State<_TcListScreen> {
               Expanded(
                 child: rows.isEmpty
                     ? AppUI.empty(
-                        title: 'Nothing here',
+                        title: 'No certificates to show',
                         why: _items.isEmpty
-                            ? 'Save certificates in TC -> TC Certificate first.'
+                            ? 'Save certificates in TC > TC Details first.'
                             : (_approval ? 'No certificate matches this filter.' : 'No approved certificate matches -- approve them in TC Approval.'),
                         icon: _approval ? 'tick-square' : 'printer')
                     : ListView.separated(
@@ -319,7 +319,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                                             : AppUI.chip('Awaiting approval', AppStatus.warning))
                                         : (_prints(i) == 0
                                             ? AppUI.chip('Not printed', AppStatus.neutral)
-                                            : AppUI.chip('${_prints(i)}x · ${tcDate(c['lastprintedat'])}', AppStatus.info)),
+                                            : AppUI.chip('Printed ${_prints(i)} time(s) · ${tcDate(c['lastprintedat'])}', AppStatus.info)),
                                   ),
                                 ),
                                 SizedBox(

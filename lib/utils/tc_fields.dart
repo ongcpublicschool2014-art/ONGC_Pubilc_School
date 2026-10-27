@@ -56,7 +56,7 @@ final List<TcField> kTcFields = [
   TcField('TC Date', 'Transfer Certificate', auto: (s) => tcDate(s.tc['tcdate'])),
   TcField('Leaving Date', 'Transfer Certificate', auto: (s) => tcDate(s.tc['effectfrom'] ?? s.tc['tcdate'])),
   TcField('Leaving Status', 'Transfer Certificate', auto: (s) => '${s.tc['statustype'] ?? ''}'),
-  TcField('Date of Application', 'Transfer Certificate', hint: 'dd-mm-yyyy'),
+  TcField('Date of Application', 'Transfer Certificate', hint: 'DD-MM-YYYY'),
   TcField('Date Struck Off', 'Transfer Certificate', auto: (s) => tcDate(s.tc['effectfrom'] ?? s.tc['tcdate'])),
   TcField('Reason for Leaving', 'Transfer Certificate', auto: (s) => '${s.tc['remarks'] ?? ''}'.trim().isNotEmpty ? '${s.tc['remarks']}' : '${s.tc['statustype'] ?? ''}'),
   TcField('Book No', 'Transfer Certificate'),
@@ -153,18 +153,44 @@ final List<TcField> kTcFields = [
 
 final Set<String> kTcFieldKeys = {for (final f in kTcFields) f.key};
 
-const kTcCourseGroup = 'Course (state board / Hr. Sec.)';
+/// What a field is CALLED on screen. The key is a {placeholder} inside the
+/// schools' uploaded Word formats and must never change, so the screens show
+/// this label instead; a key not listed here reads as itself.
+const Map<String, String> _kTcFieldLabels = {
+  'TC No': 'TC No.',
+  'Book No': 'Book No.',
+  'Admission No': 'Admission No.',
+  'DOB': 'Date of Birth',
+  'DOB in Words': 'Date of Birth in Words',
+  'DOB in Figures and Words': 'Date of Birth in Figures and Words',
+  'DOB as per Birth Certificate': 'Date of Birth as per Birth Certificate',
+  'Aadhar No': 'Aadhaar No.',
+  'EMIS No': 'EMIS No.',
+  'Father Name': "Father's Name",
+  'Mother Name': "Mother's Name",
+  'Guardian Name': "Guardian's Name",
+  'Father or Mother Name': "Father's or Mother's Name",
+  'Father Name (Tamil)': "Father's Name (Tamil)",
+  'Mark Certificate S.No': 'Mark Certificate Serial No.',
+  'Register No': 'Register No.',
+  'TMR Code No & Date': 'TMR Code No. and Date',
+};
+
+/// Display label for a TC field [key] (display only -- never use it as a key).
+String tcFieldLabel(String key) => _kTcFieldLabels[key] ?? key;
+
+const kTcCourseGroup = 'Course (State Board / Higher Secondary)';
 
 /// The "course of study" table of the state-board TC: up to [kTcStudyRows]
 /// schools, placeholders {Study 1 School}, {Study 1 Years} ...
 const kTcStudyGroup = 'Course of study';
 const kTcStudyRows = 5;
 const List<(String, String)> kTcStudyCols = [
-  ('School', 'Name of the school'),
-  ('Years', 'Academic year(s)'),
-  ('Standard', 'Standard(s) studied'),
-  ('Language', 'First language'),
-  ('Medium', 'Medium of instruction'),
+  ('School', 'Name of the School'),
+  ('Years', 'Academic Year(s)'),
+  ('Standard', 'Standard(s) Studied'),
+  ('Language', 'First Language'),
+  ('Medium', 'Medium of Instruction'),
 ];
 
 /// School-level typed fields: a new certificate starts with the value from

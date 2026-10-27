@@ -96,7 +96,7 @@ class TcService {
   static Future<String?> printTc(List<Map<String, dynamic>> certs, String copy) async {
     final f = await format(withContent: true);
     final b64 = f?['content_b64']?.toString() ?? '';
-    if (b64.isEmpty) throw StateError('No TC format uploaded yet -- upload it in TC Format first.');
+    if (b64.isEmpty) throw StateError('No TC format has been uploaded. Upload one in TC > TC Format, then print again.');
     final now = DateTime.now();
     final printDate = tcDate(now.toIso8601String());
     final rows = <Map<String, String>>[
@@ -115,7 +115,7 @@ class TcService {
     if (pdf) {
       final layout = TcPdfLayout.fromJson(f?['layout']);
       if (layout.fields.isEmpty) {
-        throw StateError('The PDF format has no fields placed yet -- place them in TC Format first.');
+        throw StateError('The PDF format has no fields placed yet. Place the fields in TC > TC Format, then print again.');
       }
       bytes = await TcPdf.fill(base64Decode(b64), layout, rows);
     } else {
@@ -126,7 +126,7 @@ class TcService {
     final name = certs.length == 1
         ? 'TC_${safe('${certs.first['stuadmno'] ?? ''}')}_${safe('${certs.first['stuname'] ?? ''}')}.$ext'
         : 'TC_${certs.length}_students_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.$ext';
-    return saveAndOpen(name, bytes, dialogTitle: 'Save the filled TC');
+    return saveAndOpen(name, bytes, dialogTitle: 'Save Transfer Certificate');
   }
 
   /// Ask where to save [bytes] and open the file in its default app.

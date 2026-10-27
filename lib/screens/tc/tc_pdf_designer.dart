@@ -15,7 +15,7 @@ const Map<String, String> kTcPdfSamples = {
   'Mother Name': 'LATHA S',
   'Admission No': 'ADM00012',
   'TC No': 'TC0001',
-  'DOB': '05/06/2015',
+  'DOB': '05-06-2015',
   'DOB in Words': 'Fifth June Two Thousand Fifteen',
   'Nationality': 'INDIAN',
   'Copy': 'ORIGINAL',
@@ -61,8 +61,8 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
     _layout = TcPdfLayout.fromJson(widget.layout.toJson());
     TcPdf.pages(widget.pdf).then((p) {
       if (mounted) setState(() => _pages = p);
-    }).catchError((Object e) {
-      if (mounted) setState(() => _err = '$e');
+    }).catchError((Object _) {
+      if (mounted) setState(() => _err = 'The PDF could not be opened. It may be damaged or password-protected; upload it again in TC Format.');
     });
   }
 
@@ -357,15 +357,15 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
             AppUI.sectionLabel('Add a field'),
             Text(
               _marker == null
-                  ? 'Click the page where the value should start, then choose the field and Add.'
-                  : 'Marker set -- choose the field and Add.',
+                  ? 'Click the page where the value should start, then choose the field and click Add Field.'
+                  : 'Marker set. Choose the field, then click Add at Marker.',
               style: AppUI.muted,
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _addKey,
               isExpanded: true,
-              decoration: AppUI.field(context, 'Choose a field', dense: true),
+              decoration: AppUI.field(context, 'Select field', dense: true),
               style: AppUI.fieldText(context),
               items: [
                 for (final k in _allKeys) DropdownMenuItem(value: k, child: Text('{$k}', overflow: TextOverflow.ellipsis)),
@@ -377,7 +377,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               const SizedBox(height: 8),
               TextField(
                 controller: _customCtl,
-                decoration: AppUI.field(context, 'Field name, e.g. Book No', dense: true),
+                decoration: AppUI.field(context, 'Enter field name, e.g. Book No', dense: true),
                 style: AppUI.fieldText(context),
                 onSubmitted: (_) => _add(),
               ),
@@ -386,7 +386,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
             OutlinedButton.icon(
               onPressed: _addKey == null ? null : _add,
               icon: const Icon(Icons.add, size: 16),
-              label: Text(_marker == null ? 'Add' : 'Add at marker'),
+              label: Text(_marker == null ? 'Add Field' : 'Add at Marker'),
             ),
             const SizedBox(height: 16),
             if (f != null) ...[
@@ -400,7 +400,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               Row(children: [
                 _num('Width (pt)', f.w, (v) => f.w = v.clamp(20, 2000)),
                 const SizedBox(width: 8),
-                _num('Font size', f.size, (v) => f.size = v.clamp(5, 48)),
+                _num('Font Size', f.size, (v) => f.size = v.clamp(5, 48)),
               ]),
               const SizedBox(height: 10),
               Row(children: [
@@ -409,7 +409,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                     showSelectedIcon: false,
                     segments: const [
                       ButtonSegment(value: 'left', icon: Icon(Icons.format_align_left, size: 16), tooltip: 'Align left'),
-                      ButtonSegment(value: 'center', icon: Icon(Icons.format_align_center, size: 16), tooltip: 'Centre'),
+                      ButtonSegment(value: 'center', icon: Icon(Icons.format_align_center, size: 16), tooltip: 'Align centre'),
                       ButtonSegment(value: 'right', icon: Icon(Icons.format_align_right, size: 16), tooltip: 'Align right'),
                     ],
                     selected: {f.align},
@@ -432,14 +432,14 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                   onPressed: _remove,
                   style: TextButton.styleFrom(foregroundColor: AppColors.error),
                   icon: const Icon(Icons.delete_outline, size: 16),
-                  label: const Text('Remove field'),
+                  label: const Text('Remove Field'),
                 ),
               ),
               const SizedBox(height: 12),
             ],
             AppUI.sectionLabel('Fields placed (${_layout.fields.length})'),
             if (_layout.fields.isEmpty)
-              Text('None yet.', style: AppUI.muted)
+              Text('No fields placed yet.', style: AppUI.muted)
             else
               for (var i = 0; i < _layout.fields.length; i++)
                 InkWell(
@@ -460,7 +460,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                     ),
                     child: Row(children: [
                       Expanded(child: Text('{${_layout.fields[i].key}}', style: AppUI.body, overflow: TextOverflow.ellipsis)),
-                      if (_pages!.length > 1) Text('p${_layout.fields[i].page + 1}', style: AppUI.muted),
+                      if (_pages!.length > 1) Text('Page ${_layout.fields[i].page + 1}', style: AppUI.muted),
                     ]),
                   ),
                 ),
@@ -469,7 +469,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               contentPadding: EdgeInsets.zero,
               value: _layout.background,
               onChanged: (v) => _change(() => _layout.background = v),
-              title: Text('Print the form background', style: AppUI.label),
+              title: Text('Print Form Background', style: AppUI.label),
               subtitle: Text('Turn off for TC books that already have the form printed -- only the values print.', style: AppUI.muted),
             ),
           ]),
@@ -483,14 +483,14 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               onPressed: _testing || _layout.fields.isEmpty ? null : _test,
               child: _testing
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Test print'),
+                  : const Text('Test Print'),
             ),
             const SizedBox(width: 8),
             ElevatedButton(
               onPressed: _saving || !_dirty ? null : _save,
               child: _saving
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Save layout'),
+                  : const Text('Save Layout'),
             ),
           ]),
         ),

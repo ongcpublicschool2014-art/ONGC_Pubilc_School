@@ -60,7 +60,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
         });
       }
     } catch (e) {
-      _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the TC format. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -78,7 +78,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Replace the TC format?'),
+          title: const Text('Replace TC Format?'),
           content: Text(_isPdf
               ? 'The fields placed on the current PDF will be cleared. Saved certificates are not affected.'
               : 'Saved certificates are not affected; they print on the new format.'),
@@ -94,12 +94,12 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
     try {
       await TcService.saveFormat(f.name, bytes);
       if (pdf) {
-        _snack('PDF format uploaded -- now place each field on the page and Save layout.', AppColors.success);
+        _snack('PDF format uploaded. Now place each field on the page, then click Save Layout.', AppColors.success);
       } else {
         final ph = TcDocx.placeholders(bytes);
         _snack(ph.isEmpty
-            ? 'Uploaded, but no {placeholders} were found -- type them where the data should go, e.g. {Student Name}.'
-            : 'TC format uploaded -- ${ph.length} placeholder(s) found.',
+            ? 'Format uploaded, but no {placeholders} were found. Type them in the Word file where the data should go, e.g. {Student Name}, then upload it again.'
+            : 'TC format uploaded. ${ph.length} placeholder(s) found.',
             ph.isEmpty ? AppColors.warning : AppColors.success);
       }
       await _load();
@@ -117,7 +117,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
       final out = await TcService.saveAndOpen(name, bytes);
       if (out != null) _snack('Saved to $out', AppColors.success);
     } catch (e) {
-      _snack('Could not save. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save the file. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -125,7 +125,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
     try {
       await TcService.saveLayout(layout);
       _fmt?['layout'] = layout.toJson();
-      _snack('Layout saved -- ${layout.fields.length} field(s).', AppColors.success);
+      _snack('Layout saved with ${layout.fields.length} field(s).', AppColors.success);
       return true;
     } catch (e) {
       _snack('Could not save the layout. ${friendlyError(e)}', AppColors.error);
@@ -165,15 +165,21 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
                   onSelected: (v) => v == 'STATE'
                       ? _open('TC_Format_State_Board.docx', TcDocx.sampleStateBoard(studyRows: kTcStudyRows, studyCols: kTcStudyCols))
                       : _open('TC_Format_CBSE.docx', TcDocx.sample(kTcSampleLines)),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'CBSE', child: Text('CBSE format')),
-                    PopupMenuItem(value: 'STATE', child: Text('State board format (TN / Puducherry, as the old app) -- delete the Hr. Sec. line if not needed')),
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'CBSE', child: Text('CBSE Format')),
+                    PopupMenuItem(
+                      value: 'STATE',
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                        const Text('State Board Format (Tamil Nadu / Puducherry)'),
+                        Text('Delete the Higher Secondary line if not needed.', style: AppUI.muted),
+                      ]),
+                    ),
                   ],
                   child: IgnorePointer(
                     child: OutlinedButton.icon(
                       onPressed: () {},
                       icon: const Icon(Icons.download, size: 16),
-                      label: const Text('Word sample'),
+                      label: const Text('Download Word Sample'),
                     ),
                   ),
                 ),
@@ -181,14 +187,14 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
                   OutlinedButton.icon(
                     onPressed: () => _open('${_fmt!['filename'] ?? (_isPdf ? 'TC_Format.pdf' : 'TC_Format.docx')}', _bytes!),
                     icon: const Icon(Icons.file_open_outlined, size: 16),
-                    label: const Text('Open current'),
+                    label: const Text('Open Current Format'),
                   ),
                 ElevatedButton.icon(
                   onPressed: _busy ? null : _upload,
                   icon: _busy
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.upload_file, size: 16),
-                  label: Text(_fmt == null ? 'Upload format' : 'Replace format'),
+                  label: Text(_fmt == null ? 'Upload Format' : 'Replace Format'),
                 ),
               ],
             ),
@@ -209,7 +215,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
                     Row(children: [
                       Flexible(child: Text('${_fmt!['filename']}', style: AppUI.label, overflow: TextOverflow.ellipsis)),
                       SizedBox(width: 8.w),
-                      AppUI.chip(_isPdf ? 'PDF' : 'WORD', _isPdf ? AppStatus.danger : AppStatus.info),
+                      AppUI.chip(_isPdf ? 'PDF' : 'Word', _isPdf ? AppStatus.danger : AppStatus.info),
                     ]),
                     Text('Uploaded by ${_fmt!['uploadedby'] ?? ''} on ${tcDate(_fmt!['uploadedat'])}', style: AppUI.muted),
                   ]),
@@ -221,7 +227,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
                 Wrap(spacing: 8.w, runSpacing: 8.h, children: [
                   for (final k in ph)
                     Tooltip(
-                      message: known.contains(k) ? 'Filled by the app' : 'Not a standard field -- typed on TC Certificate',
+                      message: known.contains(k) ? 'Filled by the app' : 'Not a standard field; enter it on the TC Details screen',
                       child: AppUI.chip('{$k}', known.contains(k) ? AppStatus.success : AppStatus.info),
                     ),
                 ]),
@@ -237,8 +243,8 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               AppUI.cardHeader(
                 icon: 'edit-2',
-                title: 'Place the fields',
-                subtitle: 'Put each value where it should print. Use Test print to check on paper, then Save layout.',
+                title: 'Place the Fields',
+                subtitle: 'Put each value where it should print. Use Test Print to check on paper, then Save Layout.',
               ),
               SizedBox(height: 14.h),
               TcPdfDesigner(
@@ -255,7 +261,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
             padding: EdgeInsets.all(AppUI.cardPad),
             decoration: AppUI.card(),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              AppUI.cardHeader(icon: 'tag', title: 'Placeholders you can use', subtitle: 'Click one to copy it, then paste it into the Word file.'),
+              AppUI.cardHeader(icon: 'tag', title: 'Available Placeholders', subtitle: 'Click one to copy it, then paste it into the Word file.'),
               SizedBox(height: 12.h),
               for (final g in {for (final f in kTcFields) f.group}) ...[
                 AppUI.sectionLabel(g),
@@ -271,7 +277,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
               AppUI.sectionLabel('At print time'),
               Wrap(spacing: 8.w, runSpacing: 8.h, children: [_copyChip('Copy'), _copyChip('Print Date')]),
               SizedBox(height: 10.h),
-              Text('{Copy} prints ORIGINAL the first time and DUPLICATE on reprints. Any other {name} you add becomes an extra field to fill on TC Certificate.',
+              Text('{Copy} prints ORIGINAL the first time and DUPLICATE on reprints. Any other {name} you add becomes an extra field to fill on TC Details.',
                   style: AppUI.muted),
             ]),
           ),
@@ -283,7 +289,7 @@ class _TcFormatScreenState extends State<TcFormatScreen> {
         label: Text('{$k}'),
         onPressed: () {
           Clipboard.setData(ClipboardData(text: '{$k}'));
-          _snack('{$k} copied.', AppColors.success);
+          _snack('{$k} copied to clipboard.', AppColors.success);
         },
       );
 }

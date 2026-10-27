@@ -85,7 +85,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load the TC details. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -149,7 +149,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
         if (f.auto != null) _c(f.key).text = auto[f.key] ?? '';
       }
     });
-    _snack('Filled again from the student and admission records -- Save to keep.', AppColors.info);
+    _snack('Fields refilled from the student and admission records. Click Save to keep them.', AppColors.info);
   }
 
   Future<void> _save() async {
@@ -162,10 +162,10 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
       };
       fields['TC No'] = _serial.text.trim();
       await TcService.save((i['stu_id'] as num).toInt(), _serial.text.trim(), fields);
-      _snack('TC certificate saved for ${i['stuname']}. It now waits for approval.', AppColors.success);
+      _snack('Certificate saved for ${i['stuname']}. It is now awaiting approval in TC Approval.', AppColors.success);
       await _load(keepStu: i['stu_id'] as int?);
     } catch (e) {
-      _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save the certificate. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -178,14 +178,14 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Cancel this TC certificate?'),
+        title: const Text('Cancel This Certificate?'),
         content: SizedBox(
           width: 380,
-          child: TextField(controller: reason, decoration: AppUI.field(ctx, 'Reason (optional)')),
+          child: TextField(controller: reason, decoration: AppUI.field(ctx, 'Enter reason (optional)')),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: AppUI.danger(ctx), child: const Text('Cancel certificate')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep Certificate')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: AppUI.danger(ctx), child: const Text('Cancel Certificate')),
         ],
       ),
     );
@@ -195,7 +195,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
       _snack('Certificate cancelled.', AppColors.success);
       await _load(keepStu: _sel?['stu_id'] as int?);
     } catch (e) {
-      _snack('Could not cancel. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not cancel the certificate. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -211,13 +211,13 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
     if (_loading && _items.isEmpty) return const Center(child: CircularProgressIndicator());
     final rows = _visible;
     return AppMasterDetail(
-      listTitle: 'TC Certificates',
+      listTitle: 'TC Details',
       listIcon: 'document-text',
       listSubtitle: 'Students with a TC issued',
       listActions: [
         IconButton(tooltip: 'Refresh', onPressed: _loading ? null : () => _load(keepStu: _sel?['stu_id'] as int?), icon: const Icon(Icons.refresh)),
       ],
-      search: AppSearchField(controller: _search, hintText: 'Search name / adm no / section', onChanged: (_) => setState(() {})),
+      search: AppSearchField(controller: _search, hintText: 'Search by name, admission no. or section', onChanged: (_) => setState(() {})),
       filters: [
         Wrap(spacing: 8.w, runSpacing: 6.h, children: [
           for (final f in const [('ALL', 'All'), ('NEW', 'Not started'), ('DRAFT', 'Awaiting approval'), ('APPROVED', 'Approved')])
@@ -226,8 +226,8 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
       ],
       list: rows.isEmpty
           ? AppUI.empty(
-              title: _items.isEmpty ? 'No TC issued yet' : 'Nothing matches',
-              why: _items.isEmpty ? 'Issue the TC first in TC -> Transfer Certificate; the student then appears here.' : 'Change the search or filter.',
+              title: _items.isEmpty ? 'No TC issued yet' : 'No matching students',
+              why: _items.isEmpty ? 'Issue the TC first in TC > Transfer Certificate Entry; the student then appears here.' : 'Change the search or filter.',
               icon: 'document-text')
           : ListView.separated(
               itemCount: rows.length,
@@ -325,7 +325,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
           margin: EdgeInsets.symmetric(horizontal: AppUI.cardPad),
           padding: EdgeInsets.all(12.w),
           decoration: BoxDecoration(color: AppColors.successBg, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
-          child: Text('Approved by ${cert?['approvedby'] ?? ''} on ${tcDate(cert?['approveddate'])}. Read-only -- cancel the approval in TC Approval to edit.',
+          child: Text('Approved by ${cert?['approvedby'] ?? ''} on ${tcDate(cert?['approveddate'])}. This certificate is read-only; to edit it, cancel the approval in TC Approval.',
               style: AppUI.label.copyWith(color: AppColors.success)),
         ),
       if (_templateKeys.isEmpty)
@@ -333,7 +333,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
           margin: EdgeInsets.fromLTRB(AppUI.cardPad, 8.h, AppUI.cardPad, 0),
           padding: EdgeInsets.all(12.w),
           decoration: BoxDecoration(color: AppColors.warningBg, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
-          child: Text('No TC format uploaded yet (TC -> TC Format). You can fill and approve now; printing needs the format.',
+          child: Text('No TC format uploaded yet. You can fill and approve certificates now; to print them, upload a format in TC > TC Format.',
               style: AppUI.label.copyWith(color: AppColors.warning)),
         ),
       const Divider(height: 24),
@@ -348,7 +348,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
                 AppUI.sectionLabel('TC serial number'),
                 SizedBox(
                   width: 320.w,
-                  child: TextField(controller: _serial, style: AppUI.fieldText(context, filled: true), decoration: AppUI.field(context, 'TC No', filled: true)),
+                  child: TextField(controller: _serial, style: AppUI.fieldText(context, filled: true), decoration: AppUI.field(context, 'Enter TC number', filled: true)),
                 ),
                 SizedBox(height: 14.h),
                 for (final g in groups.entries) ...[
@@ -365,7 +365,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
                           SizedBox(
                             width: w,
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              AppUI.fieldLabel(k, optional: false),
+                              AppUI.fieldLabel(tcFieldLabel(k), optional: false),
                               TextField(
                                 controller: _c(k),
                                 style: AppUI.fieldText(context, filled: _c(k).text.isNotEmpty),
@@ -385,7 +385,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
         ),
       ),
       AppFormFooter(
-        note: _locked ? 'Approved certificates are read-only.' : 'Every value here is what the TC prints. Save, then approve in TC Approval.',
+        note: _locked ? 'Approved certificates are read-only.' : 'The TC prints these values exactly. Save, then approve the certificate in TC Approval.',
         onCancel: () => setState(() => _sel = null),
         cancelLabel: 'Close',
         actions: [
@@ -393,17 +393,17 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
             OutlinedButton.icon(
                 onPressed: _saving ? null : _cancelCert,
                 icon: const Icon(Icons.block, size: 16),
-                label: const Text('Cancel certificate'),
+                label: const Text('Cancel Certificate'),
                 style: AppUI.secondary(context).copyWith(foregroundColor: const WidgetStatePropertyAll(AppColors.error))),
           if (!_locked)
-            OutlinedButton.icon(onPressed: _saving ? null : _refill, icon: const Icon(Icons.restart_alt, size: 16), label: const Text('Refill from records')),
+            OutlinedButton.icon(onPressed: _saving ? null : _refill, icon: const Icon(Icons.restart_alt, size: 16), label: const Text('Refill from Records')),
           if (!_locked)
             ElevatedButton.icon(
               onPressed: _saving ? null : _save,
               icon: _saving
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save, size: 16),
-              label: Text(cert == null ? 'Save certificate' : 'Save changes'),
+              label: Text(cert == null ? 'Save Certificate' : 'Update Certificate'),
             ),
         ],
       ),

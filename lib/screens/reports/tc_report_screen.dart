@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/app_text.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/friendly_error.dart';
@@ -36,11 +37,11 @@ class TcReportScreen extends StatefulWidget {
 
 String _s(Object? v) => (v ?? '').toString().trim();
 
-/// 'yyyy-MM-dd...' -> 'dd/MM/yyyy'.
+/// 'yyyy-MM-dd...' -> 'dd-MM-yyyy'.
 String _d(Object? v) {
   final s = _s(v);
   if (s.length < 10) return '';
-  return '${s.substring(8, 10)}/${s.substring(5, 7)}/${s.substring(0, 4)}';
+  return '${s.substring(8, 10)}-${s.substring(5, 7)}-${s.substring(0, 4)}';
 }
 
 class _TcReportScreenState extends State<TcReportScreen> {
@@ -180,7 +181,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
       if (!mounted) return;
       setState(() => _rows = rows);
     } catch (e) {
-      if (mounted) _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack('Could not load the TC report. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _counting = false);
     }
@@ -188,7 +189,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
 
   Future<void> _run({required bool pdf}) async {
     if (_rows.isEmpty) {
-      _snack('Nothing to export yet.', AppColors.warning);
+      _snack('No transfer certificates to export.', AppColors.warning);
       return;
     }
     setState(() => _running = true);
@@ -213,9 +214,9 @@ class _TcReportScreenState extends State<TcReportScreen> {
         insName: _insName,
         insAddress: _insAddress,
         insCity: _insCity,
-        title: 'TRANSFER CERTIFICATE PROVIDED DETAILS REPORT',
-        subtitle: 'Academic Year : $_yearLabel',
-        headers: ['TC No', 'Tc Date', schoolTerm('Reg. No'), 'Student Name', schoolTerm('Class'), 'Join Date'],
+        title: 'TRANSFER CERTIFICATES ISSUED',
+        subtitle: 'Academic Year: $_yearLabel',
+        headers: ['TC No.', 'TC Date', schoolTerm('Register No.'), 'Student Name', schoolTerm('Class'), AppText.dateOfAdmission],
         rows: [
           for (final r in _rows)
             [
@@ -228,11 +229,11 @@ class _TcReportScreenState extends State<TcReportScreen> {
             ],
         ],
         landscape: false,
-        footNote: 'Total : ${_rows.length} transfer certificate(s)',
+        footNote: 'Total: ${_rows.length} transfer certificate(s)',
       );
-      if (ok) _snack('TC report PDF saved -- ${_rows.length} certificates.', AppColors.success);
+      if (ok) _snack('TC report saved as PDF (${_rows.length} certificates).', AppColors.success);
     } catch (e) {
-      _snack('Could not build the TC PDF. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not create the TC report PDF. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _running = false);
     }
@@ -300,7 +301,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
     try {
       await _export(_rows);
     } catch (e) {
-      _snack('Could not build the report. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not create the Excel file. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _running = false);
     }
@@ -342,10 +343,10 @@ class _TcReportScreenState extends State<TcReportScreen> {
     put(2, 0, _insName.toUpperCase(), bold);
     if (_insAddress.isNotEmpty) put(2, 1, _insAddress.toUpperCase(), bold);
     if (_insCity.isNotEmpty) put(2, 2, _insCity.toUpperCase(), bold);
-    put(2, 3, 'TRANSFER CERTIFICATE PROVIDED DETAILS REPORT', bold);
-    put(2, 4, 'Academic Year : $_yearLabel', bold);
+    put(2, 3, 'TRANSFER CERTIFICATES ISSUED', bold);
+    put(2, 4, 'Academic Year: $_yearLabel', bold);
 
-    final headers = ['TC No', 'Tc Date', schoolTerm('Reg. No'), 'Student Name', schoolTerm('Class'), 'Join Date'];
+    final headers = ['TC No.', 'TC Date', schoolTerm('Register No.'), 'Student Name', schoolTerm('Class'), AppText.dateOfAdmission];
     const headerRow = 6;
     for (var c = 0; c < headers.length; c++) {
       put(c, headerRow, headers[c], hdr);
@@ -362,12 +363,12 @@ class _TcReportScreenState extends State<TcReportScreen> {
       put(5, r, _d(row['joindate']));
       r++;
     }
-    put(0, r + 1, 'Total : ${rows.length} transfer certificate(s)', bold);
+    put(0, r + 1, 'Total: ${rows.length} transfer certificate(s)', bold);
 
     final bytes = book.encode();
     if (bytes == null) throw Exception('Could not build the Excel file');
     await File(path).writeAsBytes(bytes);
-    _snack('TC report saved — ${rows.length} certificates.', AppColors.success);
+    _snack('TC report saved as Excel (${rows.length} certificates).', AppColors.success);
   }
 
   // ── UI ────────────────────────────────────────────────────────────────────
@@ -377,7 +378,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_loadError != null) {
       return AppUI.empty(
-        title: 'Could not load the masters.',
+        title: schoolTerm('Could not load courses and classes'),
         why: _loadError,
         action: OutlinedButton.icon(
             onPressed: _loadMasters,
@@ -396,19 +397,19 @@ class _TcReportScreenState extends State<TcReportScreen> {
               child: AppUI.cardHeader(
                 icon: 'document-text',
                 title: 'TC Report',
-                subtitle: 'transfer certificates issued in a date range',
+                subtitle: 'Transfer certificates issued in the current academic year',
               ),
             ),
             _exportBtn(
               onPressed: () => _run(pdf: false),
               icon: Icons.table_chart_rounded,
-              label: 'Excel',
+              label: AppText.exportExcel,
             ),
             SizedBox(width: AppBtn.gap(context)),
             _exportBtn(
               onPressed: () => _run(pdf: true),
               icon: Icons.picture_as_pdf_rounded,
-              label: 'PDF',
+              label: AppText.exportPdf,
             ),
           ]),
           SizedBox(height: 14.h),
@@ -420,7 +421,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
                 Expanded(
                   child: _labeled('Academic Year', InputDecorator(
                     decoration: _dec('').copyWith(enabled: false),
-                    child: Text(_yearLabel.isEmpty ? 'No active year' : _yearLabel,
+                    child: Text(_yearLabel.isEmpty ? 'No active academic year' : _yearLabel,
                         style: _yearLabel.isEmpty
                             ? AppUI.fieldText(context).copyWith(color: AppColors.error)
                             : AppUI.fieldText(context, filled: true)),
@@ -428,7 +429,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
                 ),
                 SizedBox(width: 12.w),
                 Expanded(
-                  child: _labeled('Order by', DropdownButtonFormField<String>(
+                  child: _labeled('Sort By', DropdownButtonFormField<String>(
                     initialValue: _orderKey,
                     isExpanded: true,
                     isDense: true,
@@ -436,8 +437,8 @@ class _TcReportScreenState extends State<TcReportScreen> {
                     style: AppUI.fieldText(context),
                     items: [
                       DropdownMenuItem(value: 'class', child: Text(schoolTerm('Class'))),
-                      const DropdownMenuItem(value: 'tcno', child: Text('TC No')),
-                      DropdownMenuItem(value: 'admno', child: Text(schoolTerm('Reg. No'))),
+                      const DropdownMenuItem(value: 'tcno', child: Text('TC No.')),
+                      DropdownMenuItem(value: 'admno', child: Text(schoolTerm('Register No.'))),
                       const DropdownMenuItem(value: 'stuname', child: Text('Student Name')),
                     ],
                     onChanged: (v) {
@@ -510,9 +511,8 @@ class _TcReportScreenState extends State<TcReportScreen> {
               SizedBox(width: 8.w),
               Expanded(
                 child: Text(
-                  schoolTerm('Every transfer certificate issued in the current academic year. '
-                  'Columns: TC No · Tc Date · Reg. No · Student Name · Class · Join Date — '
-                  'the class and join date as they stood when the certificate was issued.'),
+                  schoolTerm('Every transfer certificate issued in the current academic year, '
+                  'with the class and date of admission as they stood when the certificate was issued.'),
                   style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.35),
                 ),
               ),
@@ -541,7 +541,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
           cell(reg, width: 140.w, bold: bold),
           cell(name, flex: 3, bold: bold),
           cell(cls, flex: 2, bold: bold),
-          cell(join, width: 100.w, bold: bold),
+          cell(join, width: 140.w, bold: bold),
         ];
 
     return Container(
@@ -552,7 +552,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
           decoration: AppUI.tableHeadBar,
           padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
           child: Row(
-              children: row('TC No', 'Tc Date', schoolTerm('Reg. No'), 'Student Name', schoolTerm('Class'), 'Join Date',
+              children: row('TC No.', 'TC Date', schoolTerm('Register No.'), 'Student Name', schoolTerm('Class'), AppText.dateOfAdmission,
                   bold: true)),
         ),
         const Divider(height: 1),
@@ -561,8 +561,8 @@ class _TcReportScreenState extends State<TcReportScreen> {
               ? const Center(child: CircularProgressIndicator())
               : _rows.isEmpty
                   ? AppUI.empty(
-                      title: 'No transfer certificates in $_yearLabel for these filters.',
-                      why: 'Try another ${schoolTerm('Course')} or ${schoolTerm('Class')} above.',
+                      title: 'No transfer certificates found',
+                      why: schoolTerm('None were issued in $_yearLabel for these filters. Try another course or class above.'),
                     )
                   : ListView.separated(
                       padding: EdgeInsets.zero,
