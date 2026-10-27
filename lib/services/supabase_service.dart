@@ -20,14 +20,62 @@ class SupabaseService {
 
   /// Set the schema after login
   static void setSchema(String? schema) {
+    final changed = schema != _currentSchema;
     _currentSchema = schema;
     debugPrint('SupabaseService schema set to: $schema');
+    if (changed) {
+      _publicMasterTables.clear();
+      _masterTablesReady = (schema == null || schema.isEmpty)
+          ? Future.value()
+          : _resolveMasterTables(schema);
+    }
+  }
+
+  /// Master tables that live per-institution in the college layout but in
+  /// PUBLIC (shared, filtered by ins_id) in the school layout.
+  static const List<String> _masterTableCandidates = [
+    'class', 'feegroup', 'feetype', 'bank', 'community', 'division', 'medium', 'clagrp',
+    'course', 'concessioncategory',
+  ];
+
+  /// Candidates this database keeps in public — resolved per schema by
+  /// [_resolveMasterTables]. Empty on the college layout.
+  static final Set<String> _publicMasterTables = {};
+  static Future<void> _masterTablesReady = Future.value();
+
+  /// Completes once [setSchema] has worked out where the master tables live.
+  /// Await it after setSchema, before the first fromSchema() query.
+  static Future<void> get masterTablesReady => _masterTablesReady;
+
+  /// True on the school database: masters (incl. course) in public, shown as
+  /// Standard / Section, and no admission type / quota / batch.
+  static bool get isSchoolLayout => _publicMasterTables.contains('feetype');
+
+  /// Probe each candidate in the institution schema: a "table not found"
+  /// answer means this database keeps it in public. Any other outcome
+  /// (rows, empty under RLS, other errors) keeps the schema copy, so the
+  /// college layout is never rerouted.
+  static Future<void> _resolveMasterTables(String schema) async {
+    await Future.wait(_masterTableCandidates.map((t) async {
+      try {
+        await client.schema(schema).from(t).select().limit(1);
+      } on PostgrestException catch (e) {
+        if (e.code == 'PGRST205' || e.code == '42P01') {
+          if (_currentSchema == schema) _publicMasterTables.add(t);
+        }
+      } catch (_) {}
+    }));
+    if (_publicMasterTables.isNotEmpty) {
+      debugPrint('SupabaseService: master tables in public for $schema: $_publicMasterTables');
+    }
   }
 
   /// Query from institution-specific schema table
-  /// Falls back to public if no schema is set
+  /// Falls back to public if no schema is set, or if this database keeps the
+  /// table in public (school layout — see [_resolveMasterTables]).
   static SupabaseQueryBuilder fromSchema(String table) {
-    if (_currentSchema != null && _currentSchema!.isNotEmpty) {
+    if (_currentSchema != null && _currentSchema!.isNotEmpty &&
+        !_publicMasterTables.contains(table)) {
       return client.schema(_currentSchema!).from(table);
     }
     return client.from(table);
@@ -52,6 +100,14 @@ class SupabaseService {
   // ==================== AUTH ====================
 
   /// Login institution user by email (or username for super admin), returns user if found
+  /// Columns the login reads from institutionusers — every field
+  /// InstitutionUserModel uses, but NOT usepassword. Selecting `*` would fail
+  /// once anon's SELECT on the password-hash column is revoked.
+  static const String _loginUserColumns =
+      'use_id, ins_id, inscode, usename, usemail, usephone, usestadate, '
+      'useotpstatus, usedob, ur_id, urname, des_id, desname, userepto, '
+      'usecategory, activestatus';
+
   static Future<InstitutionUserModel?> loginUser({
     required String email,
     required String password,
@@ -91,7 +147,7 @@ class SupabaseService {
       if (isSuperAdminUser) {
         var query = client
             .from('institutionusers')
-            .select()
+            .select(_loginUserColumns)
             .eq('use_id', useId)
             .eq('activestatus', 1);
         response = await query.maybeSingle();
@@ -113,7 +169,7 @@ class SupabaseService {
                   .select('yrlabel')
                   .eq('ins_id', insId)
                   .eq('activestatus', 1)
-                  .order('iyr_id', ascending: false)
+                  .order('yrlabel', ascending: false)
                   .limit(1);
               debugPrint('LOGIN: yearRows=$yearRows');
               if ((yearRows as List).isNotEmpty) {
@@ -130,7 +186,7 @@ class SupabaseService {
         debugPrint('LOGIN: Querying schema=$_currentSchema for use_id=$useId');
         try {
           var query = client.from('institutionusers')
-              .select()
+              .select(_loginUserColumns)
               .eq('use_id', useId)
               .eq('activestatus', 1);
           if (insId != null) {
@@ -148,7 +204,7 @@ class SupabaseService {
           try {
             var fallbackQuery = client
                 .from('institutionusers')
-                .select()
+                .select(_loginUserColumns)
                 .eq('use_id', useId)
                 .eq('activestatus', 1);
             if (insId != null) {
@@ -210,6 +266,20 @@ class SupabaseService {
       'p_is_super_admin': isSuperAdmin,
     });
     return token?.toString();
+  }
+
+  /// Tell the server which academic year this session works in, so the
+  /// session-gated RPCs (collection, demands, advance, reconcile ...) use that
+  /// year's schema -- see school_session_year.sql. Best-effort: a database
+  /// without set_session_year keeps using its newest year.
+  static Future<void> setSessionYear(String yearLabel) async {
+    final token = sessionToken;
+    if (token == null || token.isEmpty || yearLabel.isEmpty) return;
+    try {
+      await client.rpc('set_session_year', params: {'p_token': token, 'p_yrlabel': yearLabel});
+    } catch (e) {
+      debugPrint('set_session_year($yearLabel) failed: $e');
+    }
   }
 
   /// Revoke a session token (logout). Best-effort.
@@ -343,6 +413,92 @@ class SupabaseService {
     final data = <String, dynamic>{'feeamount': feeamount, 'collectible': collectible};
     if (balancedue != null) { data['balancedue'] = balancedue; data['reconbalancedue'] = balancedue; }
     await fromSchema('feedemand').update(data).eq('dem_id', demId);
+  }
+
+  /// New Roll Number — renumber students. The RPC replaces stuadmno and
+  /// cascades the new number to every table keyed by it (plus admission.admno)
+  /// in one transaction, then logs each change. [rows] = [{oldrollno, newrollno}].
+  /// Returns how many students were renumbered.
+  static Future<int> saveRollNoChange({
+    required DateTime effectDate,
+    required List<Map<String, dynamic>> rows,
+    String? createdBy,
+    String? token,
+  }) async {
+    token ??= sessionToken;
+    final d = '${effectDate.year.toString().padLeft(4, '0')}-'
+        '${effectDate.month.toString().padLeft(2, '0')}-'
+        '${effectDate.day.toString().padLeft(2, '0')}';
+    final res = await client.rpc('save_rollno_change', params: {
+      'p_token': token, 'p_effectdate': d, 'p_rows': rows, 'p_createdby': createdBy,
+    });
+    return res is int ? res : int.tryParse(res?.toString() ?? '') ?? 0;
+  }
+
+  /// Transfer Certificate — issue/edit a TC for one student. Writes the tc_entry
+  /// row and stamps the leaving status (1..5,9) onto the student + admission.
+  /// [tcId] null = new, else update in place. Returns the tc_id.
+  static Future<int?> saveTcEntry(Map<String, dynamic> data, {int? tcId, String? token}) async {
+    token ??= sessionToken;
+    final res = await client.rpc('save_tc_entry', params: {
+      'p_token': token, 'p_data': data, 'p_tc_id': tcId,
+    });
+    return res is int ? res : int.tryParse(res?.toString() ?? '');
+  }
+
+  /// Transfer Certificate — delete a TC entry and revert the student + admission
+  /// back to active (1).
+  static Future<void> deleteTcEntry(int tcId, {String? token}) async {
+    token ??= sessionToken;
+    await client.rpc('delete_tc_entry', params: {'p_token': token, 'p_tc_id': tcId});
+  }
+
+  /// Student Fee Definition — add a fee the student doesn't yet have, from a
+  /// classfeedemand template row (cf_id). Session-gated RPC resolves the student
+  /// + template server-side; falls back to a direct insert of [fallbackRow].
+  static Future<void> addStudentFeeDemand({
+    required String stuAdmno, required int cfId, required num amount,
+    Map<String, dynamic>? fallbackRow, String? token,
+  }) async {
+    // REFUSED HERE AS WELL AS IN THE RPC, because of the fallback below: on a
+    // database without the RPC this method inserts fallbackRow directly, and
+    // no server-side guard can see that. A demand billed 0 reads as fully
+    // settled the moment it exists, so it is never chased -- that is how
+    // dem_id 10126 came to hold Rs 10,000 against a bill of nothing.
+    if (amount <= 0) {
+      throw ArgumentError(
+          'Enter the amount for this fee. A fee added with no amount is billed '
+          '0, reads as fully settled and is never collected. If the student is '
+          'not charged this fee, remove it instead of leaving it blank.');
+    }
+    token ??= sessionToken;
+    if (token != null && token.isNotEmpty) {
+      try {
+        await client.rpc('add_student_fee_demand', params: {
+          'p_token': token, 'p_stuadmno': stuAdmno, 'p_cf_id': cfId, 'p_amount': amount,
+        });
+        return;
+      } on PostgrestException catch (e) {
+        if (!_missingRpc(e)) rethrow;
+      }
+    }
+    if (fallbackRow != null) await fromSchema('feedemand').insert(fallbackRow);
+  }
+
+  /// Student Fee Definition — remove a fee the student no longer needs. The RPC
+  /// refuses if anything has been collected on it. Session-gated; falls back to
+  /// a direct delete guarded on paidamount = 0.
+  static Future<void> deleteStudentFeeDemand(int demId, {String? token}) async {
+    token ??= sessionToken;
+    if (token != null && token.isNotEmpty) {
+      try {
+        await client.rpc('delete_student_fee_demand', params: {'p_token': token, 'p_dem_id': demId});
+        return;
+      } on PostgrestException catch (e) {
+        if (!_missingRpc(e)) rethrow;
+      }
+    }
+    await fromSchema('feedemand').delete().eq('dem_id', demId).eq('paidamount', 0);
   }
 
   /// Cascade a student's class/course onto all their demand rows (Section
@@ -776,11 +932,122 @@ class SupabaseService {
   static const Map<String, String> kSettingDefaults = {
     'admission_number_mode': 'MANUAL',       // 'AUTO' | 'MANUAL'
     'fee_collection_arrear_first': 'true',   // 'true' | 'false'
+    // Which fee group each advance type is banked under -- a feegroup.fg_id, or
+    // empty for "work it out from the names" (see resolveRoutingTarget and
+    // ADVANCE_ROUTING_CONFIG.sql, which apply the identical rule).
+    'advance_route_fg_A': '',
+    'advance_route_fg_S': '',
+    'advance_route_fg_M': '',
+    // Which fee groups the Misc Collection counter may collect under, as a
+    // comma-separated list of fg_id. Empty = every group that owns a fee type,
+    // which is what it did before this setting existed. An advance-only group
+    // (STUDENT ADVANCE, MESS ADVANCE) has a fee type of its own but nothing
+    // that belongs on a misc receipt, so it is excluded here rather than by
+    // guessing from the group's name.
+    'misc_collection_fee_groups': '',
   };
+
+  /// The setting above, parsed. Empty set = no restriction.
+  static Set<int> miscFeeGroups(Map<String, String> settings) => {
+        for (final part in (settings['misc_collection_fee_groups'] ?? '').split(','))
+          if (int.tryParse(part.trim()) != null) int.parse(part.trim()),
+      };
+
+  /// Settings keys for a fee group's own receipt letterhead.
+  ///
+  /// A hostel receipt is issued by the HOSTEL, not by the college: it carries
+  /// the hostel's name and address, not the institution's letterhead. Rather
+  /// than hardcode that for one group, any fee group may carry its own -- the
+  /// college keeps the institution's by leaving these empty.
+  static String letterheadNameKey(int fgId) => 'letterhead_name_$fgId';
+  static String letterheadAddrKey(int fgId) => 'letterhead_addr_$fgId';
+
+  /// The printed header image for a group's receipts: a bundled asset path
+  /// ('assets/images/kcet.png') or an https URL. Empty = no banner, and the
+  /// receipt prints the name and address as text.
+  ///
+  /// This replaces guessing the banner from the institution's NAME, which is
+  /// what receipt_widget.dart did: anything containing "engineering" got the
+  /// college artwork, so a hostel receipt would have carried the college's.
+  static String letterheadBannerKey(int fgId) => 'letterhead_banner_$fgId';
+
+  /// Banner images bundled with the app, offered in Utilities.
+  static const Map<String, String> kBundledBanners = {
+    'assets/images/kcet.png': 'Engineering & Technology',
+    'assets/images/kmptc.jpg': 'Polytechnic',
+    'assets/images/kcsam.jpg': 'Arts, Science & Management',
+    'assets/images/krishnasamy_hostel.png': 'Hostel',
+  };
+
+  /// The letterhead a receipt of [fgId] should print, falling back to the
+  /// institution's own. [settings] is passed in when the caller already has
+  /// them, so printing a receipt is not another round trip.
+  static ({String name, String address, String banner}) letterheadFor({
+    required int? fgId,
+    required Map<String, String> settings,
+    required String fallbackName,
+    required String fallbackAddress,
+  }) {
+    if (fgId == null) {
+      return (name: fallbackName, address: fallbackAddress, banner: '');
+    }
+    final n = (settings[letterheadNameKey(fgId)] ?? '').trim();
+    final a = (settings[letterheadAddrKey(fgId)] ?? '').trim();
+    final b = (settings[letterheadBannerKey(fgId)] ?? '').trim();
+    return (
+      name: n.isEmpty ? fallbackName : n,
+      address: a.isEmpty ? fallbackAddress : a,
+      banner: b,
+    );
+  }
+
+  /// The setting key naming the fee group an advance of [advType] is banked
+  /// under. Kept here so the client, the Utilities screen and
+  /// save_advance_collection cannot spell it three different ways.
+  static String advanceRouteKey(String advType) =>
+      'advance_route_fg_${advType.toUpperCase()}';
+
+  /// Cached settings, and when they were read.
+  ///
+  /// Every counter holds its Utilities settings for the life of the screen,
+  /// and the desktop app stays open all day -- so a letterhead changed on the
+  /// office machine never reached the other counters until they restarted.
+  /// A short-lived shared cache fixes that without a round trip per receipt:
+  /// screens may now ask on every print, and at most one call per [_settingsTtl]
+  /// actually reaches the database.
+  static final Map<int, Map<String, String>> _settingsCache = {};
+  static final Map<int, DateTime> _settingsAt = {};
+  static const Duration _settingsTtl = Duration(seconds: 60);
+
+  /// Drop the cache so the very next read goes to the database. Called after
+  /// Utilities saves, so the machine that made the change sees it at once
+  /// rather than waiting out the TTL like everyone else.
+  static void invalidateSettingsCache([int? insId]) {
+    if (insId == null) {
+      _settingsCache.clear();
+      _settingsAt.clear();
+    } else {
+      _settingsCache.remove(insId);
+      _settingsAt.remove(insId);
+    }
+  }
 
   /// All Utilities settings for an institution, merged over [kSettingDefaults]
   /// so callers always get a complete map.
-  static Future<Map<String, String>> getInstitutionSettings(int insId) async {
+  ///
+  /// Served from the cache when it was read less than [_settingsTtl] ago. Pass
+  /// [fresh] to force a read -- used where being a minute out of date would be
+  /// wrong rather than merely untidy.
+  static Future<Map<String, String>> getInstitutionSettings(int insId,
+      {bool fresh = false}) async {
+    if (!fresh) {
+      final at = _settingsAt[insId];
+      final hit = _settingsCache[insId];
+      if (at != null && hit != null &&
+          DateTime.now().difference(at) < _settingsTtl) {
+        return Map<String, String>.from(hit);
+      }
+    }
     final merged = Map<String, String>.from(kSettingDefaults);
     try {
       final rows = await client
@@ -791,6 +1058,10 @@ class SupabaseService {
         final k = r['setting_key']?.toString();
         if (k != null && k.isNotEmpty) merged[k] = r['setting_value']?.toString() ?? '';
       }
+      // Only a READ that reached the database is worth caching. On failure the
+      // defaults are returned but not stored, so the next call retries.
+      _settingsCache[insId] = Map<String, String>.from(merged);
+      _settingsAt[insId] = DateTime.now();
     } catch (e) {
       debugPrint('getInstitutionSettings failed: $e');
     }
@@ -806,6 +1077,7 @@ class SupabaseService {
       'updatedat': DateTime.now().toIso8601String(),
       if (by != null) 'updatedby': by,
     }, onConflict: 'ins_id,setting_key');
+    invalidateSettingsCache(insId);
   }
 
   static Future<({String? name, String? logo, String? address, String? mobile, String? email})> getInstitutionInfo(int insId) async {
@@ -898,7 +1170,8 @@ class SupabaseService {
       final count = await fromSchema('students')
           .count()
           .eq('ins_id', insId)
-          .eq('activestatus', 1);
+          .eq('activestatus', 1)
+          .eq('preadmission', 0);  // next year's intake: advance screens only
       return count;
     } catch (e) {
       debugPrint('Error getting student count: $e');
@@ -975,6 +1248,7 @@ class SupabaseService {
           .select('*')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
+          .eq('preadmission', 0)  // next year's intake: advance screens only
           .order('stuname', ascending: true)
           .range(offset, offset + batchSize - 1);
       final list = batch as List;
@@ -983,6 +1257,50 @@ class SupabaseService {
       offset += batchSize;
     }
     return allResults.map((e) => StudentModel.fromJson(e)).toList();
+  }
+
+  /// Just the students named by a set of ids, keyed by stu_id.
+  ///
+  /// For a screen that needs a handful of students -- the ones on the
+  /// transactions it has just loaded -- this replaces getStudents(), which
+  /// fetches `select('*')` for every active student in four paged round trips
+  /// to build a map that is then read a dozen times. A day with eight receipts
+  /// does not need three and a half thousand student rows.
+  ///
+  /// Unfiltered by activestatus on purpose: a receipt printed for a student who
+  /// has since left must still carry their roll number and class.
+  static Future<Map<int, StudentModel>> getStudentsByIds(
+      int insId, Iterable<int> stuIds) async {
+    final ids = stuIds.toSet().toList();
+    if (ids.isEmpty) return {};
+    final out = <int, StudentModel>{};
+    try {
+      // Chunked because a URL carries the id list, and PostgREST rejects one
+      // that grows past the server's header limit.
+      const chunkSize = 300;
+      final chunks = <List<int>>[];
+      for (int i = 0; i < ids.length; i += chunkSize) {
+        chunks.add(ids.sublist(i, (i + chunkSize).clamp(0, ids.length)));
+      }
+      final results = await Future.wait(chunks.map((c) async =>
+          await fromSchema('students')
+              // ins_id is not read by this screen but StudentModel.fromJson
+              // parses it unguarded, so leaving it out throws on every row.
+              .select('stu_id, ins_id, stuname, stuadmno, stuclass, '
+                  'stuaddress, courname, stumobile')
+              .eq('ins_id', insId)
+              .inFilter('stu_id', c) as List));
+      for (final batch in results) {
+        for (final r in batch) {
+          final m = Map<String, dynamic>.from(r as Map);
+          final id = (m['stu_id'] as num?)?.toInt();
+          if (id != null) out[id] = StudentModel.fromJson(m);
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching students by id: $e');
+    }
+    return out;
   }
 
   /// Fetch student remarks (stucondesc) as a map keyed by stu_id
@@ -996,6 +1314,7 @@ class SupabaseService {
             .select('stu_id, stucondesc')
             .eq('ins_id', insId)
             .eq('activestatus', 1)
+            .eq('preadmission', 0)  // next year's intake: advance screens only
             .range(offset, offset + batchSize - 1);
         final list = batch as List;
         for (final s in list) {
@@ -1056,6 +1375,7 @@ class SupabaseService {
           .select('*')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
+          .eq('preadmission', 0)  // next year's intake: advance screens only
           .eq('stuclass', className)
           .order('stuname', ascending: true);
       return (response as List).map((e) => StudentModel.fromJson(Map<String, dynamic>.from(e as Map))).toList();
@@ -1091,6 +1411,7 @@ class SupabaseService {
             .select('stu_id, stuname, stuadmno, stuclass, courname')
             .eq('ins_id', insId)
             .eq('activestatus', 1)
+            .eq('preadmission', 0)  // next year's intake: advance screens only
             .range(offset, offset + batchSize - 1);
         final list = batch as List;
         for (final s in list) {
@@ -1152,13 +1473,103 @@ class SupabaseService {
 
   /// Void (delete) a fee-collection receipt: reverses the balances it settled
   /// and soft-voids the payment for audit. Blocks bank-reconciled receipts
-  /// server-side. See migrations/add_void_receipt.sql.
-  static Future<void> voidReceipt(int payId, {required int insId, required String user}) async {
-    await client.rpc('void_receipt', params: {
+  /// server-side. Optional [reason] is stored on payment.voidreason (Fee Cancel
+  /// Receipt screen). See migrations/add_void_receipt.sql +
+  /// add_void_receipt_reason.sql.
+  /// Void a MISC receipt. Separate RPC from voidReceipt: a misc receipt
+  /// settles no feedemand, so there is no balance to restore -- only the
+  /// receipt to void and an audit trail to leave.
+  static Future<void> voidMiscReceipt(int mcId,
+      {required int insId, required String user, String? reason}) async {
+    await client.rpc('void_misc_receipt', params: {
       'p_ins_id': insId,
-      'p_pay_id': payId,
+      'p_mc_id': mcId,
       'p_user': user,
+      'p_reason': reason,
     });
+  }
+
+  /// Void an ADVANCE receipt (AD26/...). Session-gated, so the institution
+  /// comes from the token and not the caller.
+  ///
+  /// The server refuses it once any of the advance has been applied to a fee or
+  /// refunded: a demand has been settled or reduced on the strength of it, and
+  /// that has to be put back first. See migrations/ADVANCE_CANCEL_REFUND.sql.
+  static Future<void> voidAdvanceReceipt(int advId,
+      {required String token, required String user, String? reason}) async {
+    await client.rpc('void_advance_receipt', params: {
+      'p_token': token,
+      'p_adv_id': advId,
+      'p_user': user,
+      'p_reason': reason,
+    });
+  }
+
+  /// Give back the UNUSED balance of an advance. Writes an ordinary fee_refund
+  /// voucher (pay_id NULL, paynumber = the advance number) so it lands in the
+  /// same refund register as every other refund, and adds to
+  /// advance_collection.refund_amount -- balanceamount is generated from that,
+  /// so the remaining balance follows on its own.
+  ///
+  /// Returns the voucher: {rf_id, doc_no, advno, refunded, balance_left}.
+  static Future<Map<String, dynamic>> refundAdvance({
+    required String token,
+    required Map<String, dynamic> header,
+  }) async {
+    final res = await client.rpc('refund_advance', params: {
+      'p_token': token,
+      'p_header': header,
+    });
+    return res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  }
+
+  /// Void a fee receipt.
+  ///
+  /// With a [token] this goes through void_receipt_with_advance, which does the
+  /// same reversal AND hands back whatever an advance put into the receipt --
+  /// advance_collection.adjustedamount comes down, so the student keeps money
+  /// that was theirs. Without it (or on an older database) the plain
+  /// void_receipt runs, which restores the demands but leaves the advance
+  /// showing as spent.
+  static Future<void> voidReceipt(int payId,
+      {required int insId, required String user, String? reason, String? token}) async {
+    if (token != null && token.isNotEmpty) {
+      try {
+        await client.rpc('void_receipt_with_advance', params: {
+          'p_token': token,
+          'p_pay_id': payId,
+          'p_user': user,
+          'p_reason': reason,
+        });
+        return;
+      } on PostgrestException catch (e) {
+        // Not deployed yet -> fall through to the plain void below. Any other
+        // failure (a reconciled receipt, an admission advance) is the server
+        // refusing on purpose and must reach the cashier.
+        if (!_missingRpc(e)) rethrow;
+      }
+    }
+    try {
+      // Reason-aware 4-arg overload (add_void_receipt_reason.sql).
+      await client.rpc('void_receipt', params: {
+        'p_ins_id': insId,
+        'p_pay_id': payId,
+        'p_user': user,
+        'p_reason': reason,
+      });
+    } on PostgrestException catch (e) {
+      // Older DB that only has the 3-arg void_receipt — retry without p_reason
+      // so cancellation still works before the reason migration is applied.
+      final notFound = e.code == 'PGRST202' ||
+          e.code == '42883' ||
+          e.message.toLowerCase().contains('void_receipt');
+      if (!notFound) rethrow;
+      await client.rpc('void_receipt', params: {
+        'p_ins_id': insId,
+        'p_pay_id': payId,
+        'p_user': user,
+      });
+    }
   }
 
   /// Fetch EVERY row of a query, paging past PostgREST's row cap.
@@ -1225,7 +1636,7 @@ class SupabaseService {
     // Resolve the student's admission type so type-specific templates match.
     int? admId;
     final admName = student['admname']?.toString().trim() ?? '';
-    if (admName.isNotEmpty) {
+    if (!isSchoolLayout && admName.isNotEmpty) {
       try {
         final a = await fromSchema('admissiontype')
             .select('adm_id, admname')
@@ -1240,7 +1651,9 @@ class SupabaseService {
     }
 
     final cfRows = await fromSchema('classfeedemand')
-        .select('cfterm, cffeetype, cfamount, cfdduedate, admissiontype, collectible')
+        .select(isSchoolLayout
+            ? 'cfterm, cffeetype, cfamount, cfdduedate, collectible'
+            : 'cfterm, cffeetype, cfamount, cfdduedate, admissiontype, collectible')
         .eq('cfclass', targetClass)
         .eq('activestatus', 1);
 
@@ -1280,6 +1693,10 @@ class SupabaseService {
         'demfeeyear': yrLabel,
         'demfeeterm': term,
         'demfeetype': feeType,
+        // REGULAR, said explicitly -- see _generateTempDemands. Without it the
+        // set_dem_id trigger stamps 'DEMAND' and the same fee ends up labelled
+        // two different ways depending on which screen raised it.
+        'demseqtype': 'REGULAR',
         'feeamount': amt,
         'balancedue': amt,
         'duedate': due,
@@ -1330,7 +1747,8 @@ class SupabaseService {
       rows = await fetchAll(() => fromSchema('students')
           .select('courname, stuclass')
           .eq('ins_id', insId)
-          .eq('activestatus', 1));
+          .eq('activestatus', 1)
+          .eq('preadmission', 0));  // next year's intake: advance screens only
     }
     return [
       for (final r in rows)
@@ -1419,6 +1837,159 @@ class SupabaseService {
     }
   }
 
+  /// feedesc -> feetype.ordid, for ordering fee-type columns in reports.
+  ///
+  /// Reports used to lay these out ALPHABETICALLY, which put TUITION FEE --
+  /// the one everybody looks for -- near the end because of its initial
+  /// letter. feetype.ordid lets the office say what the running order is, the
+  /// same way class and course already do.
+  ///
+  /// Keyed on the UPPER-CASED description because that is what the reports
+  /// carry: feedemand stores demfeetype as text, not a fee_id, so the
+  /// description is the only join there is.
+  ///
+  /// Anything unset sorts last rather than first: a fee type nobody has
+  /// numbered should not displace the ones somebody has.
+  static Future<Map<String, int>> getFeeTypeOrder(int insId) async {
+    try {
+      final rows = await fromSchema('feetype')
+          .select('feedesc, ordid')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final map = <String, int>{};
+      for (final r in (rows as List)) {
+        final name = (r['feedesc']?.toString() ?? '').trim().toUpperCase();
+        if (name.isEmpty) continue;
+        map[name] = (r['ordid'] as num?)?.toInt() ?? 9999;
+      }
+      return map;
+    } catch (e) {
+      // An older database without the column just gets alphabetical order --
+      // worse, but not broken, and never a failed report.
+      debugPrint('getFeeTypeOrder error: $e');
+      return {};
+    }
+  }
+
+  /// feedesc -> the fee GROUP it belongs to, for the Fee Group report filter.
+  ///
+  /// Keyed on the UPPER-CASED description for the same reason as
+  /// getFeeTypeOrder: feedemand stores demfeetype as text, so the description
+  /// is the only join the reports have.
+  ///
+  /// A fee type in no group, or in a group that has since been deactivated,
+  /// is simply absent from the map. Reports treat that as "belongs to no
+  /// group", which keeps it visible when no group filter is set and hides it
+  /// when one is -- the honest answer either way, rather than quietly
+  /// assigning it somewhere.
+  ///
+  /// A SET per description, not a single group, because descriptions are NOT
+  /// unique across groups: APPLICATION, FINE, GENERAL BREAKAGE, MISCELLANEOUS
+  /// and STAFF NOTICE SALARY all exist under both COLLEGE FEES and HOSTEL
+  /// FEES here. Keeping one would mean the last row read silently won and the
+  /// same fee vanished from whichever group lost the toss. Belonging to both
+  /// shows it under either filter, which is the truthful answer when the
+  /// report row carries only a description and no fee_id to resolve it.
+  static Future<Map<String, Set<String>>> getFeeTypeGroups(int insId) async {
+    try {
+      final types = await fromSchema('feetype')
+          .select('feedesc, fg_id')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final groups = await fromSchema('feegroup')
+          .select('fg_id, fgdesc')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final byId = <int, String>{};
+      for (final g in (groups as List)) {
+        final id = (g['fg_id'] as num?)?.toInt();
+        final name = (g['fgdesc']?.toString() ?? '').trim();
+        if (id != null && name.isNotEmpty) byId[id] = name;
+      }
+      final map = <String, Set<String>>{};
+      for (final t in (types as List)) {
+        final name = (t['feedesc']?.toString() ?? '').trim().toUpperCase();
+        final fg = (t['fg_id'] as num?)?.toInt();
+        if (name.isEmpty || fg == null) continue;
+        final g = byId[fg];
+        if (g != null) (map[name] ??= <String>{}).add(g);
+      }
+      return map;
+    } catch (e) {
+      debugPrint('getFeeTypeGroups error: $e');
+      return {};
+    }
+  }
+
+  /// fee_id -> its fee group. The UNAMBIGUOUS form of getFeeTypeGroups.
+  ///
+  /// Use this wherever the report row carries a fee_id. Descriptions are not
+  /// unique across groups, so name-matching counts a shared fee under both;
+  /// fee_id names exactly one row and resolves it.
+  static Future<Map<int, String>> getFeeIdGroups(int insId) async {
+    try {
+      final types = await fromSchema('feetype')
+          .select('fee_id, fg_id')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final groups = await fromSchema('feegroup')
+          .select('fg_id, fgdesc')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final byId = <int, String>{};
+      for (final g in (groups as List)) {
+        final id = (g['fg_id'] as num?)?.toInt();
+        final name = (g['fgdesc']?.toString() ?? '').trim();
+        if (id != null && name.isNotEmpty) byId[id] = name;
+      }
+      final map = <int, String>{};
+      for (final t in (types as List)) {
+        final fee = (t['fee_id'] as num?)?.toInt();
+        final fg = (t['fg_id'] as num?)?.toInt();
+        if (fee == null || fg == null) continue;
+        final g = byId[fg];
+        if (g != null) map[fee] = g;
+      }
+      return map;
+    } catch (e) {
+      debugPrint('getFeeIdGroups error: $e');
+      return {};
+    }
+  }
+
+  /// feetype.type lookups: by fee_id, by UPPER-CASED description, and the
+  /// distinct codes in use.
+  ///
+  /// Loaded centrally because the Type filter is on every report now. It used
+  /// to be built only by the DCB Register's own loader, so on any other tab
+  /// the maps were empty -- and an empty map plus a selected kind means every
+  /// row fails the test and the report goes blank.
+  static Future<({Map<int, String> byId, Map<String, String> byName, List<String> codes})>
+      getFeeKindMaps(int insId) async {
+    try {
+      final rows = await fromSchema('feetype')
+          .select('fee_id, feedesc, type')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1);
+      final byId = <int, String>{};
+      final byName = <String, String>{};
+      final codes = <String>{};
+      for (final r in (rows as List)) {
+        final t = (r['type']?.toString() ?? '').trim().toUpperCase();
+        if (t.isEmpty) continue;
+        final id = (r['fee_id'] as num?)?.toInt();
+        final nm = (r['feedesc']?.toString() ?? '').trim().toUpperCase();
+        if (id != null) byId[id] = t;
+        if (nm.isNotEmpty) byName[nm] = t;
+        codes.add(t);
+      }
+      return (byId: byId, byName: byName, codes: codes.toList()..sort());
+    } catch (e) {
+      debugPrint('getFeeKindMaps error: $e');
+      return (byId: <int, String>{}, byName: <String, String>{}, codes: <String>[]);
+    }
+  }
+
   /// Get concession categories for an institution
   static Future<List<Map<String, dynamic>>> getConcessions(int insId) async {
     try {
@@ -1435,6 +2006,7 @@ class SupabaseService {
   }
 
   static Future<List<Map<String, dynamic>>> getAdmissionTypes(int insId) async {
+    if (isSchoolLayout) return []; // no admission type on the school database
     try {
       final response = await fromSchema('admissiontype')
           .select('adm_id, admname')
@@ -1448,6 +2020,7 @@ class SupabaseService {
   }
 
   static Future<List<Map<String, dynamic>>> getQuotas(int insId) async {
+    if (isSchoolLayout) return []; // no quota on the school database
     try {
       final response = await fromSchema('quota')
           .select('quo_id, quoname')
@@ -1653,6 +2226,30 @@ class SupabaseService {
     }
   }
 
+  /// Update an existing institution user (admin/staff).
+  ///
+  /// Same session-gated save_public_row RPC as create, which forces ins_id
+  /// server-side, so a user can only ever be edited inside the caller's own
+  /// institution. There is no direct-write fallback on purpose: a plain UPDATE
+  /// is blocked by RLS on public.institutionusers (the same reason terminate
+  /// goes through an RPC), so it would silently match 0 rows.
+  ///
+  /// Pass `usepassword` ONLY when it is actually being changed -- the hash
+  /// trigger fires on UPDATE OF usepassword and re-hashes whatever it is given.
+  static Future<bool> updateInstitutionUser(int useId, Map<String, dynamic> data) async {
+    final token = sessionToken;
+    if (token == null || token.isEmpty) {
+      throw StateError('No active session. Sign out and sign in again to edit users.');
+    }
+    try {
+      await savePublicRow('institutionusers', data, pkCol: 'use_id', pkVal: useId);
+      return true;
+    } catch (e) {
+      debugPrint('Error updating institution user: $e');
+      rethrow;
+    }
+  }
+
   /// Terminate (deactivate) an institution user
   static Future<bool> terminateInstitutionUser(int useId, {required int insId, required String terminatedBy, required String terminatedReason}) async {
     try {
@@ -1778,47 +2375,433 @@ class SupabaseService {
     }
   }
 
-  /// Resolve the Paytm MID an online payment for these fee groups should use,
-  /// via feegroup.ban_id -> bank.paytm_mid. When the groups span multiple
-  /// banks, the most common bank's MID wins (mirrors the ban_id stamping in the
-  /// Razorpay flow). Returns null when no group has a bank with a MID set, in
-  /// which case the caller falls back to the app's default MID.
-  static Future<String?> getPaytmMidForFeeGroups(List<int> fgIds) async {
-    if (fgIds.isEmpty) return null;
-    try {
-      final fgRows = await fromSchema('feegroup')
-          .select('ban_id')
-          .inFilter('fg_id', fgIds.toSet().toList());
-      final banIds = (fgRows as List)
-          .map((r) => r['ban_id'])
-          .whereType<int>()
-          .toList();
-      if (banIds.isEmpty) return null;
-      // Pick the predominant bank.
-      final counts = <int, int>{};
-      for (final id in banIds) {
-        counts[id] = (counts[id] ?? 0) + 1;
-      }
-      final banId = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+  /// Which Paytm merchant an online payment is created under.
+  ///
+  /// Routing is per INSTITUTION: the paying unit's own merchant, from
+  /// public.paytm_configuration, whose order is signed server-side with that
+  /// merchant's own key (PAYTM_MERCHANTS) so Paytm settles to that unit's
+  /// registered bank account.
+  ///
+  /// Fee-group routing (a group naming a bank, the bank naming a merchant) was
+  /// tried and reverted: one Paytm order settles to exactly one merchant, so a
+  /// student paying tuition and hostel fees together could not be collected in
+  /// a single transaction, which is the normal case at the counter.
+  ///
+  /// An unresolvable institution returns [PaytmRouting.error] rather than
+  /// quietly falling back to the default parent merchant — that fallback is how
+  /// money silently reached the parent account after a database rebuild, with
+  /// nothing in the app or on Paytm to show it had happened.
+  /// Whether a collection settles to its FEE GROUP's own Paytm merchant.
+  ///
+  /// OFF in production. While false, every online collection is created under
+  /// the institution's merchant from public.paytm_configuration -- exactly what
+  /// 0.0.8 does -- and a hostel fee group mapped to the hostel bank still
+  /// settles into the COLLEGE account, because banId is forced to null and the
+  /// routing falls back to the institution merchant.
+  ///
+  /// Deliberately NOT a hand-edited constant, for the same reason
+  /// PaytmConfig.isProduction is not: editing a committed `= false` to true to
+  /// test it is how the counter ends up shipping a split it was never meant to
+  /// have. The flag is invisible in the exe and nobody remembers it at release
+  /// time. Instead the same untracked config.json that already points a machine
+  /// at the TEST database opts in, with "feeGroupSettlement": true.
+  /// A production install has no such file, so it cannot be switched on.
+  ///
+  /// Turning it on is not free: a student owing college AND hostel dues can no
+  /// longer pay both in one online transaction -- one Paytm order settles to
+  /// exactly one merchant, so the collection screen refuses the mixed case and
+  /// asks for two payments. Cash, cheque and DD still take both at once; they
+  /// are banked by the receipt, not by the gateway. That cost is why this is a
+  /// per-machine opt-in rather than a release decision made by accident.
+  ///
+  /// Prerequisites, all now in place: BANK_ROUTING_BY_FEEGROUP and
+  /// FIX_ONLINE_PAYMENT_BAN_ID applied, the hostel bank (ban_id 2) carrying its
+  /// own paytm_mid, fee group 2 naming that bank, the HF26/ sequence, and the
+  /// hostel merchant's key in the PAYTM_MERCHANTS edge secret -- without the
+  /// key the server REJECTS the routed payment rather than mis-settling it.
+  static bool kFeeGroupSettlement = false;
 
-      final bank = await fromSchema('bank')
-          .select('paytm_mid')
-          .eq('ban_id', banId)
-          .maybeSingle();
-      final mid = bank?['paytm_mid']?.toString();
-      return (mid != null && mid.isNotEmpty) ? mid : null;
+  /// The institution setting that turns the same routing on for EVERY counter,
+  /// without a rebuild and without a file on each machine:
+  ///
+  ///   INSERT INTO public.institution_settings
+  ///       (ins_id, setting_key, setting_value, updatedat, updatedby)
+  ///   VALUES (1, 'fee_group_settlement', 'true', now(), 'ADMIN')
+  ///   ON CONFLICT (ins_id, setting_key)
+  ///   DO UPDATE SET setting_value = EXCLUDED.setting_value;
+  ///
+  /// Set it to 'false' to turn it straight back off. That matters more than the
+  /// convenience: the first time real money routes to a newly onboarded
+  /// merchant is exactly when an instant undo is wanted, and a rebuild-and-
+  /// release is not one. Every counter picks the change up within the settings
+  /// cache TTL (60s), or immediately on the next screen that reads fresh.
+  static const String feeGroupSettlementKey = 'fee_group_settlement';
+
+  /// Whether this collection should settle into its FEE GROUP's own merchant.
+  ///
+  /// True if EITHER the machine opted in through config.json (how the routing
+  /// is tested before it is turned on for everyone) OR the institution has the
+  /// setting above. The compiled default stays false, so production can only
+  /// reach it deliberately -- through a row anyone can see and reverse.
+  /// ROUTING IS AUTOMATIC. A collection settles into its fee group's own
+  /// merchant whenever that group is mapped to a bank and that bank names a
+  /// Paytm merchant. Nothing has to be switched on: an account is used because
+  /// someone configured it, which is the only reason it would be there.
+  ///
+  /// This is safe because the FALLBACK is unchanged. A group with no bank, or
+  /// a bank with no merchant, still resolves the institution's merchant -- so a
+  /// database with one fee group behaves exactly as it does today. The only
+  /// payment that moves is one whose group names a DIFFERENT account, which is
+  /// the case the mapping was created for. Verified 2026-10-01: the institution
+  /// merchant and the COLLEGE FEES bank merchant are the same id, so college
+  /// collections are unaffected; only HOSTEL FEES resolves elsewhere.
+  ///
+  /// The setting is therefore a KILL SWITCH, not an on-switch. Setting
+  /// `fee_group_settlement` to 'false' forces every payment back through the
+  /// institution's single merchant, on every counter, within the settings cache
+  /// TTL and without a rebuild. That matters the first time real money routes
+  /// to a newly onboarded merchant: if its key is missing from PAYTM_MERCHANTS
+  /// or the account is not registered with Paytm, this turns it off in seconds
+  /// rather than in a release.
+  static Future<bool> feeGroupSettlementEnabled(int insId) async {
+    if (kFeeGroupSettlement) return true;
+    try {
+      final s = await getInstitutionSettings(insId);
+      // Only an explicit 'false' disables it.
+      return (s[feeGroupSettlementKey] ?? '').trim().toLowerCase() != 'false';
     } catch (e) {
-      debugPrint('getPaytmMidForFeeGroups error: $e');
+      // A failed settings read says nothing about which account the money
+      // belongs in, and a group with no merchant of its own still falls back to
+      // the institution's. Carry on rather than mis-settling on a lookup error.
+      debugPrint('feeGroupSettlementEnabled: $e');
+      return true;
+    }
+  }
+
+  static Future<PaytmRouting> resolvePaytmRouting(
+      {required int insId, int? banId}) async {
+    // The fee group's own bank account first. Hostel fees are banked into the
+    // hostel account, so an online hostel payment has to settle into the
+    // hostel MERCHANT -- settling it into the college merchant and correcting
+    // it by hand afterwards is not something the receipt would ever show.
+    //
+    // One Paytm order settles to exactly one merchant, so the caller must
+    // already have narrowed the collection to a single fee group before asking
+    // for a bank-routed merchant.
+    if (banId != null) {
+      try {
+        final row = await fromSchema('bank')
+            .select('paytm_mid')
+            .eq('ban_id', banId)
+            .maybeSingle();
+        final bankMid = row?['paytm_mid']?.toString().trim();
+        if (bankMid != null && bankMid.isNotEmpty) {
+          return PaytmRouting(mid: bankMid, source: 'bank:$banId');
+        }
+      } catch (e) {
+        // Fall through to the institution merchant: an unreadable bank row is
+        // not a reason to refuse money the institution can still collect.
+        debugPrint('resolvePaytmRouting bank lookup failed: $e');
+      }
+    }
+    final String? insMid;
+    try {
+      insMid = await getPaytmMidForInstitution(insId);
+    } catch (e) {
+      debugPrint('resolvePaytmRouting lookup failed: $e');
+      return const PaytmRouting(
+          error: 'Could not work out which bank account this payment settles '
+              'to. Try again, or collect it offline.');
+    }
+    if (insMid == null) {
+      return const PaytmRouting(
+          error: 'No Paytm merchant is set up for this institution, so an '
+              'online payment cannot be routed to the right bank account. '
+              'Collect it offline, or ask an administrator to configure it.');
+    }
+    return PaytmRouting(mid: insMid, source: 'institution');
+  }
+
+  /// The bank account a misc collection or an advance will be banked into.
+  ///
+  /// This is the CLIENT-SIDE MIRROR of the rule save_misc_collection and
+  /// save_advance_collection already apply (BANK_ROUTING_BY_FEEGROUP.sql).
+  /// Those resolve the account when the receipt is written; an online payment
+  /// has to know the same answer BEFORE the order is created, because the
+  /// merchant the order is signed with is what decides where the money
+  /// actually settles. Resolve it differently in the two places and the
+  /// receipt would name one account while the money went to another -- and
+  /// nothing on the receipt would show it.
+  ///
+  ///   advType 'M'   the group owning a MESS fee type, else one named HOSTEL
+  ///   advType 'A'   the group of the fee types it is itemised against
+  ///   misc lines    the lowest fg_id among the fee types collected, which is
+  ///                 the same one the receipt is banked under
+  ///   anything else the COLLEGE group, else the lowest fg_id
+  ///
+  /// Returns null when nothing resolves or the group has no bank mapped: the
+  /// caller then falls back to the institution's own merchant rather than
+  /// refusing money it can still take.
+  static Future<int?> resolveRoutingBanId({
+    required int insId,
+    List<String> feeTypes = const [],
+    String? advType,
+  }) async =>
+      (await resolveRoutingTarget(
+              insId: insId, feeTypes: feeTypes, advType: advType))
+          .banId;
+
+  /// The same resolution, with the NAMES -- so a counter can show the cashier
+  /// where the money is going before they take it, in the same words the
+  /// receipt will use.
+  static Future<FeeRouting> resolveRoutingTarget({
+    required int insId,
+    List<String> feeTypes = const [],
+    String? advType,
+  }) async {
+    Future<int?> fgOfFeeTypes(List<String> names) async {
+      final wanted = names.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      if (wanted.isEmpty) return null;
+      final row = await fromSchema('feetype')
+          .select('fg_id')
+          .inFilter('feedesc', wanted)
+          .eq('activestatus', 1)
+          .order('fg_id', ascending: true)
+          .limit(1)
+          .maybeSingle();
+      return row?['fg_id'] as int?;
+    }
+
+
+    try {
+      int? fgId;
+      var isMapped = false;
+      // CONFIGURED first (Setup -> Utilities -> Advance Settlement). Only if
+      // nothing is configured does it fall back to matching names, which is
+      // what save_advance_collection does server-side -- the two must agree,
+      // or the strip on the counter would promise one account and the receipt
+      // use another.
+      if (advType != null && advType.isNotEmpty) {
+        final settings = await getInstitutionSettings(insId);
+        final raw = (settings[advanceRouteKey(advType)] ?? '').trim();
+        final configured = int.tryParse(raw);
+        if (configured != null) {
+          // A group from another year's schema, or a deleted one, is ignored
+          // rather than trusted: fee groups are per schema.
+          final live = await fromSchema('feegroup')
+              .select('fg_id')
+              .eq('fg_id', configured)
+              .eq('ins_id', insId)
+              .eq('activestatus', 1)
+              .maybeSingle();
+          if (live != null) {
+            fgId = live['fg_id'] as int?;
+            isMapped = fgId != null;
+          }
+        }
+      }
+      // THE FEE TYPES NAME THEIR OWN GROUP, and that is more specific than any
+      // default, so it wins.
+      //
+      // This used to require advType == 'A', which quietly excluded the one
+      // caller that has nothing else to go on: Misc Collection passes fee
+      // types and NO advance type, so it fell past this to the "unmapped"
+      // return and every misc receipt settled into the institution's default
+      // merchant. A MESS FEE banked into the college account instead of the
+      // hostel one, while the screen said HOSTEL FEES. Advance and regular fee
+      // collection were unaffected -- an advance always passes an advType, and
+      // fee collection routes server-side through process_grouped_payment --
+      // which is exactly why only misc was wrong.
+      //
+      // 'S' and 'M' advances are excluded on purpose: those are configured in
+      // Setup -> Utilities -> Advance Settlement and the setting above decides
+      // them, not the fee types.
+      final typesDecide = advType == null || advType.isEmpty || advType == 'A';
+      if (typesDecide && feeTypes.isNotEmpty) {
+        final byType = await fgOfFeeTypes(feeTypes);
+        if (byType != null) {
+          fgId = byType;
+          // Not a guess: the fee types collected against name this group.
+          isMapped = true;
+        }
+      }
+      if (fgId != null) {
+        return await _routingFor(
+            insId: insId, fgId: fgId, advType: advType, mapped: isMapped);
+      }
+      // NO NAME FALLBACK. There used to be a chain here -- the group owning a
+      // MESS fee type, else one named like a hostel, else one named like a
+      // college, else simply the lowest id -- so something always resolved and
+      // the counter always showed an account.
+      //
+      // That is worse than showing nothing. The guess is usually right, which
+      // means it is trusted; when it is wrong the money banks somewhere nobody
+      // chose and the screen said it would go there, confidently, the whole
+      // time. "COLLEGE FEES" appeared for a MESS advance purely because that
+      // group's name matched last.
+      //
+      // Unmapped now resolves to nothing, the strip says NO FEE GROUP MAPPED,
+      // and _collect refuses before any money changes hands. One setting in
+      // Setup -> Utilities -> Advance Settlement decides it.
+      return const FeeRouting();
+    } catch (e) {
+      debugPrint('resolveRoutingTarget failed: $e');
+      return const FeeRouting();
+    }
+  }
+
+  /// The fee group a set of collected fee types belongs to -- the lowest
+  /// fg_id among them, which is the same one save_misc_collection and
+  /// process_grouped_payment bank the receipt under.
+  ///
+  /// Used when a receipt is REPRINTED and the screen no longer knows which
+  /// group it was collected for: a hostel receipt has to print the hostel
+  /// letterhead however it is opened.
+  static Future<int?> feeGroupOfFeeTypes(List<String> feeTypes) async {
+    final wanted =
+        feeTypes.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (wanted.isEmpty) return null;
+    try {
+      final row = await fromSchema('feetype')
+          .select('fg_id')
+          .inFilter('feedesc', wanted)
+          .eq('activestatus', 1)
+          .order('fg_id', ascending: true)
+          .limit(1)
+          .maybeSingle();
+      return row?['fg_id'] as int?;
+    } catch (e) {
+      debugPrint('feeGroupOfFeeTypes failed: $e');
       return null;
     }
   }
 
-  /// Paytm SUB MID for an institution, from public.paytm_configuration (the
-  /// per-institution routing table). Used in aggregator/sub-merchant mode: the
-  /// order is created under this sub MID and signed server-side with the PARENT
-  /// key, so Paytm settles the funds to the sub MID's own bank account. Returns
-  /// null when no active config exists → the edge function falls back to the
-  /// default parent MID (funds stay with the parent account).
+  /// What an advance receipt should call itself: the FEE GROUP it was banked
+  /// under -- "MESS ADVANCE", "STUDENT ADVANCE" -- rather than a word derived
+  /// from its type.
+  ///
+  /// advance_collection stores ban_id but no fg_id, so:
+  ///   * if exactly ONE fee group maps to that bank, that is the group, and it
+  ///     is the historical truth even if the mapping has since changed;
+  ///   * otherwise fall back to the group the type is configured to route to
+  ///     today (Setup -> Utilities -> Advance Settlement);
+  ///   * and if neither answers, [fallback].
+  /// What an advance receipt is FOR — the ONE name every screen prints.
+  ///
+  /// Three screens render an advance receipt (Advance Collection, Transactions,
+  /// Fee Demand Approval) and until 05-10-2026 each decided this differently:
+  /// one preferred the fee group, one looked the group up by bank account, one
+  /// said "Advance" for both student and mess. So the family's copy read
+  /// "COLLEGE FEES" for a Rs 200 student advance -- naming a fee they had not
+  /// paid -- and a reprint from a different screen could disagree with the
+  /// original.
+  ///
+  /// The FEE GROUP is where the money BANKS. It is not what was collected, and
+  /// it has no business on the particulars line.
+  static String advanceHeadName(String? advType) =>
+      switch ((advType ?? 'S').trim().toUpperCase()) {
+        'A' => 'ADMISSION ADVANCE',
+        'M' => 'MESS ADVANCE',
+        _ => 'STUDENT ADVANCE',
+      };
+
+  static Future<String> advanceGroupLabel({
+    required int insId,
+    required String advType,
+    int? banId,
+    String fallback = 'Advance',
+  }) async {
+    try {
+      if (banId != null) {
+        final rows = await fromSchema('feegroup')
+            .select('fgdesc')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .eq('ban_id', banId);
+        final names = [
+          for (final r in (rows as List))
+            if ((r['fgdesc']?.toString() ?? '').trim().isNotEmpty)
+              r['fgdesc'].toString().trim(),
+        ];
+        // Two groups sharing one bank cannot say which this was; fall through.
+        if (names.length == 1) return names.first;
+      }
+      final routed =
+          await resolveRoutingTarget(insId: insId, advType: advType.toUpperCase());
+      if (routed.fgName.trim().isNotEmpty) return routed.fgName.trim();
+    } catch (e) {
+      debugPrint('advanceGroupLabel failed: $e');
+    }
+    return fallback;
+  }
+
+  /// A fee group with its bank account and that account's Paytm merchant.
+  /// The sequence tested here is the FEE GROUP's own, for every kind of
+  /// advance, because that is now the only series an advance is numbered from
+  /// -- see migrations/shared/ADVANCE_NUMBER_FROM_FEEGROUP.sql.
+  ///
+  /// It briefly checked an ADVNO series for student and mess advances, which
+  /// was the server's old rule. The rule itself was the problem: mapping an
+  /// advance to a fee group was not enough, a second sequence had to exist on
+  /// a different screen, and nothing on the counter said so until Collect was
+  /// pressed. One mapping now decides the account and the number together.
+  static Future<FeeRouting> _routingFor(
+      {required int insId,
+      required int fgId,
+      String? advType,
+      bool mapped = false}) async {
+    final grp = await fromSchema('feegroup')
+        .select('fg_id, fgdesc, ban_id')
+        .eq('fg_id', fgId)
+        .maybeSingle();
+    final seq = await fromSchema('sequence')
+        .select('seq_id')
+        .eq('ins_id', insId)
+        .eq('fg_id', fgId)
+        .eq('activestatus', 1)
+        .limit(1)
+        .maybeSingle();
+    final hasSeq = seq != null;
+    final banId = grp?['ban_id'] as int?;
+    if (banId == null) {
+      return FeeRouting(
+          fgId: fgId,
+          fgName: grp?['fgdesc']?.toString() ?? '',
+          hasSequence: hasSeq,
+          mapped: mapped);
+    }
+    final bank = await fromSchema('bank')
+        .select('banname, paytm_mid')
+        .eq('ban_id', banId)
+        .maybeSingle();
+    return FeeRouting(
+      fgId: fgId,
+      fgName: grp?['fgdesc']?.toString() ?? '',
+      banId: banId,
+      bankName: bank?['banname']?.toString() ?? '',
+      paytmMid: bank?['paytm_mid']?.toString().trim() ?? '',
+      hasSequence: hasSeq,
+      mapped: mapped,
+    );
+  }
+
+  /// The paying institution's own Paytm merchant, from the routing table
+  /// public.paytm_configuration (institution_id -> merchant_id, is_active).
+  ///
+  /// Only merchant_id is read. The table's website / industry_type / channel_id
+  /// columns are NOT used — those come from the edge function's PAYTM_WEBSITE
+  /// env (and channelId from the mobile app's request), so changing them here
+  /// has no effect.
+  ///
+  /// Each merchant is a full independent Paytm account signed with its OWN key
+  /// from the edge function's PAYTM_MERCHANTS map — not the aggregator model,
+  /// where a sub MID is signed with the parent key. Paytm rejects that with
+  /// 2005 "Checksum provided is invalid", proven against this account.
+  ///
+  /// Returns null when no active row exists. The caller
+  /// ([resolvePaytmRouting]) then REFUSES the payment; it deliberately does not
+  /// fall back to the default parent merchant, which is how money silently
+  /// reached the parent account after a database rebuild.
   static Future<String?> getPaytmMidForInstitution(int insId) async {
     try {
       final row = await client
@@ -2052,6 +3035,43 @@ class SupabaseService {
     }
   }
 
+  /// Raw Daily Collection rows for a date range — one row per (receipt x
+  /// semester), each with fees_json (demfeetype -> amount), fine, total, and
+  /// student info. Same source the Reports > Daily Collection screen uses, so
+  /// callers reconcile with it exactly. Uses the json_agg wrapper (no 1000-row
+  /// cap); falls back to paginating the SETOF RPC.
+  static Future<List<Map<String, dynamic>>> getDailyCollectionRows(
+      int insId, DateTime from, DateTime to) async {
+    final schema = currentSchema;
+    if (schema == null) return [];
+    String d(DateTime x) =>
+        '${x.year}-${x.month.toString().padLeft(2, '0')}-${x.day.toString().padLeft(2, '0')}';
+    final params = {
+      'p_schema': schema,
+      'p_ins_id': insId,
+      'p_from': d(from),
+      'p_to': d(to),
+    };
+    final list = <Map<String, dynamic>>[];
+    try {
+      final agg = await client.rpc('get_daily_collection_report_json', params: params);
+      if (agg is List) list.addAll(List<Map<String, dynamic>>.from(agg));
+    } catch (_) {
+      const pageSize = 1000;
+      int offset = 0;
+      while (true) {
+        final page = await client
+            .rpc('get_daily_collection_report', params: params)
+            .range(offset, offset + pageSize - 1);
+        final batch = page is List ? List<Map<String, dynamic>>.from(page) : <Map<String, dynamic>>[];
+        list.addAll(batch);
+        if (batch.length < pageSize) break;
+        offset += pageSize;
+      }
+    }
+    return list;
+  }
+
   /// Fetch paynumber lookup map: pay_id → paynumber
   static Future<Map<int, String>> getPayNumberMap(List<int> payIds, {required int insId}) async {
     if (payIds.isEmpty) return {};
@@ -2082,11 +3102,17 @@ class SupabaseService {
   static Future<Map<String, double>> getFeeTotals(int insId) async {
     try {
       final result = await _retry(() => client.rpc('get_fee_totals', params: {'p_ins_id': insId}));
+      final rpcFine = (result['total_fine'] as num?)?.toDouble() ?? 0;
       return {
         'totalDemand': (result['total_demand'] as num?)?.toDouble() ?? 0,
-        'totalPaid': (result['total_paid'] as num?)?.toDouble() ?? 0,
+        // The RPC's total_paid is SUM(paidamount), which carries the fine
+        // portion with it. Fine is a late-payment penalty, not fee collection,
+        // so it is reported on its own card -- and the paginated fallback below
+        // has always subtracted it, so the two paths disagreed depending on
+        // whether the RPC was reachable.
+        'totalPaid': ((result['total_paid'] as num?)?.toDouble() ?? 0) - rpcFine,
         'totalPending': (result['total_pending'] as num?)?.toDouble() ?? 0,
-        'totalFine': (result['total_fine'] as num?)?.toDouble() ?? 0,
+        'totalFine': rpcFine,
       };
     } catch (e) {
       debugPrint('RPC get_fee_totals failed, using fallback: $e');
@@ -2206,6 +3232,37 @@ class SupabaseService {
     }
   }
 
+  /// Whether the prerequisites for importing students are in place: master
+  /// data (classes) and admission master (admission types). The student import
+  /// is blocked until BOTH have been imported, so course/class and admission
+  /// mappings exist for the incoming rows. Fail-safe: on error both flags
+  /// return false so the import stays gated rather than silently allowed.
+  static Future<({bool hasMasterData, bool hasAdmissionMaster})>
+      getStudentImportPrerequisites(int insId) async {
+    var hasMasterData = false;
+    var hasAdmissionMaster = false;
+    try {
+      final results = await Future.wait<dynamic>([
+        fromSchema('class')
+            .select('claname')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .limit(1),
+        // School has no admission type table -- nothing to wait for there.
+        if (!isSchoolLayout)
+          fromSchema('admissiontype')
+              .select('adm_id')
+              .eq('activestatus', 1)
+              .limit(1),
+      ]);
+      hasMasterData = (results[0] as List).isNotEmpty;
+      hasAdmissionMaster = isSchoolLayout || (results[1] as List).isNotEmpty;
+    } catch (e) {
+      debugPrint('getStudentImportPrerequisites failed: $e');
+    }
+    return (hasMasterData: hasMasterData, hasAdmissionMaster: hasAdmissionMaster);
+  }
+
   /// Individual demand rows for a single class — used for drilldown
   static Future<List<Map<String, dynamic>>> getFeeDemandsByClass(int insId, String className) async {
     try {
@@ -2221,15 +3278,29 @@ class SupabaseService {
 
   /// Fetch pending fee demands for the institution via DB function.
   /// Only returns rows for students with activestatus = 1.
+  ///
+  /// Prefer the `_json` wrapper: `get_fee_demands_pending` returns SETOF json,
+  /// which PostgREST caps at 1000 rows — bulk demand generation stages far more
+  /// than that, so a plain call silently hides demands past #1000 from the
+  /// approval queue. The json_agg wrapper returns every row as one JSON value
+  /// (no cap). Falls back to the capped RPC if the wrapper isn't deployed yet.
   static Future<List<Map<String, dynamic>>> getFeeDemandsPending(int insId) async {
     try {
       final response = await client
-          .rpc('get_fee_demands_pending', params: {'p_ins_id': insId});
+          .rpc('get_fee_demands_pending_json', params: {'p_ins_id': insId});
       if (response == null) return [];
       return List<Map<String, dynamic>>.from(response as List);
     } catch (e) {
-      debugPrint('getFeeDemandsPending failed: $e');
-      return [];
+      debugPrint('get_fee_demands_pending_json failed, falling back (capped at 1000): $e');
+      try {
+        final response = await client
+            .rpc('get_fee_demands_pending', params: {'p_ins_id': insId});
+        if (response == null) return [];
+        return List<Map<String, dynamic>>.from(response as List);
+      } catch (e2) {
+        debugPrint('getFeeDemandsPending failed: $e2');
+        return [];
+      }
     }
   }
 
@@ -2367,39 +3438,56 @@ class SupabaseService {
   /// Get fee details for a payment, with fee group name lookup
   static Future<List<Map<String, dynamic>>> getFeeDetailsByPayId(int payId, {int? insId}) async {
     try {
-      final response = await fromSchema('feedemand')
-          .select('dem_id, demfeeterm, demfeetype, fee_id, feeamount, conamount, paidamount, fineamount, balancedue, paidstatus, duedate, demseqtype, arrearclass')
-          .eq('pay_id', payId)
-          .eq('activestatus', 1);
-      final details = List<Map<String, dynamic>>.from(response as List);
+      // PAYMENTDETAILS FIRST, not feedemand.pay_id.
+      //
+      // feedemand.pay_id holds only the LAST payment that touched the demand,
+      // so any demand paid more than once loses the earlier receipts' lines:
+      // reprinting instalment 1 found no rows and fell back to a single
+      // "Payment" line. An advance adjustment made it routine -- adjust_advance
+      // stamps pay_id, then the cash payment in the same transaction overwrites
+      // it, leaving the adjustment receipt with no particulars at all.
+      //
+      // paymentdetails is written once per receipt and never rewritten, so it
+      // is the only faithful record of what a given receipt covered.
+      final pd = await fromSchema('paymentdetails')
+          .select('dem_id, transtotalamount')
+          .eq('pay_id', payId);
+      final pdRows = List<Map<String, dynamic>>.from(pd as List);
+      final paidMap = <int, double>{};
+      final demIds = <int>[];
+      for (final p in pdRows) {
+        final demId = (p['dem_id'] as num?)?.toInt();
+        if (demId == null) continue;
+        // One receipt can carry two lines for the same demand; sum them.
+        paidMap[demId] = (paidMap[demId] ?? 0) + ((p['transtotalamount'] as num?)?.toDouble() ?? 0);
+        if (!demIds.contains(demId)) demIds.add(demId);
+      }
+      debugPrint('RECEIPT: pay_id=$payId paymentdetails=${paidMap.length} rows=${paidMap.entries.map((e) => '${e.key}:${e.value}').join(", ")}');
 
-      // Fetch per-demand amount paid in THIS payment from paymentdetails.
-      // Needed for receipts to show the line amount actually collected (not
-      // the full feeamount), which matters for partial payments.
-      if (details.isNotEmpty) {
-        try {
-          final pd = await fromSchema('paymentdetails')
-              .select('dem_id, transtotalamount')
-              .eq('pay_id', payId);
-          final paidMap = <int, double>{};
-          for (final p in (pd as List)) {
-            final demId = (p['dem_id'] as num?)?.toInt();
-            if (demId != null) {
-              paidMap[demId] = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
-            }
+      var details = <Map<String, dynamic>>[];
+      if (demIds.isNotEmpty) {
+        final response = await fromSchema('feedemand')
+            .select('dem_id, stuclass, demfeeterm, demfeetype, fee_id, feeamount, conamount, paidamount, fineamount, balancedue, paidstatus, duedate, demseqtype, arrearclass')
+            .inFilter('dem_id', demIds);
+        details = List<Map<String, dynamic>>.from(response as List);
+        for (final d in details) {
+          final demId = (d['dem_id'] as num?)?.toInt();
+          if (demId != null && paidMap.containsKey(demId)) {
+            d['collectedamount'] = paidMap[demId];
           }
-          debugPrint('RECEIPT: pay_id=$payId paymentdetails=${paidMap.length} rows=${paidMap.entries.map((e) => '${e.key}:${e.value}').join(", ")}');
-          for (final d in details) {
-            final demId = (d['dem_id'] as num?)?.toInt();
-            if (demId != null && paidMap.containsKey(demId)) {
-              d['collectedamount'] = paidMap[demId];
-            } else {
-              debugPrint('RECEIPT: no paymentdetails row for dem_id=$demId (feeamount=${d['feeamount']})');
-            }
-          }
-        } catch (e) {
-          debugPrint('Error fetching paymentdetails for pay_id $payId: $e');
         }
+        // Keep receipt order stable: follow the order the lines were written.
+        details.sort((a, b) => demIds
+            .indexOf((a['dem_id'] as num).toInt())
+            .compareTo(demIds.indexOf((b['dem_id'] as num).toInt())));
+      } else {
+        // No paymentdetails at all (a legacy row, or a header-only receipt).
+        // Fall back to the old linkage so nothing that used to print stops.
+        final response = await fromSchema('feedemand')
+            .select('dem_id, stuclass, demfeeterm, demfeetype, fee_id, feeamount, conamount, paidamount, fineamount, balancedue, paidstatus, duedate, demseqtype, arrearclass')
+            .eq('pay_id', payId)
+            .eq('activestatus', 1);
+        details = List<Map<String, dynamic>>.from(response as List);
       }
 
       // Fetch fee group names via fee_id → feetype → feegroup
@@ -2509,15 +3597,35 @@ class SupabaseService {
   static Future<List<PaymentModel>> getRecentPayments(int insId,
       {int limit = 10}) async {
     try {
+      // RECEIPT DATE, NOT INSERTION DATE.
+      //
+      // createdat is when the ROW was written; paydate is when the money was
+      // taken. They differ whenever a receipt is imported or recovered by the
+      // sweep -- those are written today and dated weeks back. Ordering by
+      // createdat put the back-dated hostel arrears (July, August) at the top
+      // of Recent Payments while the 33 collections taken that morning were
+      // nowhere on the card.
+      //
+      // `paydate ?? createdat` is the Transactions screen's own rule, so the
+      // two screens now agree about what "recent" means. The server sorts on
+      // paydate with nulls last; over-fetching lets the client sort rescue a
+      // row with no paydate instead of letting the limit drop it.
       final response = await fromSchema('payment')
           .select('*')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
+          // Recent Payments shows successful collections only — exclude failed
+          // ('F') / initiated ('I') attempts. 'C' = collected, 'R' = refunded.
+          .inFilter('paystatus', ['C', 'R'])
+          .order('paydate', ascending: false, nullsFirst: false)
           .order('createdat', ascending: false)
-          .limit(limit);
-      return (response as List)
+          .limit(limit * 3);
+      final rows = (response as List)
           .map((e) => PaymentModel.fromJson(e))
-          .toList();
+          .toList()
+        ..sort((a, b) =>
+            (b.paydate ?? b.createdat).compareTo(a.paydate ?? a.createdat));
+      return rows.take(limit).toList();
     } catch (e) {
       debugPrint('Error fetching recent payments: $e');
       return [];
@@ -2525,11 +3633,98 @@ class SupabaseService {
   }
 
   /// Get all transactions for an institution via RPC, with direct table fallback
-  static Future<List<Map<String, dynamic>>> getAllTransactions(int insId) async {
+  /// [from]/[to] bound the fetch server-side. Without them this pulls every
+  /// transaction the institution has ever taken, which the Transactions screen
+  /// then throws away to show one day -- thousands of rows and a dozen extra
+  /// round trips for a handful of receipts.
+  ///
+  /// The bound matches the screen's own rule, `paydate ?? createdat`: a row
+  /// with no paydate (an initiated payment) is judged on createdat, so it is
+  /// not silently dropped by a paydate-only filter.
+  /// Latched once the date-aware RPC is found to be absent, so a database
+  /// without the migration pays for one failed call per session, not one per
+  /// refresh.
+  static bool _txRangeRpcMissing = false;
+
+  static Future<List<Map<String, dynamic>>> getAllTransactions(int insId,
+      {DateTime? from, DateTime? to}) async {
+    String d(DateTime x) => '${x.year.toString().padLeft(4, '0')}-'
+        '${x.month.toString().padLeft(2, '0')}-${x.day.toString().padLeft(2, '0')}';
+    String? orClause;
+    if (from != null && to != null) {
+      final lo = d(from);
+      // Exclusive upper bound on the next day, so a timestamp anywhere inside
+      // the last day is included without depending on how time is stored.
+      final hi = d(to.add(const Duration(days: 1)));
+      orClause = 'and(paydate.gte.$lo,paydate.lt.$hi),'
+          'and(paydate.is.null,createdat.gte.$lo,createdat.lt.$hi)';
+    }
+    // Preferred: the RANGE overload, which takes the dates as arguments.
+    //
+    // fn_get_transactions(p_ins_id) takes only an institution, so `.or(dates)`
+    // is a PostgREST filter applied to its OUTPUT. The function is plpgsql and
+    // cannot be inlined, so Postgres must build every payment row the
+    // institution has ever had, LEFT JOIN students for each one and sort the
+    // lot by createdat, and only then throw away all but the day asked for.
+    // Drawing today costs the whole year -- and costs exactly as much on a day
+    // with no transactions at all. The overload pushes the dates into the WHERE
+    // inside the function, where an index can be used.
+    if (!_txRangeRpcMissing) {
+      try {
+        final all = <Map<String, dynamic>>[];
+        const batchSize = 1000;
+        int offset = 0;
+        while (true) {
+          final response = await client.rpc('fn_get_transactions_range', params: {
+            'p_ins_id': insId,
+            'p_from': from == null ? null : d(from),
+            'p_to': to == null ? null : d(to),
+          }).range(offset, offset + batchSize - 1);
+          final rows = List<Map<String, dynamic>>.from(response as List);
+          all.addAll(rows);
+          if (rows.length < batchSize) break;
+          offset += batchSize;
+        }
+        return all;
+      } catch (e) {
+        // Only a MISSING function is permanent. A timeout or a dropped
+        // connection must not disable the fast path for the rest of the
+        // session, which is what latching on any error at all would do.
+        final msg = e.toString();
+        if (msg.contains('PGRST202') ||
+            msg.contains('Could not find the function') ||
+            msg.contains('does not exist')) {
+          _txRangeRpcMissing = true;
+          debugPrint('fn_get_transactions_range not deployed; '
+              'using the unfiltered RPC (slower). Run '
+              'migrations/desktop/FN_GET_TRANSACTIONS_RANGE.sql');
+        } else {
+          debugPrint('fn_get_transactions_range failed: $e');
+        }
+      }
+    }
+    // Fallback: the enriched RPC (adds stuname), PAGINATED — PostgREST caps any
+    // single response (RPC calls included) at 1000 rows, so a plain call would
+    // silently return only the first 1000 transactions. The RPC orders by
+    // createdat DESC, so range-paging is stable.
     try {
-      final response = await client.rpc('fn_get_transactions', params: {'p_ins_id': insId});
-      final data = List<Map<String, dynamic>>.from(response as List);
-      if (data.isNotEmpty) return data;
+      final all = <Map<String, dynamic>>[];
+      const batchSize = 1000;
+      int offset = 0;
+      while (true) {
+        var q = client.rpc('fn_get_transactions', params: {'p_ins_id': insId});
+        if (orClause != null) q = q.or(orClause);
+        final response = await q.range(offset, offset + batchSize - 1);
+        final rows = List<Map<String, dynamic>>.from(response as List);
+        all.addAll(rows);
+        if (rows.length < batchSize) break;
+        offset += batchSize;
+      }
+      // An empty DAY is an ordinary answer -- don't pay for the whole payment
+      // table to confirm it. An empty result with NO date filter is not: the
+      // function returns nothing when it cannot resolve the institution's
+      // schema, and that is what the direct query is here to rescue.
+      if (all.isNotEmpty || orClause != null) return all;
     } catch (e) {
       debugPrint('RPC fn_get_transactions failed, falling back to direct query: $e');
     }
@@ -2539,9 +3734,9 @@ class SupabaseService {
       const batchSize = 1000;
       int offset = 0;
       while (true) {
-        final response = await fromSchema('payment')
-            .select()
-            .eq('ins_id', insId)
+        var q = fromSchema('payment').select().eq('ins_id', insId);
+        if (orClause != null) q = q.or(orClause);
+        final response = await q
             .order('createdat', ascending: false)
             .range(offset, offset + batchSize - 1);
         final rows = List<Map<String, dynamic>>.from(response as List);
@@ -2567,6 +3762,33 @@ class SupabaseService {
   static Future<List<Map<String, dynamic>>> getPaidTransactions(int insId) async {
     final all = await getAllTransactions(insId);
     return all.where((t) => t['paystatus'] == 'C').toList();
+  }
+
+  /// Captures Paytm confirmed that the database refused to receipt.
+  ///
+  /// Each row is money the college has received with nothing on any student's
+  /// ledger against it, waiting on a person to decide: receipt it, or refund
+  /// the family. The table itself is service_role only -- this reads it
+  /// through list_webhook_refusals, which cannot write, so a client can see
+  /// the claim but never clear it.
+  ///
+  /// Returns an empty list if the migration is not deployed. An older
+  /// database should show no banner, not an error on a screen the counter
+  /// uses all day.
+  static Future<List<Map<String, dynamic>>> listWebhookRefusals(
+    int insId, {
+    bool includeResolved = false,
+  }) async {
+    try {
+      final rows = await client.rpc('list_webhook_refusals', params: {
+        'p_ins_id': insId,
+        'p_include_resolved': includeResolved,
+      });
+      return List<Map<String, dynamic>>.from(rows as List);
+    } catch (e) {
+      debugPrint('list_webhook_refusals unavailable: $e');
+      return [];
+    }
   }
 
   // ==================== ROLES ====================
@@ -2783,4 +4005,83 @@ class SupabaseService {
       return false;
     }
   }
+}
+
+/// Where a collection will be banked: the fee group, its bank account and
+/// that account's Paytm merchant.
+///
+/// Resolved by [SupabaseService.resolveRoutingTarget] with the same rule the
+/// save functions apply server-side, so a counter can SHOW the destination
+/// before the money is taken instead of the cashier finding out from the
+/// receipt.
+class FeeRouting {
+  const FeeRouting({
+    this.fgId,
+    this.fgName = '',
+    this.banId,
+    this.bankName = '',
+    this.paytmMid = '',
+    this.hasSequence = true,
+    this.mapped = false,
+  });
+
+  final int? fgId;
+  final String fgName;
+  final int? banId;
+  final String bankName;
+
+  /// The group has a receipt sequence (Setup -> Sequence Master -> Receipt
+  /// Sequence). Without one, save_advance_collection and save_misc_collection
+  /// REFUSE the collection rather than number it out of another group's run,
+  /// so the counters say so before the cashier takes any money.
+  final bool hasSequence;
+
+  /// Empty when the account names no merchant — an online payment then falls
+  /// back to the institution's own merchant.
+  final String paytmMid;
+
+  /// TRUE when this group was CONFIGURED for the job -- Setup -> Utilities ->
+  /// Advance Settlement for an advance, or named by the fee types of an
+  /// admission advance.
+  ///
+  /// FALSE when nothing was configured and the group was GUESSED by matching
+  /// names ("the one called COLLEGE", else the lowest id). The guess is usually
+  /// right, which is the problem: the counter showed "Settles into COLLEGE
+  /// FEES" with the confidence of a setting nobody had made, so a wrong guess
+  /// would have banked money somewhere nobody chose and nothing would have
+  /// said so.
+  final bool mapped;
+
+  bool get hasBank => banId != null;
+  bool get hasMerchant => paytmMid.isNotEmpty;
+}
+
+/// Outcome of [SupabaseService.resolvePaytmRouting] — which Paytm merchant an
+/// online payment is created under, or why it must not be taken at all.
+class PaytmRouting {
+  /// Merchant the order is created under; null when [error] is set.
+  final String? mid;
+
+  /// Non-null means do not take the payment — show this to the user.
+  final String? error;
+
+  /// Where [mid] came from: 'bank:<ban_id>' when the fee group's own account
+  /// named a merchant, 'institution' when it did not and the institution's
+  /// default was used instead.
+  final String source;
+
+  const PaytmRouting({this.mid, this.error, this.source = ''});
+
+  bool get ok => error == null;
+
+  /// The money is going to the fee group's OWN account, not the institution
+  /// default.
+  ///
+  /// Not just for the log. A group with no ban_id (or a bank with no
+  /// paytm_mid) still collects -- it falls back to the institution merchant,
+  /// which is right for a college with one account and wrong for one with a
+  /// separate hostel account nobody mapped. It is the only path that settles
+  /// somewhere without complaining, so the counter is told before the card
+  /// goes in rather than after reconciliation.
+  bool get routedToOwnAccount => source.startsWith('bank:');
 }

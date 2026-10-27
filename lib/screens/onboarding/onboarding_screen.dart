@@ -2,7 +2,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
 import '../../utils/app_routes.dart';
+import '../../utils/app_theme.dart';
 import '../../widgets/app_icon.dart';
+import '../../utils/school_terms.dart';
 
 class _TealPalette {
   static const Color deep = Color(0xFF002147);
@@ -432,7 +434,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               delay: const Duration(milliseconds: 80),
               duration: const Duration(milliseconds: 450),
               child: Text(
-                page.subtitle,
+                schoolTerm(page.subtitle),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.75),
@@ -649,17 +651,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     Text(
                       m.label,
                       style: const TextStyle(
-                        color: _TealPalette.deep,
+                        color: AppColors.textPrimary,
                         fontSize: 15.5,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.3,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
+                    const Text(
                       'Module preview',
                       style: TextStyle(
-                        color: _TealPalette.deep.withValues(alpha: 0.50),
+                        color: AppColors.textLight,
                         fontSize: 10.5,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 0.3,
@@ -697,9 +699,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                               ),
                             ),
                             child: Text(
-                              lbl,
+                              schoolTerm(lbl),
                               style: const TextStyle(
-                                color: _TealPalette.deep,
+                                color: AppColors.textPrimary,
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 0.1,

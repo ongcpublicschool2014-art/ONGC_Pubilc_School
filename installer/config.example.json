@@ -1,0 +1,5 @@
+{
+  "_comment": "Rename this file to config.json and place it NEXT TO EduCore360's school_admin.exe (or in %APPDATA%\\EduCore360\\) to point the app at a different Supabase project WITHOUT rebuilding. Delete/rename it to go back to the built-in database. Values are on the new project's Supabase dashboard: Project Settings -> API.",
+  "supabaseUrl": "https://YOUR-PROJECT-REF.supabase.co",
+  "supabaseAnonKey": "PASTE-THE-ANON-PUBLIC-KEY-HERE"
+}

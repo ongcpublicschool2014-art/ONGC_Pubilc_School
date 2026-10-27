@@ -28,6 +28,9 @@ class StudentModel {
   final String? admittyear;
   final String? medium;
   final String? aadharno;
+  /// Government identifiers carried over from the admission record.
+  final String? emisno;
+  final String? umisno;
   final String? community;
   final String? caste;
   final String? religion;
@@ -67,6 +70,8 @@ class StudentModel {
     this.admittyear,
     this.medium,
     this.aadharno,
+    this.emisno,
+    this.umisno,
     this.community,
     this.caste,
     this.religion,
@@ -116,6 +121,8 @@ class StudentModel {
       admittyear: json['admittyear']?.toString(),
       medium: json['medium']?.toString(),
       aadharno: json['aadharno']?.toString(),
+      emisno: json['emisno']?.toString(),
+      umisno: json['umisno']?.toString(),
       community: json['community']?.toString(),
       caste: json['caste']?.toString(),
       religion: json['religion']?.toString(),

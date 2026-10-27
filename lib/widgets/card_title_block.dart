@@ -24,13 +24,30 @@ class CardTitleBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      AppIcon(icon, size: iconSize, color: AppColors.accent),
+      // Icon in a soft accent-tinted chip — the standard modern section-header
+      // affordance, applied everywhere CardTitleBlock is used.
+      Container(
+        width: iconSize + 14,
+        height: iconSize + 14,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.accent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: AppIcon.linear(icon, size: iconSize, color: AppColors.accent),
+      ),
       SizedBox(width: 10.w),
-      Text(title,
-          style: TextStyle(
-              fontSize: 16.sp,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary)),
+      // Flexible so a long title wraps / ellipsizes to the card width instead
+      // of overflowing (e.g. "Admission Number Sequencing" in a narrow panel).
+      Flexible(
+        child: Text(title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 17.sp,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary)),
+      ),
     ]);
   }
 }

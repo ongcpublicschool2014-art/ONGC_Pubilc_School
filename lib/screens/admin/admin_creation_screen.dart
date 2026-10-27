@@ -6,9 +6,11 @@ import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/institution_user_model.dart';
+import '../../utils/friendly_error.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
+import '../../widgets/app_ui.dart';
 class AdminCreationScreen extends StatefulWidget {
   const AdminCreationScreen({super.key});
 
@@ -33,6 +35,11 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   int? _selectedReportTo;
   String? _selectedRole;
   InstitutionUserModel? _selectedUser; // for drilldown
+
+  /// Non-null while the left-hand form is editing an EXISTING user
+  /// instead of creating one. In that mode the password is optional:
+  /// blank means "keep the current password".
+  InstitutionUserModel? _editingUser;
 
   List<Map<String, dynamic>> _designationsList = [];
   List<Map<String, dynamic>> _rolesList = [];
@@ -100,35 +107,30 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             children: [
               AppIcon.linear('personalcard', size: 18, color: AppColors.textSecondary),
               SizedBox(width: 8.w),
-              Text('Add Designation', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
+              Text('Add Designation', style: AppUI.cardTitle),
             ],
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Designation Name', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+              Text('Designation Name', style: AppUI.label),
               SizedBox(height: 6.h),
               TextField(
                 controller: controller,
                 autofocus: true,
-                style: TextStyle(color: controller.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: controller.text.trim().isNotEmpty ? FontWeight.w600 : null),
+                style: AppUI.fieldText(context, filled: controller.text.trim().isNotEmpty),
                 onChanged: (v) {
                   final overflow = v.trim().length > 50;
                   final next = overflow ? 'Designation must be less than 50 characters' : null;
                   setDialogState(() => nameError = next);
                 },
-                decoration: InputDecoration(
-                  hintText: 'Enter designation name',
-                  border: OutlineInputBorder(borderSide: BorderSide(color: controller.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: controller.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                  focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: AppColors.accent, width: 1.5)),
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+                decoration: AppUI.field(context, 'Enter designation name', filled: controller.text.trim().isNotEmpty).copyWith(
                   errorText: nameError,
                 ),
               ),
               SizedBox(height: 16.h),
-              Text('Reports To', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+              Text('Reports To', style: AppUI.label),
               SizedBox(height: 6.h),
               DropdownButtonFormField<int?>(
                 value: reportsTo,
@@ -136,12 +138,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 dropdownColor: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 elevation: 6,
-                decoration: InputDecoration(
-                  border: OutlineInputBorder(borderSide: BorderSide(color: reportsTo != null ? AppColors.accent : AppColors.border, width: 1.5)),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: reportsTo != null ? AppColors.accent : AppColors.border, width: 1.5)),
-                  focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: AppColors.accent, width: 1.5)),
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                ),
+                decoration: AppUI.field(context, '', filled: reportsTo != null),
                 items: [
                   const DropdownMenuItem(value: null, child: Text('None')),
                   ..._designationsList.map((d) => DropdownMenuItem(
@@ -150,8 +147,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                       )),
                 ],
                 selectedItemBuilder: (context) => [
-                  Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                  ..._designationsList.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname'] as String, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
+                  Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                  ..._designationsList.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname'] as String, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
                 ],
                 onChanged: (v) => setDialogState(() => reportsTo = v),
               ),
@@ -161,7 +158,6 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
             ElevatedButton.icon(
               icon: AppIcon('add', size: 16, color: Colors.white),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h)),
               onPressed: () async {
                 final name = controller.text.trim();
                 if (name.isEmpty) {
@@ -193,7 +189,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   });
                 }
               },
-              label: const Text('Add', style: TextStyle(color: Colors.white)),
+              label: const Text('Add'),
             ),
           ],
         ),
@@ -243,7 +239,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('User created successfully!'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppColors.success,
           ),
         );
         _clearForm();
@@ -252,7 +248,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Failed to create user. Please try again.'),
-            backgroundColor: Colors.red,
+            backgroundColor: AppColors.error,
           ),
         );
       }
@@ -260,22 +256,130 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   }
 
   void _clearForm() {
-    // Clear the controllers FIRST, then reset the form. Clearing a controller
-    // fires a change that re-marks its field as "interacted", so with
-    // autovalidateMode.onUserInteraction every emptied field would light up
-    // 'Required' after a successful create. reset() LAST clears those
-    // interaction flags, leaving a clean blank form.
+    // A TextFormField built with a controller captures its initialValue from
+    // controller.text AT BUILD TIME, and Form.reset() restores that captured
+    // text. So clearing the controllers and then calling reset() in the same
+    // pass puts the old values straight back -- which is why the form still
+    // showed the edited user after a successful save.
+    //
+    // Clear the controllers now, and reset only AFTER a frame has rebuilt the
+    // fields with the (now empty) controllers: by then the captured value is
+    // empty, so reset() just clears the "interacted" flags -- no red 'Required'
+    // on the blank fields, and no resurrected text.
     _nameController.clear();
     _emailController.clear();
     _phoneController.clear();
     _passwordController.clear();
-    _formKey.currentState?.reset();
     setState(() {
       _selectedDesignation = null;
       _selectedDesId = null;
       _selectedReportTo = null;
       _selectedRole = null;
+      _editingUser = null; // Clear doubles as Cancel while editing
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _formKey.currentState?.reset();
+    });
+  }
+
+  /// Load an existing user into the left form.
+  ///
+  /// A dropdown value is only applied when it still exists in its master list:
+  /// DropdownButtonFormField asserts if its value is not among its items, and a
+  /// designation, role or reporting person can be removed after the user was
+  /// created. Form.reset() is deliberately NOT called here -- it would restore
+  /// each field to the value it was built with and wipe what we just loaded.
+  void _startEdit(InstitutionUserModel u) {
+    _nameController.text = u.usename;
+    _emailController.text = u.usemail;
+    _phoneController.text = u.usephone;
+    _passwordController.clear(); // blank = keep the current password
+    setState(() {
+      _editingUser = u;
+      _selectedUser = null; // back to the list, so the form is on screen
+      // A dropdown value must match EXACTLY ONE of that dropdown's items --
+      // zero or 2+ both trip an assertion in DropdownButtonFormField. So count
+      // against the same set the items are built from, not the raw master list.
+      final desMatches =
+          _designationsList.where((d) => d['desname'] == u.desname).length;
+      _selectedDesignation = desMatches == 1 ? u.desname : null;
+      _selectedDesId = desMatches == 1 ? u.desId : null;
+
+      // The Role dropdown deliberately omits 'Admin', so the admin's own role is
+      // never selectable. Leave it unset -- _updateUser keeps the existing role
+      // when nothing is chosen, so an admin's name/email/phone stay editable.
+      final roleMatches = _rolesList
+          .where((r) => r['urname'] == u.urname && r['urname'] != 'Admin')
+          .length;
+      _selectedRole = roleMatches == 1 ? u.urname : null;
+
+      _selectedReportTo =
+          (u.userepto == 0 || _users.any((x) => x.useId == u.userepto)) ? u.userepto : 0;
+    });
+  }
+
+  /// The form's primary action: create when blank, update when editing.
+  Future<void> _saveUser() =>
+      _editingUser == null ? _createUser() : _updateUser(_editingUser!);
+
+  Future<void> _updateUser(InstitutionUserModel u) async {
+    if (!_formKey.currentState!.validate()) return;
+
+    // Anything the form could not pre-select (the Admin role is absent from the
+    // Role list by design; a designation can be removed from its master) is kept
+    // as it is rather than blocking the edit.
+    final roleName = _selectedRole ?? u.urname;
+    final roleId = _selectedRole == null
+        ? u.urId
+        : _rolesList.firstWhere((r) => r['urname'] == _selectedRole)['ur_id'];
+    final desName = _selectedDesignation ?? u.desname;
+    final desId = _selectedDesignation == null ? u.desId : _selectedDesId;
+
+    if (roleName.isEmpty || desName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all required fields')),
+      );
+      return;
+    }
+
+    final pwd = _passwordController.text.trim();
+
+    // Only the editable fields. ins_id / inscode / usestadate / activestatus are
+    // left alone, and usepassword is sent ONLY when a new one was typed --
+    // otherwise the hash trigger would re-hash on every save.
+    final data = <String, dynamic>{
+      'usename': _nameController.text.trim(),
+      'usemail': _emailController.text.trim(),
+      'usephone': _phoneController.text.trim(),
+      'ur_id': roleId,
+      'urname': roleName,
+      'des_id': desId,
+      'desname': desName,
+      'userepto': _selectedReportTo ?? 0,
+      if (pwd.isNotEmpty) 'usepassword': pwd,
+    };
+
+    setState(() => _isLoading = true);
+    try {
+      await SupabaseService.updateInstitutionUser(u.useId, data);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${data['usename']} updated'
+              '${pwd.isNotEmpty ? ' (password changed)' : ''}'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+      _clearForm();
+      _fetchUsers();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+      );
+    }
   }
 
   @override
@@ -293,10 +397,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               SizedBox(width: 10.w),
               Text(
                 'User Creation',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: AppUI.cardTitle,
               ),
             ],
           ),
@@ -304,8 +405,6 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
           // Form + User list side by side
           LayoutBuilder(builder: (context, constraints) {
-            final screenWidth = MediaQuery.of(context).size.width;
-            final isCompact = screenWidth <= 1366;
             return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -314,7 +413,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 flex: 3,
                 child: _buildCreationForm(),
               ),
-              SizedBox(width: isCompact ? 12.w : 24.w),
+              SizedBox(width: AppUI.gap),
               // Right: Existing Users List
               Expanded(
                 flex: 7,
@@ -330,12 +429,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
   Widget _buildCreationForm() {
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Form(
         key: _formKey,
         child: FocusTraversalGroup(
@@ -347,19 +442,15 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 AppIcon('user-add',
                     size: 18, color: AppColors.accent),
                 SizedBox(width: 8.w),
-                Text('Create New User',
-                    style:
-                        TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+                Text(_editingUser == null ? 'Create New User' : 'Edit User',
+                    style: AppUI.cardTitle),
               ],
             ),
             SizedBox(height: 20.h),
 
             // Staff Designation
             Text('Staff Designation *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             DropdownButtonFormField<String>(
               value: _selectedDesignation,
@@ -379,16 +470,16 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   value: '__add_new__',
                   child: Row(
                     children: [
-                      AppIcon.linear('add-circle', size: 16, color: Color(0xFF00BFA5)),
+                      AppIcon.linear('add-circle', size: 16, color: AppColors.primary),
                       SizedBox(width: 8.w),
-                      Text('Add New Designation', style: TextStyle(color: Color(0xFF00BFA5), fontWeight: FontWeight.w600)),
+                      Text('Add New Designation', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 ),
               ],
               selectedItemBuilder: (context) => [
-                ..._designationsList.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname'] as String, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
-                Align(alignment: Alignment.centerLeft, child: Text('Add New Designation', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                ..._designationsList.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname'] as String, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
+                Align(alignment: Alignment.centerLeft, child: Text('Add New Designation', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
               ],
               onChanged: (v) {
                 if (v == '__add_new__') {
@@ -410,10 +501,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
             // Designation Report To
             Text('Designation Report To',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             DropdownButtonFormField<int>(
               value: _selectedReportTo,
@@ -432,8 +520,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                     )),
               ],
               selectedItemBuilder: (context) => [
-                Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                ..._users.map((u) => Align(alignment: Alignment.centerLeft, child: Text('${u.usename} (${u.desname})', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
+                Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                ..._users.map((u) => Align(alignment: Alignment.centerLeft, child: Text('${u.usename} (${u.desname})', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
               ],
               onChanged: (v) => setState(() => _selectedReportTo = v),
             ),
@@ -441,10 +529,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
             // Role
             Text('Role *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             DropdownButtonFormField<String>(
               value: _selectedRole,
@@ -463,7 +548,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   .toList(),
               selectedItemBuilder: (context) => _rolesList
                   .where((r) => (r['urname'] as String) != 'Admin')
-                  .map((r) => Align(alignment: Alignment.centerLeft, child: Text(r['urname'] as String, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))))
+                  .map((r) => Align(alignment: Alignment.centerLeft, child: Text(r['urname'] as String, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
                   .toList(),
               onChanged: (v) => setState(() => _selectedRole = v),
               validator: (v) => v == null ? 'Required' : null,
@@ -472,10 +557,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
             // User Name
             Text('User Name *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             TextFormField(
               controller: _nameController,
@@ -494,10 +576,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
             // Email
             Text('Email *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             TextFormField(
               controller: _emailController,
@@ -517,10 +596,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
             // Phone
             Text('Phone *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+                style: AppUI.label),
             SizedBox(height: 6.h),
             TextFormField(
               controller: _phoneController,
@@ -542,15 +618,15 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             SizedBox(height: 16.h),
 
             // Password
-            Text('Password *',
-                style: TextStyle(
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black)),
+            Text(_editingUser == null ? 'Password *' : 'Password',
+                style: AppUI.label),
             SizedBox(height: 6.h),
             TextFormField(
               controller: _passwordController,
-              decoration: _inputDecoration(context, 'Enter password', filled: _passwordController.text.trim().isNotEmpty).copyWith(
+              decoration: _inputDecoration(context,
+                      _editingUser == null ? 'Enter password' : 'Leave blank to keep current',
+                      filled: _passwordController.text.trim().isNotEmpty)
+                  .copyWith(
                 suffixIcon: IconButton(
                   tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                   icon: AppIcon(
@@ -566,7 +642,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               obscureText: _obscurePassword,
               validator: (v) {
                 final s = v ?? '';
-                if (s.isEmpty) return 'Required';
+                // While editing, blank means "keep the current password".
+                if (s.isEmpty) return _editingUser == null ? 'Required' : null;
                 if (s.length < 8) return 'Password must be at least 8 characters';
                 return null;
               },
@@ -582,12 +659,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                     height: AppBtn.height(context),
                     child: OutlinedButton.icon(
                       onPressed: _clearForm,
-                      icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.textPrimary),
-                      label: const Text('Clear'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textPrimary,
-                        side: const BorderSide(color: AppColors.border),
-                      ),
+                      icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.primary),
+                      label: Text(_editingUser == null ? 'Clear' : 'Cancel'),
                     ),
                   ),
                 ),
@@ -596,7 +669,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   child: SizedBox(
                     height: AppBtn.height(context),
                     child: ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _createUser,
+                      onPressed: _isLoading ? null : _saveUser,
                       icon: _isLoading
                           ? SizedBox(
                               width: 14,
@@ -604,11 +677,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                               child: const CircularProgressIndicator(
                                   strokeWidth: 2, color: Colors.white))
                           : AppIcon('user-add', size: AppBtn.iconSize(context), color: Colors.white),
-                      label: const Text('Create User'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                      ),
+                      label: Text(_editingUser == null ? 'Create User' : 'Update User'),
                     ),
                   ),
                 ),
@@ -622,41 +691,11 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   }
 
   TextStyle _inputTextStyle(BuildContext context, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    return TextStyle(
-      fontWeight: filled ? FontWeight.w600 : FontWeight.w500,
-      fontSize: compact ? 11 : 14,
-      color: filled ? AppColors.accent : const Color(0xFF555555),
-    );
+    return AppUI.fieldText(context, filled: filled);
   }
 
   InputDecoration _inputDecoration(BuildContext context, String hint, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    final idle = filled ? AppColors.accent : AppColors.border;
-
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
-      ),
-      filled: true,
-      fillColor: Colors.white,
-    );
+    return AppUI.field(context, hint, filled: filled);
   }
 
   Widget _buildUserList() {
@@ -666,12 +705,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
     }
 
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
@@ -680,14 +715,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               children: [
                 const CardTitleBlock(icon: 'people', title: 'Existing Users', subtitle: 'all user accounts in this institution'),
                 const Spacer(),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text('${_users.length} users', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-                ),
+                AppUI.chip('${_users.length} users', AppStatus.info),
                 SizedBox(width: 8.w),
                 SizedBox(
                   height: AppBtn.height(context),
@@ -695,11 +723,6 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                     onPressed: _fetchUsers,
                     icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                     label: const Text('Refresh'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                    ),
                   ),
                 ),
               ],
@@ -709,8 +732,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
           Container(
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8.r),
-              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              border: Border.all(color: AppColors.cardBorder),
             ),
             child: Column(
               children: [
@@ -720,12 +743,13 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             color: AppColors.tableHeadBg,
             child: Row(
               children: [
-                SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                SizedBox(width: 50.w, child: Text('S NO.', style: AppUI.tableHead)),
                 SizedBox(width: 16.w),
-                Expanded(flex: 3, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('DESIGNATION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                Expanded(flex: 2, child: Text('ROLE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                Expanded(flex: 3, child: Text('NAME', style: AppUI.tableHead)),
+                Expanded(flex: 2, child: Text('DESIGNATION', style: AppUI.tableHead)),
+                Expanded(flex: 2, child: Text('ROLE', style: AppUI.tableHead)),
+                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: AppUI.tableHead)),
+                SizedBox(width: 50.w, child: Text('EDIT', textAlign: TextAlign.center, style: AppUI.tableHead)),
                 SizedBox(width: 30.w),
               ],
             ),
@@ -734,7 +758,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
           if (_isLoading)
             Padding(padding: EdgeInsets.all(32.w), child: Center(child: CircularProgressIndicator()))
           else if (_users.isEmpty)
-            Padding(padding: EdgeInsets.all(32.w), child: Center(child: Text('No users found', style: TextStyle(color: AppColors.textPrimary))))
+            AppUI.empty(title: 'No users found', why: 'Create the first user with the form on the left.', icon: 'people')
           else
             ...List.generate(_users.length, (i) {
               final u = _users[i];
@@ -745,40 +769,49 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   color: i.isEven ? Colors.white : AppColors.surface,
                   child: Row(
                     children: [
-                      SizedBox(width: 50.w, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                      SizedBox(width: 50.w, child: Text('${i + 1}', style: AppUI.cell)),
                       SizedBox(width: 16.w),
                       Expanded(
                         flex: 3,
-                        child: Text(u.usename, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                        child: Text(u.usename, style: AppUI.cell),
                       ),
-                      Expanded(flex: 2, child: Text(u.desname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                      Expanded(flex: 2, child: Text(u.desname, style: AppUI.cell)),
                       Expanded(
                         flex: 2,
                         child: Row(
                           children: [
-                            Container(
-                              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-                              decoration: BoxDecoration(
-                                color: u.urname.toLowerCase() == 'admin' ? AppColors.accent.withValues(alpha: 0.1) : Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(6.r),
-                              ),
-                              child: Text(u.urname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: u.urname.toLowerCase() == 'admin' ? AppColors.accent : AppColors.textPrimary)),
-                            ),
+                            AppUI.chip(u.urname, u.urname.toLowerCase() == 'admin' ? AppStatus.info : AppStatus.neutral),
                           ],
                         ),
                       ),
                       SizedBox(
                         width: 70.w,
                         child: Center(
-                          child: Container(
-                            padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-                            decoration: BoxDecoration(
-                              color: u.isActive ? AppColors.success.withValues(alpha: 0.1) : AppColors.error.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6.r),
-                            ),
-                            child: Text(u.isActive ? 'Active' : 'Inactive', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: u.isActive ? AppColors.success : AppColors.error)),
-                          ),
+                          child: AppUI.chip(u.isActive ? 'Active' : 'Inactive', u.isActive ? AppStatus.success : AppStatus.danger),
                         ),
+                      ),
+                      // Edit straight from the row. _startEdit loads the user
+                      // into the left form and clears _selectedUser, so the
+                      // list stays put -- no drilling into the detail card
+                      // first. Terminated users have no form to load, and the
+                      // detail card hides its Edit button for them too.
+                      SizedBox(
+                        width: 50.w,
+                        child: u.isActive
+                            ? Center(
+                                child: Tooltip(
+                                  message: 'Edit ${u.usename}',
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(6.r),
+                                    onTap: () => _startEdit(u),
+                                    child: Padding(
+                                      padding: EdgeInsets.all(6.w),
+                                      child: const AppIcon('edit-2', size: 18, color: AppColors.accent),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : const SizedBox.shrink(),
                       ),
                       SizedBox(width: 30.w, child: AppIcon.linear('Chevron Right', size: 18, color: AppColors.textPrimary)),
                     ],
@@ -810,10 +843,10 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             ],
             SizedBox(
               width: 130.w,
-              child: Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              child: Text(label, style: AppUI.muted),
             ),
             Expanded(
-              child: Text(value, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: valueColor ?? AppColors.textPrimary)),
+              child: Text(value, style: AppUI.body.copyWith(color: valueColor ?? AppColors.textPrimary)),
             ),
           ],
         ),
@@ -821,11 +854,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
     }
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -837,10 +866,10 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               children: [
                 InkWell(
                   onTap: () => setState(() => _selectedUser = null),
-                  borderRadius: BorderRadius.circular(8.r),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                   child: Container(
                     padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                    decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(8.r)),
+                    decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
                       SizedBox(width: 6.w),
@@ -849,22 +878,15 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   ),
                 ),
                 SizedBox(width: 12.w),
-                Container(width: 1, height: 18, color: AppColors.border),
+                Container(width: 1, height: 18, color: AppColors.divider),
                 SizedBox(width: 12.w),
-                Text('User Creation', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                Text('User Creation', style: AppUI.muted),
                 SizedBox(width: 6.w),
                 AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                 SizedBox(width: 6.w),
-                Text(u.urname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                Text(u.urname, style: AppUI.label),
                 const Spacer(),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                  decoration: BoxDecoration(
-                    color: u.isActive ? AppColors.success.withValues(alpha: 0.1) : AppColors.error.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text(u.isActive ? 'Active' : 'Inactive', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: u.isActive ? AppColors.success : AppColors.error)),
-                ),
+                AppUI.chip(u.isActive ? 'Active' : 'Inactive', u.isActive ? AppStatus.success : AppStatus.danger),
               ],
             ),
           ),
@@ -876,19 +898,19 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               children: [
                 CircleAvatar(
                   radius: 28.r,
-                  backgroundColor: AppColors.accent.withValues(alpha: 0.1),
+                  backgroundColor: AppColors.primaryLight,
                   child: Text(
                     u.usename.isNotEmpty ? u.usename[0].toUpperCase() : '?',
-                    style: TextStyle(fontSize: 22.sp, fontWeight: FontWeight.w700, color: AppColors.accent),
+                    style: TextStyle(fontSize: 22.sp, fontWeight: FontWeight.w800, color: AppColors.primary),
                   ),
                 ),
                 SizedBox(width: 16.w),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(u.usename, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700)),
+                    Text(u.usename, style: AppUI.cardTitle),
                     SizedBox(height: 2.h),
-                    Text('${u.desname} - ${u.urname}', style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary)),
+                    Text('${u.desname} - ${u.urname}', style: AppUI.muted),
                   ],
                 ),
               ],
@@ -898,39 +920,46 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
           // Detail rows
           SizedBox(height: 8.h),
           detailRow('Email', u.usemail, icon: 'sms'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Phone', u.usephone, icon: 'call'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Designation', u.desname, icon: 'personalcard'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Role', u.urname, icon: 'shield-tick', valueColor: u.urname.toLowerCase() == 'admin' ? AppColors.accent : null),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Reports To', reportTo ?? 'None', icon: 'profile-circle'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Start Date', '${u.usestadate.day.toString().padLeft(2, '0')}/${u.usestadate.month.toString().padLeft(2, '0')}/${u.usestadate.year}', icon: 'calendar-1'),
           if (u.usecategory != null && u.usecategory!.isNotEmpty) ...[
-            Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+            const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
             detailRow('Category', u.usecategory!, icon: 'category'),
           ],
           SizedBox(height: 16.h),
-          // Terminate button
-          if (u.isActive && u.urname.toLowerCase() != 'admin')
+          // Actions. Edit loads this user into the left form; Terminate stays
+          // off the Admin role so an institution can't lose its last admin.
+          if (u.isActive)
             Padding(
               padding: EdgeInsets.fromLTRB(20.w, 0, 20.w, 20.h),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => _confirmTerminate(u),
-                  icon: AppIcon('forbidden-2', size: 18),
-                  label: const Text('Terminate', style: TextStyle(fontWeight: FontWeight.w600)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.error,
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _startEdit(u),
+                    icon: const AppIcon('edit-2', size: 18, color: AppColors.accent),
+                    label: const Text('Edit'),
                   ),
                 ),
-              ),
+                if (u.urname.toLowerCase() != 'admin') ...[
+                  SizedBox(width: 12.w),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _confirmTerminate(u),
+                      icon: AppIcon('forbidden-2', size: 18),
+                      label: const Text('Terminate'),
+                      style: AppUI.danger(context),
+                    ),
+                  ),
+                ],
+              ]),
             ),
         ],
       ),
@@ -943,8 +972,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-        title: const Text('Terminate User', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('Terminate User'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -954,15 +982,9 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             TextField(
               controller: reasonController,
               maxLines: 3,
-              style: TextStyle(color: reasonController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: reasonController.text.trim().isNotEmpty ? FontWeight.w600 : null),
+              style: AppUI.fieldText(context, filled: reasonController.text.trim().isNotEmpty),
               onChanged: (_) => setDialogState(() {}),
-              decoration: InputDecoration(
-                labelText: 'Reason for termination *',
-                hintText: 'Enter reason...',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: reasonController.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: reasonController.text.trim().isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5)),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-              ),
+              decoration: AppUI.field(context, 'Enter reason...', label: 'Reason for termination *', filled: reasonController.text.trim().isNotEmpty),
             ),
           ],
         ),
@@ -976,19 +998,14 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               final reason = reasonController.text.trim();
               if (reason.isEmpty) {
                 ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('Please enter a reason'), backgroundColor: Colors.red),
+                  const SnackBar(content: Text('Please enter a reason'), backgroundColor: AppColors.error),
                 );
                 return;
               }
               Navigator.pop(ctx);
               _terminateUser(u, reason);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.error,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-            ),
+            style: AppUI.danger(context),
             child: const Text('Terminate'),
           ),
         ],
@@ -1006,13 +1023,13 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
       setState(() => _isLoading = false);
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('User terminated successfully'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('User terminated successfully'), backgroundColor: AppColors.success),
         );
         setState(() => _selectedUser = null);
         _fetchUsers();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to terminate user'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to terminate user'), backgroundColor: AppColors.error),
         );
       }
     }

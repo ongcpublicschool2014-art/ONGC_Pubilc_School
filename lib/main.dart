@@ -9,6 +9,7 @@ import 'utils/app_token_http_client.dart';
 import 'utils/app_theme.dart';
 import 'utils/app_routes.dart';
 import 'utils/auth_provider.dart';
+import 'widgets/maintenance_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,11 @@ void main() async {
   if (kReleaseMode) {
     debugPrint = (String? message, {int? wrapWidth}) {};
   }
+
+  // Load an optional config.json (next to the .exe or in %APPDATA%\EduCore360)
+  // so the SAME build can point at a different Supabase project without a
+  // rebuild. Falls back to the compiled-in defaults when no file is present.
+  await SupabaseConfig.load();
 
   // Initialize Supabase. A custom http client attaches the app session token as
   // an `x-app-token` header on every request so the server's db-pre-request hook
@@ -84,10 +90,15 @@ class SchoolAdminApp extends StatelessWidget {
               // applying at 1920+, so this only affects 1366.
               ScreenUtil.init(context, designSize: const Size(1607, 904), minTextAdapt: true);
             }
-            if (!compact || child == null) return child ?? const SizedBox.shrink();
+            // Gate the entire app behind the hosted maintenance flag so all
+            // clients can be blocked from one place during live DB work.
+            final gated = MaintenanceGate(
+              child: child ?? const SizedBox.shrink(),
+            );
+            if (!compact || child == null) return gated;
             return Theme(
               data: AppTheme.compactButtons(Theme.of(context)),
-              child: child,
+              child: gated,
             );
           },
         );

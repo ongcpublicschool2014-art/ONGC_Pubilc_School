@@ -5,6 +5,7 @@ import '../../utils/app_theme.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 
 /// Three-step forgot-password flow for institution users (admin/staff/
 /// accountant). The OTP is sent via the `send-password-reset-otp` Supabase
@@ -135,7 +136,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Password reset successful. Please sign in with your new password.'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppColors.success,
           ),
         );
         Navigator.of(context).pop();
@@ -153,37 +154,20 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
   }
 
-  // Standard decoration: grey border idle, navy (primary) border on focus.
-  // Keeps any prefix/suffix icon supplied by the caller. The [filled] param
-  // is retained but no longer affects the border.
+  // The kit field: grey edge idle, accent edge when it holds a value, 2px
+  // focus ring. Keeps any prefix/suffix icon supplied by the caller.
   InputDecoration _dec(String hint, {bool filled = false, Widget? prefixIcon, Widget? suffixIcon, String? counterText}) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6)),
+    return AppUI.field(context, hint, filled: filled).copyWith(
       counterText: counterText,
-      prefixIcon: prefixIcon,
+      prefixIcon: prefixIcon == null
+          ? null
+          : Padding(padding: const EdgeInsets.only(left: 12, right: 8), child: prefixIcon),
       suffixIcon: suffixIcon,
-      prefixIconConstraints: const BoxConstraints(minWidth: 52, minHeight: 0),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
-      ),
     );
   }
 
-  // Normal value text — standard dark colour at the normal weight.
-  TextStyle _fieldStyle(bool filled) => const TextStyle(
-        fontWeight: FontWeight.w400,
-        color: AppColors.textPrimary,
-      );
+  // Value text inside a field.
+  TextStyle _fieldStyle(bool filled) => AppUI.fieldText(context);
 
   @override
   Widget build(BuildContext context) {
@@ -208,7 +192,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         backgroundColor: Colors.white,
                         side: const BorderSide(color: AppColors.border),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
                         ),
                       ),
                     ),
@@ -225,15 +209,15 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                      color: AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                      border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
                     ),
                     child: Row(children: [
-                      Icon(Icons.error_outline, color: Colors.red.shade700, size: 18),
+                      const Icon(Icons.error_outline, color: AppColors.error, size: 18),
                       SizedBox(width: 8),
                       Expanded(child: Text(_errorMessage!,
-                          style: TextStyle(color: Colors.red.shade700, fontSize: 13))),
+                          style: AppUI.body.copyWith(color: AppColors.error, fontSize: 13))),
                     ]),
                   ),
                   SizedBox(height: 18),
@@ -261,7 +245,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         height: 80,
         decoration: BoxDecoration(
           color: AppColors.accent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(AppUI.cardRadius),
         ),
         child: AppIcon(iconName, size: 40, color: AppColors.accent),
       ),
@@ -274,7 +258,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _Step.otp => 'Enter the OTP',
       _Step.password => 'Set a New Password',
     };
-    return Text(title, textAlign: TextAlign.center, style: Theme.of(context).textTheme.displayMedium);
+    return Text(title, textAlign: TextAlign.center, style: AppUI.pageTitle);
   }
 
   Widget _buildSubtitle() {
@@ -289,13 +273,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     };
     return Text(text,
         textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5));
+        style: AppUI.muted.copyWith(fontSize: 14, height: 1.5));
   }
 
   Widget _buildEmailForm() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('Email Address', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      SizedBox(height: 8),
+      AppUI.fieldLabel('Email Address'),
       TextFormField(
         controller: _emailController,
         keyboardType: TextInputType.emailAddress,
@@ -309,7 +292,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       ),
       SizedBox(height: 24),
       SizedBox(
-        height: 48,
+        height: AppUI.controlHeight(context),
         child: ElevatedButton.icon(
           onPressed: _isLoading ? null : _requestOtp,
           icon: _isLoading
@@ -323,8 +306,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Widget _buildOtpForm() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('OTP', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      SizedBox(height: 8),
+      AppUI.fieldLabel('OTP'),
       TextFormField(
         controller: _otpController,
         keyboardType: TextInputType.number,
@@ -349,7 +331,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       ),
       SizedBox(height: 16),
       SizedBox(
-        height: 48,
+        height: AppUI.controlHeight(context),
         child: ElevatedButton.icon(
           onPressed: _isLoading ? null : _verifyOtp,
           icon: _isLoading
@@ -363,8 +345,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Widget _buildPasswordForm() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('New Password', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      SizedBox(height: 8),
+      AppUI.fieldLabel('New Password'),
       TextFormField(
         controller: _newPasswordController,
         obscureText: _obscurePassword,
@@ -381,8 +362,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         ),
       ),
       SizedBox(height: 16),
-      Text('Confirm Password', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      SizedBox(height: 8),
+      AppUI.fieldLabel('Confirm Password'),
       TextFormField(
         controller: _confirmPasswordController,
         obscureText: _obscurePassword,
@@ -396,7 +376,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       ),
       SizedBox(height: 24),
       SizedBox(
-        height: 48,
+        height: AppUI.controlHeight(context),
         child: ElevatedButton.icon(
           onPressed: _isLoading ? null : _resetPassword,
           icon: _isLoading

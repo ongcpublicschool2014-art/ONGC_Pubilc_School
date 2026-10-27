@@ -3,16 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/student_avatar.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
 import 'package:file_picker/file_picker.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/ledger_logic.dart' as ledger;
 import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../../utils/formatters.dart';
+import '../../utils/school_terms.dart';
 
 class StudentLedgerScreen extends StatefulWidget {
   const StudentLedgerScreen({super.key});
@@ -48,6 +52,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
   StudentModel? _selectedStudent;
   Map<String, dynamic>? _parent;
   List<Map<String, dynamic>> _demands = [];
+  // Misc collections for the selected student: {feetype, amount, docno, docdate}.
+  List<Map<String, dynamic>> _miscRows = [];
   bool _loadingLedger = false;
 
   static const List<String> _classOrder = [
@@ -126,7 +132,9 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       if (!mounted) return;
       setState(() {
         _allStudents = students;
-        _classes = [...ordered, ...extra];
+        // Master ordid order within each group, TC batches last
+        // (utils/class_sort.dart).
+        _classes = classGroupPartition([...ordered, ...extra], (s) => s);
         _classCounts = counts;
         _courseClassCounts = courseCounts;
         _classOrdMap = classOrdMap;
@@ -167,6 +175,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     setState(() {
       _selectedStudent = student;
       _demands = [];
+      _miscRows = [];
       _parent = null;
       _loadingLedger = true;
     });
@@ -174,9 +183,11 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       debugPrint('LEDGER: insId=$insId stuId=${student.stuId} stuadmno=${student.stuadmno}');
 
       final parentFuture = SupabaseService.getStudentParent(student.stuId, stuadmno: student.stuadmno);
+      final miscFuture = _loadMiscForStudent(insId, student);
 
-      // Try stuadmno first (primary key used in feedemand)
-      const selectFields = 'dem_id, demno, demfeetype, demfeeterm, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, duedate, paidstatus, pay_id';
+      // Try stuadmno first (primary key used in feedemand). demseqtype +
+      // demfeeyear drive the Regular / Arrear grouping.
+      const selectFields = 'dem_id, demno, demfeetype, demfeeterm, demseqtype, demfeeyear, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, duedate, paidstatus, pay_id';
       final demandsByAdmno = await SupabaseService.fromSchema('feedemand')
           .select(selectFields)
           .eq('ins_id', insId)
@@ -226,17 +237,69 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       }
 
       final parent = await parentFuture;
+      final misc = await miscFuture;
 
       if (mounted) {
         setState(() {
           _parent = parent;
           _demands = demandList;
+          _miscRows = misc;
           _loadingLedger = false;
         });
       }
     } catch (e) {
       debugPrint('LEDGER ERROR: $e');
       if (mounted) setState(() => _loadingLedger = false);
+    }
+  }
+
+  /// Miscellaneous collections for this student — flattened to one row per fee
+  /// type per receipt. Misc has no demand, so only Collection is populated.
+  Future<List<Map<String, dynamic>>> _loadMiscForStudent(int insId, StudentModel student) async {
+    try {
+      var mc = await SupabaseService.fromSchema('misc_collection')
+          .select('mc_id, mcno, mcdate')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1)
+          .eq('stu_id', student.stuId)
+          .order('mcdate', ascending: true);
+      var headers = List<Map<String, dynamic>>.from(mc as List);
+      if (headers.isEmpty) {
+        // Fallback: match by registration number.
+        mc = await SupabaseService.fromSchema('misc_collection')
+            .select('mc_id, mcno, mcdate')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .eq('regno', student.stuadmno)
+            .order('mcdate', ascending: true);
+        headers = List<Map<String, dynamic>>.from(mc as List);
+      }
+      if (headers.isEmpty) return [];
+      final mcIds = headers.map((h) => h['mc_id']).where((id) => id != null).toList();
+      final details = await SupabaseService.fromSchema('misc_collection_detail')
+          .select('mc_id, feetype, amount')
+          .eq('activestatus', 1)
+          .inFilter('mc_id', mcIds);
+      final byMc = <dynamic, List<Map<String, dynamic>>>{};
+      for (final d in List<Map<String, dynamic>>.from(details as List)) {
+        (byMc[d['mc_id']] ??= []).add(d);
+      }
+      final rows = <Map<String, dynamic>>[];
+      for (final h in headers) {
+        final raw = h['mcdate']?.toString() ?? '';
+        final date = raw.length >= 10 ? raw.substring(0, 10) : raw;
+        for (final d in (byMc[h['mc_id']] ?? const [])) {
+          rows.add({
+            'feetype': d['feetype']?.toString() ?? 'Misc',
+            'amount': (d['amount'] as num?)?.toDouble() ?? 0,
+            'docno': h['mcno']?.toString() ?? '-',
+            'docdate': date,
+          });
+        }
+      }
+      return rows;
+    } catch (_) {
+      return [];
     }
   }
 
@@ -247,63 +310,6 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
   double get _totalPaid => _totals.paid;
   double get _totalPending => _totals.pending;
 
-  // Ledger rows from feedemand: unpaid = debit only, paid = debit + credit
-  List<Map<String, dynamic>> get _ledgerRows {
-    final rows = <Map<String, dynamic>>[];
-    for (final d in _demands) {
-      final raw = d['duedate']?.toString() ?? '';
-      final paidAmount = (d['paidamount'] as num?)?.toDouble() ?? 0;
-      final hasPaid = paidAmount > 0;
-      final payment = d['payment'];
-
-      // Demand row (debit)
-      rows.add({
-        'date': raw.length >= 10 ? raw.substring(0, 10) : raw,
-        'docno': d['demno']?.toString() ?? d['dem_id']?.toString() ?? '-',
-        'term': d['demfeeterm']?.toString() ?? '-',
-        'feetype': d['demfeetype']?.toString() ?? '-',
-        'reference': '-',
-        'debit': (d['feeamount'] as num?)?.toDouble() ?? 0.0,
-        'credit': 0.0,
-        'fine': 0.0,
-        'type': 'demand',
-      });
-
-      // Payment row (credit) - only show for reconciled rows so RECEIVED
-      // entries match the Paid card. Unreconciled rows surface as a Demand
-      // with Pending balance only.
-      final amt = (d['feeamount'] as num?)?.toDouble() ?? 0.0;
-      final reconBal = (d['reconbalancedue'] as num?)?.toDouble()
-          ?? (d['balancedue'] as num?)?.toDouble() ?? amt;
-      final isReconciled = reconBal <= 0;
-      if (hasPaid && payment is Map && isReconciled) {
-        final payDate = payment['paydate']?.toString() ?? raw;
-        final payNumber = payment['paynumber']?.toString() ?? '-';
-        final payMethod = payment['paymethod']?.toString() ?? '-';
-        final balance = (d['balancedue'] as num?)?.toDouble() ?? 0.0;
-        final isPartial = balance > 0;
-        rows.add({
-          'date': payDate.length >= 10 ? payDate.substring(0, 10) : payDate,
-          'docno': payNumber,
-          'term': d['demfeeterm']?.toString() ?? '-',
-          'feetype': isPartial ? 'Partial Payment ($payMethod)' : 'Payment ($payMethod)',
-          'reference': d['demno']?.toString() ?? d['dem_id']?.toString() ?? '-',
-          'debit': balance,
-          'credit': paidAmount - ((d['fineamount'] as num?)?.toDouble() ?? 0),
-          'fine': (d['fineamount'] as num?)?.toDouble() ?? 0,
-          'type': 'payment',
-        });
-      }
-    }
-    // Demands first (sorted by date), then payments (sorted by date)
-    rows.sort((a, b) {
-      final typeA = a['type'] == 'demand' ? 0 : 1;
-      final typeB = b['type'] == 'demand' ? 0 : 1;
-      if (typeA != typeB) return typeA.compareTo(typeB);
-      return (a['date'] as String).compareTo(b['date'] as String);
-    });
-    return rows;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -312,22 +318,18 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         // â”€â”€ Left: Class list â”€â”€
         Container(
           width: 260.w,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12.r),
-            border: Border.all(color: AppColors.border),
-          ),
+          clipBehavior: Clip.antiAlias,
+          decoration: AppUI.card(),
           child: Column(
             children: [
               Container(
                 padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 10.h),
                 child: Row(
                   children: [
-                    AppIcon('people', size: 20, color: AppColors.accent),
+                    AppIcon.linear('people', size: 20, color: AppColors.primary),
                     SizedBox(width: 8.w),
                     Expanded(
-                      child: Text('Students',
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                      child: Text('Students', style: AppUI.cardTitle),
                     ),
                     if (!_loadingClasses)
                       Container(
@@ -344,7 +346,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                   ],
                 ),
               ),
-              Divider(height: 1.h, color: AppColors.border),
+              Divider(height: 1.h, color: AppColors.divider),
               Expanded(
                 child: _loadingClasses
                     ? const Center(child: CircularProgressIndicator(color: AppColors.accent))
@@ -362,13 +364,16 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                           final courseName = courseNames[courseIndex];
                           final rawClassCounts = _courseClassCounts[courseName]!;
                           final classCounts = <String, int>{
-                            for (final k in rawClassCounts.keys.toList()
-                              ..sort((a, b) {
-                                final ai = _classOrdMap[a.trim()] ?? _classOrdMap[a] ?? 1 << 30;
-                                final bi = _classOrdMap[b.trim()] ?? _classOrdMap[b] ?? 1 << 30;
-                                if (ai != bi) return ai.compareTo(bi);
-                                return a.compareTo(b);
-                              }))
+                            // Ordid order within each group, TC batches last.
+                            for (final k in classGroupPartition(
+                                rawClassCounts.keys.toList()
+                                  ..sort((a, b) {
+                                    final ai = _classOrdMap[a.trim()] ?? _classOrdMap[a] ?? 1 << 30;
+                                    final bi = _classOrdMap[b.trim()] ?? _classOrdMap[b] ?? 1 << 30;
+                                    if (ai != bi) return ai.compareTo(bi);
+                                    return a.compareTo(b);
+                                  }),
+                                (s) => s))
                               k: rawClassCounts[k]!,
                           };
                           final courseTotal = classCounts.values.fold<int>(0, (s, c) => s + c);
@@ -431,7 +436,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                                 padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
                                 decoration: BoxDecoration(
                                   color: isSelected ? color.withValues(alpha: 0.08) : null,
-                                  border: const Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+                                  border: const Border(bottom: BorderSide(color: AppColors.divider, width: 1)),
                                 ),
                                 child: Row(
                                   children: [
@@ -484,11 +489,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         // â”€â”€ Right: Student list OR Ledger â”€â”€
         Expanded(
           child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12.r),
-              border: Border.all(color: AppColors.border),
-            ),
+            clipBehavior: Clip.antiAlias,
+            decoration: AppUI.card(),
             child: _selectedStudent != null
                 ? _buildLedger()
                 : _selectedClass == null
@@ -516,9 +518,9 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
           padding: EdgeInsets.fromLTRB(14.w, 10.h, 14.w, 0),
           child: Row(
             children: [
-              AppIcon('people', size: 20, color: AppColors.accent),
+              AppIcon.linear('people', size: 20, color: AppColors.primary),
               SizedBox(width: 8.w),
-              Text('All Students', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+              Text('All Students', style: AppUI.cardTitle),
               SizedBox(width: 8.w),
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
@@ -542,8 +544,8 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Column(
                 children: [
@@ -552,27 +554,27 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                        Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
+                        if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
+                        Expanded(flex: 1, child: Text('GENDER', style: AppUI.tableHead)),
+                        Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: AppUI.tableHead)),
                       ],
                     ),
                   ),
-                  Container(height: 1, color: AppColors.border),
+                  Container(height: 1, color: AppColors.divider),
                   Expanded(
                     child: AppVerticalScrollbar(
                       builder: (context, scrollCtrl) => ListView.separated(
                       controller: scrollCtrl,
                       itemCount: students.length,
-                      separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border),
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                       itemBuilder: (context, i) {
                         final s = students[i];
-                        final cellStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+                        final cellStyle = AppUI.cell;
                         return Material(
                           color: Colors.transparent,
                           child: InkWell(
@@ -587,7 +589,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                                   Expanded(flex: 3, child: Text(s.stuname, style: cellStyle, overflow: TextOverflow.ellipsis)),
                                   Expanded(flex: 2, child: Text(s.courname ?? '-', style: cellStyle)),
                                   Expanded(flex: 2, child: Text(s.stuclass, style: cellStyle)),
-                                  Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
+                                  if (!isSchool) Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
                                   Expanded(flex: 1, child: Text(s.stugender, style: cellStyle)),
                                   Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
                                 ],
@@ -665,24 +667,28 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
           child: Row(
             children: [
-              Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-              Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+              Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
+              Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+              Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
+              Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+              if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
+              Expanded(flex: 1, child: Text('GENDER', style: AppUI.tableHead)),
+              Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: AppUI.tableHead)),
             ],
           ),
         ),
             builder: (context, controller) => _loadingStudents
               ? const Center(child: CircularProgressIndicator(color: AppColors.accent))
               : students.isEmpty
-                  ? Center(child: Text('No students found', style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade400)))
+                  ? AppUI.empty(
+                      title: 'No students found',
+                      why: q.isEmpty ? 'No students in this class yet.' : 'No student matches the search. Clear the search to see everyone.',
+                      icon: 'people',
+                    )
                   : ListView.separated(
                       controller: controller,
                       itemCount: students.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                       itemBuilder: (context, i) {
                         final s = students[i];
                         return Material(
@@ -694,12 +700,12 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
                               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                               child: Row(
                                 children: [
-                                  Expanded(flex: 1, child: Text('${i + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                  Expanded(flex: 1, child: Text('${i + 1}', style: AppUI.cell)),
                                   Expanded(flex: 2, child: Text(s.stuadmno, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                                  Expanded(flex: 3, child: Text(s.stuname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis)),
-                                  Expanded(flex: 2, child: Text(s.courname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                  Expanded(flex: 2, child: Text(s.batch ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                  Expanded(flex: 1, child: Text(s.stugender, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                  Expanded(flex: 3, child: Text(s.stuname, style: AppUI.cell, overflow: TextOverflow.ellipsis)),
+                                  Expanded(flex: 2, child: Text(s.courname ?? '-', style: AppUI.cell)),
+                                  if (!isSchool) Expanded(flex: 2, child: Text(s.batch ?? '-', style: AppUI.cell)),
+                                  Expanded(flex: 1, child: Text(s.stugender, style: AppUI.cell)),
                                   Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
                                 ],
                               ),
@@ -752,53 +758,29 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
               SizedBox(width: 12.w),
               Container(width: 1, height: 18, color: AppColors.border),
               SizedBox(width: 12.w),
-              CircleAvatar(
-                radius: 20,
-                backgroundColor: AppColors.accent.withValues(alpha: 0.12),
-                child: (s.stuphoto != null && s.stuphoto!.startsWith('http'))
-                    ? ClipOval(
-                        child: Image.network(
-                          s.stuphoto!,
-                          width: 40.w, height: 40.h, fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Text(s.stuname.isNotEmpty ? s.stuname[0].toUpperCase() : '?',
-                              style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 14.sp)),
-                        ),
-                      )
-                    : Text(s.stuname.isNotEmpty ? s.stuname[0].toUpperCase() : '?',
-                        style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 14.sp)),
-              ),
+              StudentAvatar(photoUrl: s.stuphoto, name: s.stuname, size: 44),
               SizedBox(width: 10.w),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(s.stuname, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                    Text('Roll: ${s.stuadmno}  *  ${s.courname ?? ''} ${s.stuclass}  *  Father: $fatherName',
-                        style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                    Text(s.stuname, style: AppUI.cardTitle),
+                    Text('${isSchool ? 'Adm No' : 'Roll'}: ${s.stuadmno}  *  ${s.courname ?? ''} ${s.stuclass}  *  Father: $fatherName',
+                        style: AppUI.muted),
                   ],
                 ),
               ),
               if (!_loadingLedger) ...[
                 _chip('Demand', '${formatIndianNumber(_totalDemand)}', AppColors.textPrimary),
                 SizedBox(width: 8.w),
-                _chip('Paid', '${formatIndianNumber(_totalPaid)}', Colors.green.shade700),
+                _chip('Paid', '${formatIndianNumber(_totalPaid)}', AppColors.success),
                 SizedBox(width: 8.w),
                 _chip('Pending', '${formatIndianNumber(_totalPending)}', AppColors.error),
                 SizedBox(width: 12.w),
-                SizedBox(
-                  height: AppBtn.height(context),
-                  child: ElevatedButton.icon(
+                ElevatedButton.icon(
                   onPressed: _demands.isNotEmpty ? _exportToExcel : null,
-                  icon: AppIcon('document-download', size: AppBtn.iconSize(context), color: Colors.white),
+                  icon: AppIcon('document-download', size: AppBtn.iconSize(context), color: _demands.isNotEmpty ? Colors.white : AppColors.textLight),
                   label: const Text('Export'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: AppColors.accent.withValues(alpha: 0.4),
-                    disabledForegroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                  ),
                 ),
               ],
             ],
@@ -814,23 +796,170 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     );
   }
 
+  // Column widths for the grouped Regular / Arrear / Misc grid (Excel-style).
+  static const double _wDetails = 96, _wFee = 180, _wDemand = 92, _wConcess = 84,
+      _wNet = 100, _wColl = 96, _wDoc = 112, _wDate = 96, _wBal = 100;
+
+  /// Builds the grouped ledger: Regular section, then Arrear (sub-grouped by
+  /// year), then Misc (collection-only). Each 'data' row carries demand /
+  /// concession / net / collection / balance + doc no & date.
+  List<Map<String, dynamic>> _buildGrid() {
+    final out = <Map<String, dynamic>>[];
+    bool isArr(Map d) => (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+    Map<String, dynamic> dataRow(Map d) {
+      final fee = (d['feeamount'] as num?)?.toDouble() ?? 0;
+      final con = (d['conamount'] as num?)?.toDouble() ?? 0;
+      final paid = (d['paidamount'] as num?)?.toDouble() ?? 0;
+      final pay = d['payment'];
+      final hasPay = paid > 0 && pay is Map;
+      String docno = '-', docdate = '-';
+      if (hasPay) {
+        docno = pay['paynumber']?.toString() ?? '-';
+        final r = pay['paydate']?.toString() ?? '';
+        docdate = r.length >= 10 ? _fmt(r.substring(0, 10)) : r;
+      }
+      return {
+        'kind': 'data',
+        'details': d['demfeeterm']?.toString() ?? '-',
+        'feetype': d['demfeetype']?.toString() ?? '-',
+        'demand': fee, 'concess': con, 'net': fee - con,
+        'collection': paid, 'docno': docno, 'docdate': docdate,
+        'balance': (fee - con) - paid,
+      };
+    }
+
+    final regular = _demands.where((d) => !isArr(d)).toList();
+    final arrears = _demands.where(isArr).toList();
+    if (regular.isNotEmpty) {
+      out.add({'kind': 'section', 'label': 'Regular'});
+      for (final d in regular) {
+        out.add(dataRow(d));
+      }
+    }
+    if (arrears.isNotEmpty) {
+      out.add({'kind': 'section', 'label': 'Arrear'});
+      final byYear = <String, List<Map<String, dynamic>>>{};
+      for (final d in arrears) {
+        final y = (d['demfeeyear']?.toString().trim().isNotEmpty == true) ? d['demfeeyear'].toString() : '-';
+        (byYear[y] ??= []).add(d);
+      }
+      for (final e in byYear.entries) {
+        out.add({'kind': 'year', 'label': e.key});
+        for (final d in e.value) {
+          out.add(dataRow(d));
+        }
+      }
+    }
+    if (_miscRows.isNotEmpty) {
+      out.add({'kind': 'section', 'label': 'Misc'});
+      for (final m in _miscRows) {
+        out.add({
+          'kind': 'data', 'misc': true,
+          'details': '', 'feetype': m['feetype']?.toString() ?? 'Misc',
+          'demand': null, 'concess': null, 'net': null,
+          'collection': (m['amount'] as num?)?.toDouble() ?? 0,
+          'docno': m['docno']?.toString() ?? '-',
+          'docdate': _fmt(m['docdate']?.toString() ?? ''),
+          'balance': null,
+        });
+      }
+    }
+    return out;
+  }
+
   Widget _buildDemandsTab() {
-    final rows = _ledgerRows;
-    // Footer totals must agree with the Demand/Paid/Pending cards above:
-    //   DUE     = total demand (sum of feeamount)
-    //   RECEIVED = recon-aware paid (only reconciled portion)
-    //   FINE    = recon-aware fine
-    //   CLOSING = recon-aware pending
-    final totalDebit  = _totalDemand;
-    final totalCredit = _totalPaid;
-    final totalFine   = _demands.fold(0.0, (s, d) {
-      final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
-      final reconBal = (d['reconbalancedue'] as num?)?.toDouble()
-          ?? (d['balancedue'] as num?)?.toDouble() ?? amt;
-      final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
-      return s + (reconBal <= 0 ? fa : 0);
-    });
-    final closingBalance = _totalPending;
+    final grid = _buildGrid();
+    double tDemand = 0, tCon = 0, tNet = 0, tColl = 0, tBal = 0;
+    for (final r in grid) {
+      if (r['kind'] != 'data') continue;
+      tDemand += (r['demand'] as double?) ?? 0;
+      tCon += (r['concess'] as double?) ?? 0;
+      tNet += (r['net'] as double?) ?? 0;
+      tColl += (r['collection'] as double?) ?? 0;
+      tBal += (r['balance'] as double?) ?? 0;
+    }
+    const totalW = _wDetails + _wFee + _wDemand + _wConcess + _wNet + _wColl + _wDoc + _wDate + _wBal;
+
+    Widget cell(String t, double w, {TextAlign align = TextAlign.left, bool head = false, Color? color, bool bold = false}) => SizedBox(
+          width: w.w,
+          child: Text(t, textAlign: align, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: (head ? AppUI.tableHead : AppUI.cell).copyWith(
+                  fontSize: head ? 11.5.sp : 12.5.sp,
+                  fontWeight: (head || bold) ? FontWeight.w700 : FontWeight.w500,
+                  color: color)),
+        );
+    String amt(double? v) => v == null ? '' : (v == 0 ? '-' : formatIndianNumber(v));
+
+    final header = Container(
+      color: AppColors.tableHeadBg,
+      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
+      child: Row(children: [
+        cell('DETAILS', _wDetails, head: true),
+        cell('FEE TYPE', _wFee, head: true),
+        cell('DEMAND', _wDemand, align: TextAlign.right, head: true),
+        cell('CONCESS.', _wConcess, align: TextAlign.right, head: true),
+        cell('NET DEMAND', _wNet, align: TextAlign.right, head: true),
+        cell('COLLECTION', _wColl, align: TextAlign.right, head: true),
+        cell('DOC. NO', _wDoc, head: true),
+        cell('DOC. DATE', _wDate, head: true),
+        cell('BALANCE', _wBal, align: TextAlign.right, head: true),
+      ]),
+    );
+
+    final totalRow = Container(
+      color: AppColors.tableHeadBg,
+      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+      child: Row(children: [
+        cell('TOTAL', _wDetails, head: true),
+        cell('', _wFee),
+        cell(formatIndianNumber(tDemand), _wDemand, align: TextAlign.right, head: true),
+        cell(formatIndianNumber(tCon), _wConcess, align: TextAlign.right, head: true),
+        cell(formatIndianNumber(tNet), _wNet, align: TextAlign.right, head: true),
+        cell(formatIndianNumber(tColl), _wColl, align: TextAlign.right, head: true, color: AppColors.success),
+        cell('', _wDoc),
+        cell('', _wDate),
+        cell(formatIndianNumber(tBal), _wBal, align: TextAlign.right, head: true, color: AppColors.error),
+      ]),
+    );
+
+    Widget rowWidget(int i) {
+      final r = grid[i];
+      final kind = r['kind'];
+      if (kind == 'section') {
+        return Container(
+          width: totalW.w,
+          color: AppColors.accent.withValues(alpha: 0.08),
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+          child: Text(r['label'] as String,
+              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: AppColors.accent)),
+        );
+      }
+      if (kind == 'year') {
+        return Container(
+          width: totalW.w,
+          color: AppColors.surface,
+          padding: EdgeInsets.symmetric(horizontal: 22.w, vertical: 6.h),
+          child: Text(r['label'] as String,
+              style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+        );
+      }
+      final misc = r['misc'] == true;
+      return Container(
+        color: i.isOdd ? AppColors.surface : Colors.white,
+        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 7.h),
+        child: Row(children: [
+          cell(r['details'] as String? ?? '', _wDetails),
+          cell(r['feetype'] as String, _wFee, color: misc ? AppColors.today : AppColors.textPrimary, bold: true),
+          cell(amt(r['demand'] as double?), _wDemand, align: TextAlign.right),
+          cell(amt(r['concess'] as double?), _wConcess, align: TextAlign.right),
+          cell(amt(r['net'] as double?), _wNet, align: TextAlign.right, color: AppColors.textPrimary),
+          cell(amt(r['collection'] as double?), _wColl, align: TextAlign.right, color: AppColors.success),
+          cell(r['docno'] as String? ?? '-', _wDoc),
+          cell(r['docdate'] as String? ?? '-', _wDate),
+          cell(amt(r['balance'] as double?), _wBal, align: TextAlign.right, color: AppColors.error, bold: true),
+        ]),
+      );
+    }
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.w),
@@ -838,247 +967,33 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
-        child: Column(
-      children: [
-        Expanded(
-          child: AppVerticalScrollbar(
-            header: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-        // â”€â”€ Column header â”€â”€
-        Container(
-          color: AppColors.tableHeadBg,
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-          child: Row(
-            children: [
-              SizedBox(width: 100.w, child: const _TH('DATE')),
-              SizedBox(width: 110.w, child: const _TH('DOC.NO')),
-              SizedBox(width: 90.w,  child: const _TH('SEMESTER')),
-              const Expanded(            child: _TH('FEE TYPE')),
-              SizedBox(width: 110.w, child: const _TH('REFERENCE')),
-              SizedBox(width: 100.w, child: const _TH('DUE', align: TextAlign.right)),
-              SizedBox(width: 100.w, child: const _TH('RECEIVED', align: TextAlign.right)),
-              SizedBox(width: 80.w, child: const _TH('FINE', align: TextAlign.right)),
-            ],
-          ),
-        ),
-        Container(height: 1, color: AppColors.border),
-              ],
-            ),
-            builder: (context, controller) => rows.isEmpty
-              ? Column(
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AppIcon.linear('receipt-2', size: 48.sp, color: Colors.grey.shade300),
-                            SizedBox(height: 12.h),
-                            Text('No fee demands found for this student',
-                                style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade400)),
-                          ],
-                        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: totalW.w,
+            child: Column(children: [
+              header,
+              Container(height: 1, color: AppColors.divider),
+              Expanded(
+                child: grid.isEmpty
+                    ? AppUI.empty(
+                        title: 'No fee demands found for this student',
+                        why: 'No fee demand has been raised for this student yet.',
+                        icon: 'receipt-2',
+                      )
+                    : ListView.separated(
+                        itemCount: grid.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                        itemBuilder: (context, i) => rowWidget(i),
                       ),
-                    ),
-                  ],
-                )
-              : ListView.separated(
-                  controller: controller,
-                  itemCount: rows.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
-                  itemBuilder: (context, i) {
-                    final r      = rows[i];
-                    final debit  = r['debit']  as double;
-                    final credit = r['credit'] as double;
-                    final isDemand = r['type'] == 'demand';
-                    return Container(
-                      color: i.isOdd ? AppColors.surface : Colors.white,
-                      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 100.w,
-                            child: Text(_fmt(r['date'] as String),
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                          ),
-                          SizedBox(
-                            width: 110.w,
-                            child: Text(r['docno'] as String,
-                                style: TextStyle(
-                                    fontSize: 13.sp,
-                                    fontWeight: FontWeight.w600,
-                                    color: isDemand ? AppColors.accent : Colors.green.shade700)),
-                          ),
-                          SizedBox(
-                            width: 90.w,
-                            child: Text(r['term'] as String,
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                          ),
-                          Expanded(
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 6.w, height: 6.h,
-                                  margin: EdgeInsets.only(right: 6.w),
-                                  decoration: BoxDecoration(
-                                    color: isDemand ? AppColors.error.withValues(alpha: 0.7) : Colors.green.shade400,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Text(r['feetype'] as String,
-                                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-                                      overflow: TextOverflow.ellipsis),
-                                ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                            width: 110.w,
-                            child: Text(r['reference'] as String,
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                          SizedBox(
-                            width: 100.w,
-                            child: Text(
-                              debit > 0 ? '${formatIndianNumber(debit)}' : '-',
-                              textAlign: TextAlign.right,
-                              style: TextStyle(
-                                  fontSize: 13.sp,
-                                  fontWeight: FontWeight.w600,
-                                  color: debit > 0 ? AppColors.error : AppColors.textSecondary),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 100.w,
-                            child: Text(
-                              credit > 0 ? '${formatIndianNumber(credit)}' : '-',
-                              textAlign: TextAlign.right,
-                              style: TextStyle(
-                                  fontSize: 13.sp,
-                                  fontWeight: FontWeight.w600,
-                                  color: credit > 0 ? Colors.green.shade700 : AppColors.textSecondary),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 80.w,
-                            child: Text(
-                              ((r['fine'] as num?)?.toDouble() ?? 0) > 0
-                                  ? '${formatIndianNumber((r['fine'] as num).toDouble())}'
-                                  : '-',
-                              textAlign: TextAlign.right,
-                              style: TextStyle(
-                                  fontSize: 13.sp,
-                                  fontWeight: FontWeight.w600,
-                                  color: ((r['fine'] as num?)?.toDouble() ?? 0) > 0
-                                      ? Colors.orange.shade800
-                                      : AppColors.textSecondary),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-            ),
-        ),
-
-        // â”€â”€ Footer â”€â”€
-        Container(
-          decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border))),
-          child: Column(
-            children: [
-              // Total row - same dark bg as header
-              Container(
-                color: AppColors.tableHeadBg,
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
-                child: Row(
-                  children: [
-                    SizedBox(width: 100.w),
-                    SizedBox(width: 110.w),
-                    SizedBox(width: 90.w),
-                    Expanded(
-                      child: Text('TOTAL',
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary, letterSpacing: 0.5.w)),
-                    ),
-                    SizedBox(width: 110.w),
-                    SizedBox(
-                      width: 100.w,
-                      child: Text('${formatIndianNumber(totalDebit)}',
-                          textAlign: TextAlign.right,
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary)),
-                    ),
-                    SizedBox(
-                      width: 100.w,
-                      child: Text('${formatIndianNumber(totalCredit)}',
-                          textAlign: TextAlign.right,
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary)),
-                    ),
-                    SizedBox(
-                      width: 80.w,
-                      child: Text(
-                          totalFine > 0 ? '${formatIndianNumber(totalFine)}' : '-',
-                          textAlign: TextAlign.right,
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary)),
-                    ),
-                  ],
-                ),
               ),
-              // Closing Balance row - slightly lighter dark
-              Container(
-                color: AppColors.tableHeadBg,
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 11.h),
-                child: Row(
-                  children: [
-                    SizedBox(width: 100.w),
-                    SizedBox(width: 110.w),
-                    SizedBox(width: 90.w),
-                    Expanded(
-                      child: Text('CLOSING BALANCE',
-                          style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary, letterSpacing: 0.5.w)),
-                    ),
-                    SizedBox(width: 110.w),
-                    SizedBox(
-                      width: 280.w,
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: Container(
-                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(8.r),
-                            border: Border.all(
-                                color: AppColors.primary.withValues(alpha: 0.3)),
-                          ),
-                          child: Text(
-                            closingBalance <= 0
-                                ? '${formatIndianNumber(closingBalance.abs())}  Fine'
-                                : '${formatIndianNumber(closingBalance)}  Due',
-                            style: TextStyle(
-                                fontSize: 14.sp,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              Container(height: 1, color: AppColors.divider),
+              totalRow,
+            ]),
           ),
-        ),
-      ],
         ),
       ),
     );
@@ -1088,10 +1003,16 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
   Future<void> _exportToExcel() async {
     final s = _selectedStudent!;
     final fatherName = _parent?['fathername']?.toString() ?? '-';
-    final rows = _ledgerRows;
-    final totalDebit = rows.fold(0.0, (s, r) => s + (r['debit'] as double));
-    final totalCredit = rows.fold(0.0, (s, r) => s + (r['credit'] as double));
-    final closingBal = totalDebit - totalCredit;
+    final grid = _buildGrid();
+    double tDemand = 0, tCon = 0, tNet = 0, tColl = 0, tBal = 0;
+    for (final r in grid) {
+      if (r['kind'] != 'data') continue;
+      tDemand += (r['demand'] as double?) ?? 0;
+      tCon += (r['concess'] as double?) ?? 0;
+      tNet += (r['net'] as double?) ?? 0;
+      tColl += (r['collection'] as double?) ?? 0;
+      tBal += (r['balance'] as double?) ?? 0;
+    }
 
     // Fetch institution info
     final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -1201,23 +1122,17 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
       row++;
     }
 
-    addInfo('Class', ':  ${s.stuclass}');
+    addInfo(schoolTerm('Class'), ':  ${s.stuclass}');
     addInfo('Student Name', ':  ${s.stuname}');
     // Add roll no on same row as student name but further right
     final admCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row - 1));
-    admCell.value = xl.TextCellValue('Roll No : ${s.stuadmno}');
+    admCell.value = xl.TextCellValue('${schoolTerm('Roll No')} : ${s.stuadmno}');
     admCell.cellStyle = labelStyle;
     addInfo('Father Name', ':  $fatherName');
     row++;
 
-    // "Regular Fee Details:" label
-    final regCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row));
-    regCell.value = xl.TextCellValue('Regular Fee Details :');
-    regCell.cellStyle = labelStyle;
-    row++;
-
-    // Column headers
-    final headers = ['Date', 'Doc No.', 'Semester', 'Fee Type', 'Reference', 'Debit (Rs.)', 'Credit (Rs.)'];
+    // Column headers — the Excel format the user provided.
+    final headers = ['Details', 'FeeType', 'Demand', 'Concess.', 'Net Demand', 'Collection', 'Doc. No', 'Doc.Date', 'Balance'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);
@@ -1225,76 +1140,64 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     }
     row++;
 
-    // Data rows
-    for (final r in rows) {
-      final isDemand = r['type'] == 'demand';
-      final debit = r['debit'] as double;
-      final credit = r['credit'] as double;
+    void put(int col, String text, {xl.CellStyle? style}) {
+      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row));
+      cell.value = xl.TextCellValue(text);
+      if (style != null) cell.cellStyle = style;
+    }
+    void putNum(int col, double? v, {xl.CellStyle? style}) {
+      if (v == null) return;
+      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row));
+      cell.value = xl.DoubleCellValue(v);
+      if (style != null) cell.cellStyle = style;
+    }
 
-      final dateStr = _fmt(r['date'] as String);
-      final docNo = r['docno'] as String;
-      final reference = isDemand ? 'Reg Demand' : 'Reg Collection${_capitalize(r['feetype'] as String)}';
-
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(dateStr);
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(docNo);
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['term'] as String);
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(
-          isDemand ? (r['feetype'] as String) : '');
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(reference);
-
-      if (debit > 0) {
-        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row));
-        cell.value = xl.DoubleCellValue(debit);
-        cell.cellStyle = debitStyle;
+    // Grouped data rows (Regular / Arrear-by-year / Misc).
+    for (final r in grid) {
+      final kind = r['kind'];
+      if (kind == 'section') {
+        put(0, r['label'] as String, style: labelStyle);
+        row++;
+        continue;
       }
-      if (credit > 0) {
-        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row));
-        cell.value = xl.DoubleCellValue(credit);
-        cell.cellStyle = creditStyle;
+      if (kind == 'year') {
+        put(0, r['label'] as String, style: labelStyle);
+        row++;
+        continue;
       }
+      put(0, r['details'] as String? ?? '');
+      put(1, r['feetype'] as String);
+      putNum(2, r['demand'] as double?, style: debitStyle);
+      putNum(3, r['concess'] as double?);
+      putNum(4, r['net'] as double?);
+      putNum(5, r['collection'] as double?, style: creditStyle);
+      put(6, r['docno'] as String? ?? '-');
+      put(7, r['docdate'] as String? ?? '-');
+      putNum(8, r['balance'] as double?);
       row++;
     }
 
-    // G Total row
-    final gtLabels = ['', '', '', '', 'G Total'];
-    for (var c = 0; c < gtLabels.length; c++) {
-      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
-      cell.value = xl.TextCellValue(gtLabels[c]);
-      cell.cellStyle = totalRowStyle;
+    // Total row
+    put(0, 'Total', style: totalRowStyle);
+    for (final c in [1, 6, 7]) {
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = totalRowStyle;
     }
-    final gtDebit = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row));
-    gtDebit.value = xl.DoubleCellValue(totalDebit);
-    gtDebit.cellStyle = totalRowStyle;
-    final gtCredit = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row));
-    gtCredit.value = xl.DoubleCellValue(totalCredit);
-    gtCredit.cellStyle = totalRowStyle;
-    row++;
-
-    // Closing Bal row
-    final cbCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row));
-    cbCell.value = xl.TextCellValue('Closing Bal');
-    cbCell.cellStyle = labelStyle;
-    final cbVal = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row));
-    cbVal.value = xl.DoubleCellValue(closingBal.abs());
-    cbVal.cellStyle = labelStyle;
-    row++;
-
-    // Net Closing Balance row
-    final ncbCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row));
-    ncbCell.value = xl.TextCellValue('Net Closing Balance');
-    ncbCell.cellStyle = labelStyle;
-    final ncbVal = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row));
-    ncbVal.value = xl.DoubleCellValue(closingBal.abs());
-    ncbVal.cellStyle = labelStyle;
+    putNum(2, tDemand, style: totalRowStyle);
+    putNum(3, tCon, style: totalRowStyle);
+    putNum(4, tNet, style: totalRowStyle);
+    putNum(5, tColl, style: totalRowStyle);
+    putNum(8, tBal, style: totalRowStyle);
 
     // Column widths
     sheet.setColumnWidth(0, 14);
-    sheet.setColumnWidth(1, 16);
-    sheet.setColumnWidth(2, 14);
-    sheet.setColumnWidth(3, 20);
-    sheet.setColumnWidth(4, 22);
-    sheet.setColumnWidth(5, 14);
-    sheet.setColumnWidth(6, 14);
+    sheet.setColumnWidth(1, 22);
+    sheet.setColumnWidth(2, 13);
+    sheet.setColumnWidth(3, 12);
+    sheet.setColumnWidth(4, 14);
+    sheet.setColumnWidth(5, 13);
+    sheet.setColumnWidth(6, 16);
+    sheet.setColumnWidth(7, 13);
+    sheet.setColumnWidth(8, 13);
 
     // Save
     final result = await FilePicker.platform.saveFile(
@@ -1311,21 +1214,11 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
         await File(path).writeAsBytes(bytes);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Ledger exported to $path'), backgroundColor: Colors.green),
+            SnackBar(content: Text('Ledger exported to $path'), backgroundColor: AppColors.success),
           );
         }
       }
     }
-  }
-
-  String _capitalize(String s) {
-    // Extract payment method from "Payment (cash)" => "Cash"
-    final match = RegExp(r'Payment \((\w+)\)').firstMatch(s);
-    if (match != null) {
-      final method = match.group(1)!;
-      return method[0].toUpperCase() + method.substring(1);
-    }
-    return s;
   }
 
   Widget _chip(String label, String value, Color color) {
@@ -1349,13 +1242,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
   }
 
 
-  Widget _emptyState(String icon, String msg) => Center(
-    child: Column(mainAxisSize: MainAxisSize.min, children: [
-      AppIcon(icon, size: 48.sp, color: Colors.grey.shade300),
-      SizedBox(height: 12.h),
-      Text(msg, style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade400)),
-    ]),
-  );
+  Widget _emptyState(String icon, String msg) => AppUI.empty(title: msg, icon: icon);
 
   String _fmt(String iso) {
     final p = iso.split('-');
@@ -1369,6 +1256,6 @@ class _TH extends StatelessWidget {
   const _TH(this.text, {this.align = TextAlign.left});
   @override
   Widget build(BuildContext context) =>
-      Text(text, textAlign: align, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3));
+      Text(text, textAlign: align, style: AppUI.tableHead);
 }
 

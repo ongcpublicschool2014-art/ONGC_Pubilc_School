@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services/update_service.dart';
 import '../utils/app_theme.dart';
+import 'app_ui.dart';
 
 /// Checks for an update and, if one exists, shows the prompt. Call once after
 /// login (e.g. from the dashboard). No-op on failure or when already current.
@@ -69,13 +70,25 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   @override
   Widget build(BuildContext context) {
     final i = widget.info;
-    return AlertDialog(
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    // Same guard as the parent app: barrierDismissible alone leaves the route
+    // poppable (Esc, a system back gesture), so a mandatory update could still
+    // be waved away. Also held shut while a download is running.
+    return PopScope(
+      // ... UNLESS the download has already failed. A mandatory update whose
+      // URL 404s would otherwise seal every counter PC behind a dialog it
+      // cannot dismiss, over a dashboard it cannot reach, and force-closing
+      // does not help -- the check runs again at the next launch. That is
+      // exactly what happened to the parent app on 1.1.3.
+      //
+      // The update is still mandatory: the prompt returns on the next launch.
+      // All this buys is a till that can keep taking cash while the manifest
+      // is being fixed.
+      canPop: (!i.mandatory || _error != null) && !_downloading,
+      child: AlertDialog(
       title: Row(children: [
-        Icon(Icons.system_update_rounded, color: AppColors.accent),
+        const Icon(Icons.system_update_rounded, color: AppColors.primary),
         const SizedBox(width: 10),
-        const Expanded(child: Text('Update available', style: TextStyle(fontWeight: FontWeight.w800))),
+        Expanded(child: Text('Update available', style: AppUI.cardTitle)),
       ]),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
@@ -84,35 +97,35 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Version ${i.version} is ready to install.',
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+                style: AppUI.body.copyWith(fontWeight: FontWeight.w600)),
             if (i.notes.trim().isNotEmpty) ...[
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                  border: Border.all(color: AppColors.cardBorder),
                 ),
-                child: Text(i.notes.trim(), style: const TextStyle(fontSize: 13)),
+                child: Text(i.notes.trim(), style: AppUI.body),
               ),
             ],
             if (_downloading) ...[
               const SizedBox(height: 16),
-              LinearProgressIndicator(value: _progress > 0 ? _progress : null, color: AppColors.accent),
+              LinearProgressIndicator(value: _progress > 0 ? _progress : null, color: AppColors.primary),
               const SizedBox(height: 6),
               Text(
                 _progress > 0 ? 'Downloading… ${(_progress * 100).toStringAsFixed(0)}%' : 'Starting download…',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: AppUI.muted.copyWith(color: AppColors.textSecondary),
               ),
               const SizedBox(height: 4),
               Text('The app will close and reopen once the installer runs.',
-                  style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                  style: AppUI.muted),
             ],
             if (_error != null) ...[
               const SizedBox(height: 10),
-              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+              Text(_error!, style: AppUI.muted.copyWith(color: AppColors.error)),
             ],
           ],
         ),
@@ -120,21 +133,20 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       actions: _downloading
           ? const []
           : [
-              if (!i.mandatory)
+              // Shown for an optional update, and for a mandatory one that
+              // could not be downloaded -- see the PopScope above.
+              if (!i.mandatory || _error != null)
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Later'),
+                  child: Text(i.mandatory ? 'Continue for now' : 'Later'),
                 ),
               ElevatedButton.icon(
                 onPressed: _downloadAndInstall,
                 icon: const Icon(Icons.download_rounded, size: 18),
                 label: const Text('Download & Install'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                ),
               ),
             ],
+    ),
     );
   }
 }

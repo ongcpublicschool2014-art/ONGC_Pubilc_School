@@ -17,7 +17,12 @@ class DeviceCodeKey {
 
   /// Base64-encoded 32-byte (AES-256) key. Must match the
   /// DEVICE_CODE_ENC_KEY secret on the Supabase Edge Function.
-  static const String base64Key = 'hpgHfXyTmIhPZpCFINTeotTYW5yuD+TrMwzCRFq3Ohs=';
+  ///
+  /// Deliberately chosen to contain no '+' or '/': a '+' pasted into a
+  /// URL-encoded form field arrives as a space, and atob() then fails with
+  /// "Failed to decode base64" on the server side. Re-generate the same way
+  /// if it ever needs rotating.
+  static const String base64Key = 'ltKE0h13PztSLERUzl5E7TI8zSUETg0WPNtT2XJb6oU=';
 
   /// True once a real key has been pasted in (not the placeholder).
   static bool get isConfigured => base64Key != 'REPLACE_WITH_BASE64_32BYTE_KEY';

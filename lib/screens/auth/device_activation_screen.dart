@@ -13,6 +13,7 @@ import '../../services/supabase_service.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 
 /// Pull a clean, human-readable message out of whatever an Edge Function
 /// call threw — FunctionException wraps the server's {"error": "..."}
@@ -267,52 +268,19 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
     }
   }
 
-  /// Field label rendered above each input — matches the login screen's
-  /// label-above-field treatment.
-  Widget _fieldLabel(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(
-          text,
-          style: Theme.of(context)
-              .textTheme
-              .labelLarge
-              ?.copyWith(fontSize: 13),
-        ),
-      );
+  /// Field label rendered above each input (the kit label; a trailing
+  /// " *" becomes the kit's required marker).
+  Widget _fieldLabel(String text) => text.endsWith(' *')
+      ? AppUI.fieldLabel(text.substring(0, text.length - 2), required: true)
+      : AppUI.fieldLabel(text);
 
-  /// Shared input decoration in the login screen's style — rounded fill,
-  /// hint text, and a tinted prefix icon. Grey border idle, navy (primary)
-  /// border on focus. The [filled] param is retained but no longer affects
-  /// the border.
+  /// The kit input decoration with a leading AppIcon.
   InputDecoration _inputDecoration(String hint, String iconName,
           {bool filled = false}) =>
-      InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(
-            color: AppColors.textPrimary.withValues(alpha: 0.6)),
-        prefixIcon:
-            AppIcon.linear(iconName, size: 20, color: AppColors.textLight),
-        prefixIconConstraints:
-            const BoxConstraints(minWidth: 52, minHeight: 0),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.r),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
-        ),
-      );
+      AppUI.field(context, hint, filled: filled, leadingIcon: iconName);
 
-  /// Text style for a field's value — standard dark colour at normal weight.
-  TextStyle _valueStyle(bool filled) => const TextStyle(
-        color: AppColors.textPrimary,
-        fontWeight: FontWeight.w400,
-      );
+  /// Text style for a field's value (the kit field text).
+  TextStyle _valueStyle(bool filled) => AppUI.fieldText(context);
 
   @override
   Widget build(BuildContext context) {
@@ -334,12 +302,11 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                 padding: EdgeInsets.all(28.w),
                 margin:
                     EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16.r),
+                // Kit card; the deeper shadow keeps it legible over the photo.
+                decoration: AppUI.card().copyWith(
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.20),
+                      color: AppColors.textPrimary.withValues(alpha: 0.20),
                       blurRadius: 32,
                       offset: const Offset(0, 12),
                     ),
@@ -354,8 +321,8 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                         width: 46.w,
                         height: 46.w,
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(14.r),
+                          color: AppColors.primary.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
                         ),
                         alignment: Alignment.center,
                         child: Icon(Icons.verified_user_rounded,
@@ -366,22 +333,12 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                     Text(
                       'Activate this PC',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary,
-                          ),
+                      style: AppUI.cardTitle,
                     ),
                     SizedBox(height: 12.h),
                     TabBar(
                       controller: _tabController,
-                      labelColor: AppColors.primary,
-                      unselectedLabelColor: AppColors.textSecondary,
-                      indicatorColor: AppColors.accent,
-                      indicatorWeight: 3,
-                      labelStyle: TextStyle(
-                          fontSize: 13.sp, fontWeight: FontWeight.w700),
-                      unselectedLabelStyle: TextStyle(
-                          fontSize: 13.sp, fontWeight: FontWeight.w600),
+                      dividerColor: AppColors.divider,
                       tabs: const [
                         Tab(text: 'Request Code'),
                         Tab(text: 'Enter Code'),
@@ -418,30 +375,18 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
             child: Text(
               'Enter the activation code, or import the file the office sent you.',
               textAlign: TextAlign.center,
-              style:
-                  TextStyle(color: AppColors.textSecondary, fontSize: 13.sp),
+              style: AppUI.muted,
             ),
           ),
           SizedBox(height: 14.h),
           FadeInDown(
             delay: const Duration(milliseconds: 100),
-            child: SizedBox(
-              height: 48.h,
-              child: OutlinedButton.icon(
-                onPressed: _activating ? null : _importCode,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.accent,
-                  side: const BorderSide(color: AppColors.accent),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10.r),
-                  ),
-                ),
-                icon: AppIcon.linear('document-upload',
-                    size: 18, color: AppColors.accent),
-                label: Text('Import Code File',
-                    style: TextStyle(
-                        fontSize: 14.sp, fontWeight: FontWeight.w600)),
-              ),
+            child: OutlinedButton.icon(
+              onPressed: _activating ? null : _importCode,
+              style: AppUI.secondary(context),
+              icon: AppIcon.linear('document-upload',
+                  size: 18, color: AppColors.primary),
+              label: const Text('Import Code File'),
             ),
           ),
           SizedBox(height: 14.h),
@@ -452,9 +397,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                 const Expanded(child: Divider()),
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 10.w),
-                  child: Text('or enter manually',
-                      style: TextStyle(
-                          color: AppColors.textSecondary, fontSize: 11.sp)),
+                  child: Text('or enter manually', style: AppUI.muted),
                 ),
                 const Expanded(child: Divider()),
               ],
@@ -472,12 +415,11 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                   autofocus: true,
                   textCapitalization: TextCapitalization.characters,
                   onChanged: (_) => setState(() {}),
-                  style: TextStyle(
+                  // The code itself stays monospace so every character lines up.
+                  style: AppUI.fieldText(context).copyWith(
                       fontFamily: 'monospace',
                       fontSize: 18.sp,
-                      letterSpacing: 2,
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w400),
+                      letterSpacing: 2),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9\-]')),
                     LengthLimitingTextInputFormatter(19),
@@ -485,7 +427,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                   decoration: _inputDecoration(
                           'XXXX-XXXX-XXXX-XXXX', 'key',
                           filled: _codeController.text.trim().isNotEmpty)
-                      .copyWith(hintStyle: const TextStyle(fontFamily: 'monospace')),
+                      .copyWith(hintStyle: const TextStyle(fontFamily: 'monospace', color: AppColors.textLight)),
                   onSubmitted: (_) => _activate(),
                 ),
               ],
@@ -500,16 +442,12 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
             delay: const Duration(milliseconds: 300),
             child: Center(
               child: SizedBox(
-                height: 50.h,
+                height: AppUI.controlHeight(context),
                 child: ElevatedButton(
                   onPressed: _activating ? null : _activate,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10.r)),
+                  style: AppUI.primary(context).copyWith(
+                    padding: const WidgetStatePropertyAll(
+                        EdgeInsets.symmetric(horizontal: 40)),
                   ),
                   child: _activating
                       ? SizedBox(
@@ -521,9 +459,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                                 AlwaysStoppedAnimation<Color>(Colors.white),
                           ),
                         )
-                      : Text('Activate',
-                          style: TextStyle(
-                              fontSize: 15.sp, fontWeight: FontWeight.w600)),
+                      : const Text('Activate'),
                 ),
               ),
             ),
@@ -546,16 +482,12 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
             children: [
               Icon(Icons.mark_email_read_rounded, size: 56.sp, color: AppColors.success),
               SizedBox(height: 16.h),
-              Text('Request sent',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
-                      )),
+              Text('Request sent', style: AppUI.cardTitle),
               SizedBox(height: 8.h),
               Text(
                 'The office will email or message your activation code shortly. Switch to the Enter Code tab when you receive it.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp),
+                style: AppUI.muted,
               ),
               SizedBox(height: 16.h),
               TextButton.icon(
@@ -578,16 +510,13 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           // Match the text size of the other input fields.
-          style: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.w500),
+          style: AppUI.fieldText(context),
           decoration: _inputDecoration(
             'Select your institution or trust',
             'teacher',
             filled: _selectedInsId != null,
           ),
-          icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+          icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
           items: [
             DropdownMenuItem<int>(
               value: _kTrustSentinel,
@@ -665,8 +594,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
           FadeInDown(
             child: Text(
               'Fill the form and we will email a fresh code to the office. They will forward it to you.',
-              style:
-                  TextStyle(color: AppColors.textSecondary, fontSize: 12.sp),
+              style: AppUI.muted,
             ),
           ),
           SizedBox(height: 16.h),
@@ -703,16 +631,12 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
             delay: const Duration(milliseconds: 300),
             child: Center(
               child: SizedBox(
-                height: 50.h,
+                height: AppUI.controlHeight(context),
                 child: ElevatedButton.icon(
                 onPressed: _requesting ? null : _requestCode,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10.r)),
+                style: AppUI.primary(context).copyWith(
+                  padding: const WidgetStatePropertyAll(
+                      EdgeInsets.symmetric(horizontal: 32)),
                 ),
                 icon: _requesting
                     ? SizedBox(
@@ -723,9 +647,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                             valueColor:
                                 AlwaysStoppedAnimation<Color>(Colors.white)))
                     : Icon(Icons.send_rounded, size: 18.sp),
-                label: Text('Request Activation Code',
-                    style: TextStyle(
-                        fontSize: 14.sp, fontWeight: FontWeight.w600)),
+                label: const Text('Request Activation Code'),
               ),
               ),
             ),
@@ -739,8 +661,8 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
     return Container(
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
-        color: AppColors.error.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12.r),
+        color: AppColors.errorBg,
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
         border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
       ),
       child: Row(
@@ -749,7 +671,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
           SizedBox(width: 10.w),
           Expanded(
             child: Text(msg,
-                style: TextStyle(color: AppColors.error, fontSize: 12.sp)),
+                style: AppUI.body.copyWith(color: AppColors.error, fontSize: 13.sp)),
           ),
         ],
       ),

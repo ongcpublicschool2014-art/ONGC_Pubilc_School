@@ -4,20 +4,15 @@ import 'package:provider/provider.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/app_theme.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 
 class _PinkPalette {
   static const Color frame = Color(0xFF001530);
   static const Color primary = Color(0xFF002147);
   static const Color accent = Color(0xFFD2913C);
-  static const Color soft = Color(0xFFF0D2A5);
-
-  // Form-side neutrals
-  static const Color textBody = Color(0xFF111827);
-  static const Color textMuted = Color(0xFF6B7280);
-  static const Color fieldBg = Color(0xFFF3F4F6);
-  static const Color fieldBorder = Color(0xFFE5E7EB);
 
   static const LinearGradient buttonGradient = LinearGradient(
     begin: Alignment.topLeft,
@@ -246,7 +241,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Password reset successful. Please sign in with your new password.'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppColors.success,
           ),
         );
         _passwordController.clear();
@@ -377,7 +372,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     final isDesktop = size.width > 900;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F6FB),
+      backgroundColor: AppColors.surface,
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -679,23 +674,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-            const Text(
-              'Sign in',
-              style: TextStyle(
-                color: _PinkPalette.primary,
-                fontSize: 28,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
-              ),
-            ),
+            Text('Sign in', style: AppUI.pageTitle),
             const SizedBox(height: 6),
             Text(
               'Welcome back. Choose your access type to continue.',
-              style: TextStyle(
-                color: _PinkPalette.textMuted,
-                fontSize: 13,
-                height: 1.5,
-              ),
+              style: AppUI.muted.copyWith(height: 1.5),
             ),
             const SizedBox(height: 24),
 
@@ -732,19 +715,19 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                      color: AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                      border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.error_outline_rounded,
-                            color: Colors.red.shade600, size: 18),
+                        const Icon(Icons.error_outline_rounded,
+                            color: AppColors.error, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             auth.errorMessage!,
-                            style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                            style: AppUI.label.copyWith(color: AppColors.error, fontWeight: FontWeight.w600),
                           ),
                         ),
                       ],
@@ -760,8 +743,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               const SizedBox(height: 6),
               _loadingInstitutions
                   ? const LinearProgressIndicator(
-                      color: _PinkPalette.accent,
-                      backgroundColor: _PinkPalette.soft,
+                      color: AppColors.primary,
+                      backgroundColor: AppColors.primaryLight,
                     )
                   : _buildFilledDropdown<int>(
                       value: _selectedInsId,
@@ -797,8 +780,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 const SizedBox(height: 6),
                 _loadingYears
                     ? const LinearProgressIndicator(
-                        color: _PinkPalette.accent,
-                        backgroundColor: _PinkPalette.soft,
+                        color: AppColors.primary,
+                        backgroundColor: AppColors.primaryLight,
                       )
                     : _buildFilledDropdown<String>(
                         value: _selectedYear,
@@ -859,7 +842,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       ? Icons.visibility_off_outlined
                       : Icons.visibility_outlined,
                   size: 18,
-                  color: _PinkPalette.accent.withValues(alpha: 0.7),
+                  color: AppColors.textLight,
                 ),
                 onPressed: () =>
                     setState(() => _obscurePassword = !_obscurePassword),
@@ -882,17 +865,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: _openForgotPassword,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                ),
-                child: const Text(
-                  'Forgot Password?',
-                  style: TextStyle(
-                    color: _PinkPalette.accent,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                child: const Text('Forgot Password?'),
               ),
             ),
 
@@ -901,21 +874,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             Consumer<AuthProvider>(
               builder: (context, auth, _) {
                 return SizedBox(
-                  height: 52,
+                  height: AppUI.controlHeight(context),
                   child: ElevatedButton(
                     onPressed: auth.isLoading ? null : _handleLogin,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _PinkPalette.accent,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      textStyle: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
                     child: auth.isLoading
                         ? const SizedBox(
                             width: 22,
@@ -947,30 +908,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
             onPressed: _closeForgotPassword,
-            icon: const Icon(Icons.chevron_left_rounded, size: 18, color: _PinkPalette.accent),
-            label: const Text(
-              'Back to sign in',
-              style: TextStyle(
-                color: _PinkPalette.accent,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-            ),
+            icon: const Icon(Icons.chevron_left_rounded, size: 18, color: AppColors.primary),
+            label: const Text('Back to sign in'),
           ),
         ),
         const SizedBox(height: 8),
-        const Text(
-          'Forgot Password?',
-          style: TextStyle(
-            color: _PinkPalette.primary,
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-          ),
-        ),
+        Text('Forgot Password?', style: AppUI.pageTitle),
         const SizedBox(height: 6),
         Text(
           _fpStep == 0
@@ -980,11 +923,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       ? 'OTP sent to $_fpMaskedPhone. Enter the 6-digit code below.'
                       : 'Enter the 6-digit OTP sent to your registered mobile.')
                   : 'Set a new password for your account.',
-          style: const TextStyle(
-            color: _PinkPalette.textMuted,
-            fontSize: 13,
-            height: 1.5,
-          ),
+          style: AppUI.muted.copyWith(height: 1.5),
         ),
         const SizedBox(height: 24),
 
@@ -992,18 +931,18 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.red.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+              color: AppColors.errorBg,
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
-                Icon(Icons.error_outline_rounded, color: Colors.red.shade600, size: 18),
+                const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _fpError!,
-                    style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                    style: AppUI.label.copyWith(color: AppColors.error, fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -1049,14 +988,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             alignment: Alignment.centerRight,
             child: TextButton(
               onPressed: _fpLoading ? null : _fpRequestOtp,
-              child: const Text(
-                'Resend OTP',
-                style: TextStyle(
-                  color: _PinkPalette.accent,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              child: const Text('Resend OTP'),
             ),
           ),
           const SizedBox(height: 16),
@@ -1080,7 +1012,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               icon: Icon(
                 _fpObscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                 size: 18,
-                color: _PinkPalette.accent.withValues(alpha: 0.7),
+                color: AppColors.textLight,
               ),
               onPressed: () => setState(() => _fpObscure = !_fpObscure),
             ),
@@ -1113,7 +1045,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     required VoidCallback onPressed,
   }) {
     return SizedBox(
-      height: 52,
+      height: AppUI.controlHeight(context),
       child: ElevatedButton.icon(
         onPressed: _fpLoading ? null : onPressed,
         icon: _fpLoading
@@ -1124,31 +1056,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               )
             : icon,
         label: Text(label),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _PinkPalette.accent,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
       ),
     );
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  Widget _fieldLabel(String label) => Text(
-        label,
-        style: const TextStyle(
-          color: _PinkPalette.textBody,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-      );
+  Widget _fieldLabel(String label) => Text(label, style: AppUI.label);
 
   Widget _buildPillTab(
     String label,
@@ -1158,13 +1072,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   }) {
     final tab = AnimatedContainer(
       duration: const Duration(milliseconds: 200),
-      height: 48,
+      height: AppUI.controlHeight(context),
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: active ? _PinkPalette.accent.withValues(alpha: 0.10) : Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        color: active ? AppColors.primaryLight : Colors.white,
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
         border: Border.all(
-          color: active ? _PinkPalette.accent : _PinkPalette.fieldBorder,
+          color: active ? AppColors.primary : AppColors.border,
           width: active ? 1.5 : 1,
         ),
       ),
@@ -1177,9 +1091,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
             height: 16,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: active ? _PinkPalette.accent : Colors.transparent,
+              color: active ? AppColors.primary : Colors.transparent,
               border: Border.all(
-                color: active ? _PinkPalette.accent : const Color(0xFFD1D5DB),
+                color: active ? AppColors.primary : AppColors.border,
                 width: 1.5,
               ),
             ),
@@ -1193,10 +1107,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: active ? _PinkPalette.primary : _PinkPalette.textMuted,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
+              style: AppUI.label.copyWith(
+                color: active ? AppColors.primary : AppColors.textSecondary,
               ),
             ),
           ),
@@ -1232,11 +1144,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       textInputAction: textInputAction,
       onFieldSubmitted: onFieldSubmitted,
       onChanged: (_) => setState(() {}),
-      style: const TextStyle(
-        fontSize: 14,
-        color: _PinkPalette.textBody,
-        fontWeight: FontWeight.w500,
-      ),
+      style: AppUI.fieldText(context),
       decoration: _filledDec(hint, icon, suffixIcon, filled: filled),
       validator: validator,
     );
@@ -1259,21 +1167,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       elevation: 6,
       // Open-menu items render in textPrimary; the closed/selected value is
       // recolored amber + semibold via selectedItemBuilder below.
-      style: const TextStyle(
-        fontSize: 14,
-        color: _PinkPalette.textBody,
-        fontWeight: FontWeight.w500,
-      ),
-      icon: const Icon(Icons.arrow_drop_down, color: _PinkPalette.textMuted),
+      style: AppUI.fieldText(context),
+      icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
       decoration: _filledDec(hint, icon, null, filled: filled),
       items: items,
       selectedItemBuilder: (context) => items
           .map((item) => DefaultTextStyle(
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: _PinkPalette.textBody,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: AppUI.fieldText(context),
                 child: Align(
                     alignment: Alignment.centerLeft, child: item.child),
               ))
@@ -1283,43 +1183,16 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     );
   }
 
-  // Standard decoration: grey border idle, navy (primary) border on focus.
+  // The app-wide field (AppUI.field) with this screen's Material leading icon.
   // The [filled] param is retained but no longer affects the border.
   InputDecoration _filledDec(String hint, IconData icon, Widget? suffixIcon,
       {bool filled = false}) {
-    const idle = _PinkPalette.fieldBorder;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: const TextStyle(
-        color: _PinkPalette.textMuted,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
+    return AppUI.field(context, hint, suffix: suffixIcon).copyWith(
+      prefixIcon: Padding(
+        padding: const EdgeInsets.only(left: 12, right: 8),
+        child: Icon(icon, size: 18, color: AppColors.textLight),
       ),
-      prefixIcon: Icon(icon, size: 18, color: _PinkPalette.textMuted),
-      suffixIcon: suffixIcon,
-      filled: true,
-      fillColor: _PinkPalette.fieldBg,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: idle, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: idle, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _PinkPalette.primary, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.red),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.red, width: 1.5),
-      ),
+      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
     );
   }
 }

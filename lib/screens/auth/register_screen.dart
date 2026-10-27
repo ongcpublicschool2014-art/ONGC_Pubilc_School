@@ -8,10 +8,12 @@ import '../../utils/app_theme.dart';
 import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../utils/friendly_error.dart';
 class RegisterScreen extends StatefulWidget {
   final VoidCallback? onRegistered;
-  const RegisterScreen({super.key, this.onRegistered});
+  final Map<String, dynamic>? editInstitution; // when set, the wizard edits this institution
+  const RegisterScreen({super.key, this.onRegistered, this.editInstitution});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -86,6 +88,166 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // any character invalidates the verified state so a tampered code can't
   // bypass the gate.
   String _validatedCodeSnapshot = '';
+
+  bool get _editMode => widget.editInstitution != null;
+
+  /// True while the edit-mode prefill is still fetching. The form is blocked
+  /// during it: _loadForEdit writes the controllers only after two awaited
+  /// queries, so anything typed before they land was silently overwritten —
+  /// which reads as "the field won't let me type".
+  bool _editLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_editMode) _loadForEdit();
+  }
+
+  /// Edit mode: load the institution's full row and prefill steps 1 & 2.
+  Future<void> _loadForEdit() async {
+    setState(() => _editLoading = true);
+    final insId = widget.editInstitution!['ins_id'];
+    Map<String, dynamic> m = Map<String, dynamic>.from(widget.editInstitution!);
+    try {
+      final row = await SupabaseService.client.from('institution').select().eq('ins_id', insId).maybeSingle();
+      if (row != null) m = Map<String, dynamic>.from(row);
+    } catch (e) {
+      debugPrint('load for edit error: $e');
+    }
+    if (!mounted) return;
+    setState(() {
+      _institutionNameController.text = m['insname']?.toString() ?? '';
+      _institutionShortNameController.text = m['inshortname']?.toString() ?? '';
+      _institutionCodeController.text = m['inscode']?.toString() ?? '';
+      _authorizedUsernameController.text = m['insautusername']?.toString() ?? '';
+      _designationController.text = m['insdesignation']?.toString() ?? '';
+      _mobileNumberController.text = m['insmobno']?.toString() ?? '';
+      _emailController.text = m['insmail']?.toString() ?? '';
+      _affiliationController.text = m['insaffliation']?.toString() ?? '';
+      _affiliationNumberController.text = m['insaffno']?.toString() ?? '';
+      _cityController.text = m['inscity']?.toString() ?? '';
+      _stateController.text = m['insstate']?.toString() ?? '';
+      _countryController.text = m['inscountry']?.toString() ?? '';
+      _pinCodeController.text = m['inspincode']?.toString() ?? '';
+
+      // These were missing, which is why Address Line 1 and the rest came up
+      // blank in edit mode — and, because Address Line 1 is required, why
+      // Update Institution then failed validation and would not save.
+      _address1Controller.text = m['insaddress1']?.toString() ?? '';
+      _address2Controller.text = m['insaddress2']?.toString() ?? '';
+      _address3Controller.text = m['insaddress3']?.toString() ?? '';
+
+      _institutionRecognized =
+          (m['insrecognised']?.toString().toUpperCase() == 'Y') ? 'Yes' : 'No';
+
+      // it_id -> the display name the dropdown holds.
+      const idToType = {
+        1: 'Schools (Primary, Secondary, Higher Secondary)',
+        2: 'Colleges',
+        3: 'Universities',
+        4: 'Polytechnic Institutions',
+        5: 'Vocational Training Centers',
+        6: 'Coaching Institutes',
+      };
+      final itId = (m['it_id'] as num?)?.toInt();
+      _institutionType = itId == null ? null : idToType[itId];
+
+      final affYear = int.tryParse((m['insaffstayear'] ?? '').toString().trim());
+      _affiliationStartYear = affYear == null ? null : DateTime(affYear);
+
+      // Institution Start Date — also missing, so the field read "Select date"
+      // on a record that has one.
+      _institutionStartDate =
+          DateTime.tryParse(m['insstadate']?.toString() ?? '');
+    });
+    await _loadAcademicYearForEdit(insId);
+    if (mounted) setState(() => _editLoading = false);
+  }
+
+  /// The academic year lives in public.institutionyear, not institution, so the
+  /// full-row fetch above never sees it. Without this the Year Label / Start /
+  /// End fields stay empty and — Year Label being required — block the save.
+  Future<void> _loadAcademicYearForEdit(dynamic insId) async {
+    try {
+      final row = await SupabaseService.client
+          .from('institutionyear')
+          .select('yrlabel, iyrstadate, iyrenddate')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1)
+          .order('iyrstadate', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (row == null || !mounted) return;
+      setState(() {
+        _yearLabelController.text = row['yrlabel']?.toString() ?? '';
+        _yearStartDate = DateTime.tryParse(row['iyrstadate']?.toString() ?? '');
+        _yearEndDate = DateTime.tryParse(row['iyrenddate']?.toString() ?? '');
+      });
+    } catch (e) {
+      debugPrint('load academic year for edit error: $e');
+    }
+  }
+
+  /// Edit mode: update the institution's descriptive columns (no schema/admin).
+  Future<void> _updateInstitution() async {
+    final ok0 = _formKeys[0].currentState?.validate() ?? true;
+    final ok1 = _formKeys[1].currentState?.validate() ?? true;
+    if (!ok0) { _goToStep(0); return; }
+    if (!ok1) { _goToStep(1); return; }
+    setState(() => _isCreating = true);
+    try {
+      // institution has RLS (SELECT-only for anon) → write via SECURITY DEFINER RPC.
+      await SupabaseService.client.rpc('admin_update_institution', params: {
+        'p_ins_id': widget.editInstitution!['ins_id'],
+        'p_patch': {
+          'insname': _institutionNameController.text.trim(),
+          'inshortname': _institutionShortNameController.text.trim(),
+          'inscode': _institutionCodeController.text.trim(),
+          'insautusername': _authorizedUsernameController.text.trim(),
+          'insdesignation': _designationController.text.trim(),
+          'insmobno': _mobileNumberController.text.trim(),
+          'insmail': _emailController.text.trim(),
+          'insaffliation': _affiliationController.text.trim(),
+          'insaffno': _affiliationNumberController.text.trim(),
+          'inscity': _cityController.text.trim(),
+          'insstate': _stateController.text.trim(),
+          'inscountry': _countryController.text.trim(),
+          'inspincode': _pinCodeController.text.trim(),
+          // Previously unsaved, so an edit silently dropped them.
+          'insaddress1': _address1Controller.text.trim(),
+          'insaddress2': _address2Controller.text.trim(),
+          'insaddress3': _address3Controller.text.trim(),
+          'insrecognised': _institutionRecognized == 'Yes' ? 'Y' : 'N',
+          if (_institutionType != null)
+            'it_id': const {
+              'Schools (Primary, Secondary, Higher Secondary)': 1,
+              'Colleges': 2,
+              'Universities': 3,
+              'Polytechnic Institutions': 4,
+              'Vocational Training Centers': 5,
+              'Coaching Institutes': 6,
+            }[_institutionType!],
+          if (_affiliationStartYear != null)
+            'insaffstayear': _affiliationStartYear!.year.toString(),
+          'updatedby': 'SUPERADMIN',
+        },
+      });
+
+      // The academic year is deliberately NOT written back: it is read-only in
+      // edit mode, because the tenant schema name embeds it and every demand,
+      // receipt and report is keyed to it. Changing it here would silently
+      // point the institution at a year its data doesn't live in.
+      if (!mounted) return;
+      setState(() => _isCreating = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Institution updated'), backgroundColor: AppColors.success));
+      widget.onRegistered?.call();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isCreating = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e'), backgroundColor: AppColors.error));
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -193,7 +355,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!['png', 'jpg', 'jpeg'].contains(ext)) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Only PNG, JPG, JPEG formats are allowed'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Only PNG, JPG, JPEG formats are allowed'), backgroundColor: AppColors.error),
           );
         }
         return;
@@ -218,7 +380,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       messenger.showSnackBar(
         const SnackBar(
           content: Text('Enter Institution Name and Email first, then request a code.'),
-          backgroundColor: Colors.orange,
+          backgroundColor: AppColors.warning,
         ),
       );
       return;
@@ -241,14 +403,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         messenger.showSnackBar(
           const SnackBar(
             content: Text('Request sent. The office will email you an activation code shortly.'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppColors.success,
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         messenger.showSnackBar(
-          SnackBar(content: Text('Could not send request. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Could not send request. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -295,7 +457,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_passwordController.text != _confirmPasswordController.text) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Passwords do not match'), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -361,7 +523,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (regResult == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Registration failed'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Registration failed'), backgroundColor: AppColors.error),
           );
           setState(() => _isCreating = false);
         }
@@ -404,7 +566,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   'Institution created, but student photo bucket setup failed: $e\n'
                   'Run: SELECT public.ensure_student_photo_bucket(\'${regResult['inscode']}\') in Supabase SQL Editor.',
                 ),
-                backgroundColor: Colors.orange,
+                backgroundColor: AppColors.warning,
                 duration: const Duration(seconds: 10),
               ),
             );
@@ -432,7 +594,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Institution created, but logo upload failed. ${friendlyError(e)}'),
-                backgroundColor: Colors.orange,
+                backgroundColor: AppColors.warning,
                 duration: const Duration(seconds: 6),
               ),
             );
@@ -445,7 +607,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (mounted) {
         setState(() => _isCreating = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Institution created successfully!'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Institution created successfully!'), backgroundColor: AppColors.success),
         );
         _resetForm();
         widget.onRegistered?.call();
@@ -454,7 +616,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       debugPrint('Registration error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: AppColors.error),
         );
         setState(() => _isCreating = false);
       }
@@ -488,6 +650,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Block interaction until the edit prefill has landed, so a keystroke
+    // can't be overwritten by the fetch completing a moment later.
+    if (_editMode && _editLoading) {
+      return Container(
+        color: AppColors.surface,
+        alignment: Alignment.center,
+        child: const CircularProgressIndicator(),
+      );
+    }
     return Container(
       color: AppColors.surface,
       child: Column(
@@ -501,11 +672,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
               controller: _pageController,
               physics: const NeverScrollableScrollPhysics(),
               onPageChanged: (i) => setState(() => _currentStep = i),
-              children: [
-                _buildStep1(),
-                _buildStep2(),
-                _buildStep3(),
-              ],
+              children: _editMode
+                  ? [_buildStep1(), _buildStep2()]
+                  : [_buildStep1(), _buildStep2(), _buildStep3()],
             ),
           ),
 
@@ -518,26 +687,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   OutlinedButton.icon(
                     onPressed: () => _goToStep(_currentStep - 1),
                     icon: AppIcon.linear('Chevron Left', size: 18),
-                    label: const Text('Previous', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(140, 52),
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                    ),
+                    label: const Text('Previous'),
                   ),
                 const Spacer(),
-                if (_currentStep < 2)
+                if (_currentStep < (_editMode ? 1 : 2))
                   ElevatedButton.icon(
                     onPressed: () {
                       if (_validateStep(_currentStep)) _goToStep(_currentStep + 1);
                     },
-                    icon: const Text('Next', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                    icon: const Text('Next'),
                     label: AppIcon.linear('Chevron Right', size: 18),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(140, 52),
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                    ),
+                  )
+                else if (_editMode)
+                  ElevatedButton.icon(
+                    onPressed: _isCreating ? null : _updateInstitution,
+                    icon: _isCreating
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check, size: 18),
+                    label: Text(_isCreating ? 'Updating…' : 'Update Institution'),
                   ),
               ],
             ),
@@ -551,7 +718,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final steps = [
       {'icon': 'building', 'label': 'Institution Info'},
       {'icon': 'location', 'label': 'Affiliation & Address'},
-      {'icon': 'lock', 'label': 'Account Setup'},
+      if (!_editMode) {'icon': 'lock', 'label': 'Account Setup'},
     ];
 
     Color stateColor(int stepIndex) {
@@ -568,11 +735,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       padding: EdgeInsets.fromLTRB(isMobile ? 16 : 32.w, 20.h, isMobile ? 16 : 32.w, 8.h),
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24.w, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: List.generate(steps.length * 2 - 1, (index) {
@@ -591,7 +754,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ? AppColors.success
                         : isActiveSegment
                             ? AppColors.primary.withValues(alpha: 0.4)
-                            : AppColors.border,
+                            : AppColors.divider,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -646,12 +809,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 8),
                 Text(
                   'STEP ${stepIndex + 1}',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.0,
-                  ),
+                  style: AppUI.caps,
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -659,10 +817,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 13,
-                    color: isActive || isDone ? AppColors.textPrimary : AppColors.textSecondary,
-                    fontWeight: FontWeight.w700,
+                  style: AppUI.label.copyWith(
+                    fontSize: isMobile ? 12 : null,
+                    color: isActive || isDone ? AppColors.textPrimary : AppColors.textLight,
                   ),
                 ),
               ],
@@ -680,40 +837,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return SingleChildScrollView(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32.w, vertical: 20.h),
       child: Container(
-        padding: EdgeInsets.all(isMobile ? 16 : 20.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
-        ),
+        padding: EdgeInsets.all(isMobile ? 16 : AppUI.cardPad),
+        decoration: AppUI.card(),
         child: Form(
           key: _formKeys[0],
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(8.w),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10.r),
-                    ),
-                    child: AppIcon('building', color: AppColors.accent, size: 18),
-                  ),
-                  SizedBox(width: 12.w),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Institution Information',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                      SizedBox(height: 2.h),
-                      Text('Enter the basic details about your institution',
-                          style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                    ],
-                  ),
-                ],
+              AppUI.cardHeader(
+                icon: 'building',
+                title: 'Institution Information',
+                subtitle: 'Enter the basic details about your institution',
               ),
               SizedBox(height: 20.h),
 
@@ -721,7 +855,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _fieldLabel('Institution Type'),
                   SizedBox(
-                    height: 48,
+                    height: AppUI.controlHeight(context),
                     child: DropdownButtonFormField<String>(
                       initialValue: _institutionType,
                       isExpanded: true,
@@ -729,10 +863,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       borderRadius: BorderRadius.circular(12),
                       elevation: 6,
                       decoration: _inputDec('Select institution type', filled: _institutionType != null),
-                      icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary),
-                      items: _institutionTypes.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))).toList(),
-                      selectedItemBuilder: (context) => _institutionTypes.map((t) => Align(alignment: Alignment.centerLeft, child: Text(t, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))).toList(),
+                      icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
+                      style: AppUI.fieldText(context),
+                      items: _institutionTypes.map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context)))).toList(),
+                      selectedItemBuilder: (context) => _institutionTypes.map((t) => Align(alignment: Alignment.centerLeft, child: Text(t, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context)))).toList(),
                       onChanged: (v) => setState(() => _institutionType = v),
                     ),
                   ),
@@ -761,13 +895,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       color: Colors.transparent,
                       child: InkWell(
                         onTap: _pickLogo,
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(AppUI.controlRadius),
                         child: Container(
-                          height: 48,
+                          height: AppUI.controlHeight(context),
                           padding: EdgeInsets.symmetric(horizontal: 14.w),
                           decoration: BoxDecoration(
-                            color: _kFieldFill,
-                            borderRadius: BorderRadius.circular(14),
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                            border: Border.all(color: _logoFile != null ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                           ),
                           child: _logoFile != null
                               ? Row(
@@ -779,10 +914,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: Text('Change',
-                                          style: TextStyle(
-                                              fontSize: 13,
-                                              color: AppColors.textPrimary,
-                                              fontWeight: FontWeight.w600)),
+                                          style: AppUI.fieldText(context)),
                                     ),
                                     AppIcon('edit-2', size: 16, color: AppColors.primary),
                                   ],
@@ -792,19 +924,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     Container(
                                       padding: const EdgeInsets.all(7),
                                       decoration: BoxDecoration(
-                                        color: AppColors.accent.withValues(alpha: 0.12),
+                                        color: AppColors.primaryLight,
                                         borderRadius: BorderRadius.circular(8),
                                       ),
-                                      child: AppIcon('camera', size: 16, color: AppColors.accent),
+                                      child: AppIcon.linear('camera', size: 16, color: AppColors.primary),
                                     ),
                                     const SizedBox(width: 10),
                                     Flexible(
                                       child: Text('Upload Logo',
                                           overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                              fontSize: 13,
-                                              color: AppColors.textSecondary,
-                                              fontWeight: FontWeight.w600)),
+                                          style: AppUI.fieldText(context).copyWith(color: AppColors.textLight)),
                                     ),
                                   ],
                                 ),
@@ -817,16 +946,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   _fieldLabel('Short Name *'),
                   TextFormField(
                     controller: _institutionShortNameController,
+                    // Locked once the institution exists — see _lockedInEdit.
+                    readOnly: _editMode,
+                    enabled: !_editMode,
                     decoration: _inputDec('e.g. KCET', filled: _institutionShortNameController.text.trim().isNotEmpty).copyWith(errorMaxLines: 2),
                     style: _fieldStyleFilled(_institutionShortNameController.text.trim().isNotEmpty),
                     autovalidateMode: AutovalidateMode.onUserInteraction,
                     onChanged: (_) => setState(() {}),
-                    validator: (v) => _vRequiredMax(v, 30, 'Short name'),
+                    validator: _editMode ? null : (v) => _vRequiredMax(v, 30, 'Short name'),
                   ),
                 ]),
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _fieldLabel('Institution Code *'),
                   TextFormField(
+                    // Locked in edit mode: inscode is what the tenant schema
+                    // name is derived from, so changing it after creation
+                    // would orphan that institution's whole schema.
+                    readOnly: _editMode,
+                    enabled: !_editMode,
                     controller: _institutionCodeController,
                     decoration: _inputDec('Enter code', filled: _institutionCodeController.text.trim().isNotEmpty).copyWith(errorMaxLines: 2),
                     style: _fieldStyleFilled(_institutionCodeController.text.trim().isNotEmpty),
@@ -845,10 +982,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   InkWell(
                     onTap: _pickInstitutionStartDate,
                     child: InputDecorator(
-                      decoration: _inputDec('Select date', filled: _institutionStartDate != null).copyWith(suffixIcon: AppIcon('calendar-1', size: 18, color: AppColors.textSecondary)),
+                      decoration: _inputDec('Select date', filled: _institutionStartDate != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
                       child: Text(
                         _institutionStartDate != null ? _formatDate(_institutionStartDate!) : 'Select date',
-                        style: TextStyle(color: _institutionStartDate != null ? AppColors.textPrimary : AppColors.textSecondary.withValues(alpha: 0.6), fontSize: 13, fontWeight: _institutionStartDate != null ? FontWeight.w600 : FontWeight.normal),
+                        style: _pickerText(_institutionStartDate != null),
                       ),
                     ),
                   ),
@@ -895,17 +1032,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _fieldLabel('Institution Recognized'),
                   SizedBox(
-                    height: 48,
+                    height: AppUI.controlHeight(context),
                     child: DropdownButtonFormField<String>(
                       initialValue: _institutionRecognized,
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       elevation: 6,
                       decoration: _inputDec('Select', filled: true),
-                      icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                      icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
                       style: _fieldStyle(),
-                      items: const [DropdownMenuItem(value: 'Yes', child: Text('Yes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary))), DropdownMenuItem(value: 'No', child: Text('No', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))],
-                      selectedItemBuilder: (context) => const [Align(alignment: Alignment.centerLeft, child: Text('Yes', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary))), Align(alignment: Alignment.centerLeft, child: Text('No', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))],
+                      items: [DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))), DropdownMenuItem(value: 'No', child: Text('No', style: AppUI.fieldText(context)))],
+                      selectedItemBuilder: (context) => [Align(alignment: Alignment.centerLeft, child: Text('Yes', style: AppUI.fieldText(context))), Align(alignment: Alignment.centerLeft, child: Text('No', style: AppUI.fieldText(context)))],
                       onChanged: (v) { if (v != null) setState(() => _institutionRecognized = v); },
                     ),
                   ),
@@ -923,8 +1060,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ]),
               ]),
+              // Activation code applies only to NEW registrations, not edits.
+              if (!_editMode) ...[
               SizedBox(height: 16.h),
-
               _formRow(context, [
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _fieldLabel('Activation Code *'),
@@ -933,8 +1071,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     decoration: _inputDec('Enter activation code', filled: _activationCodeController.text.trim().isNotEmpty).copyWith(
                       errorMaxLines: 2,
                       suffixIcon: _codeValidated == true
-                          ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
-                          : (_codeValidated == false ? const Icon(Icons.cancel, color: Colors.red, size: 18) : null),
+                          ? const Icon(Icons.check_circle, color: AppColors.success, size: 18)
+                          : (_codeValidated == false ? const Icon(Icons.cancel, color: AppColors.error, size: 18) : null),
                     ),
                     style: _fieldStyleFilled(_activationCodeController.text.trim().isNotEmpty),
                     autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -962,10 +1100,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     SizedBox(height: 6.h),
                     Text(
                       _codeValidationMsg!,
-                      style: TextStyle(
+                      style: AppUI.muted.copyWith(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: _codeValidated == true ? Colors.green.shade700 : AppColors.error,
+                        color: _codeValidated == true ? AppColors.success : AppColors.error,
                       ),
                     ),
                   ],
@@ -973,42 +1111,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   SizedBox(height: 22.h),
                   SizedBox(
-                    height: 48,
+                    height: AppUI.controlHeight(context),
                     child: ElevatedButton.icon(
                       onPressed: (_validatingCode || _requestingCode) ? null : _validateActivationCode,
                       icon: _validatingCode
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.verified_outlined, size: 18),
                       label: Text(_validatingCode ? 'Validating…' : 'Validate'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                        padding: EdgeInsets.symmetric(horizontal: 18.w),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                      ),
                     ),
                   ),
                 ]),
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   SizedBox(height: 22.h),
                   SizedBox(
-                    height: 48,
+                    height: AppUI.controlHeight(context),
                     child: OutlinedButton.icon(
                       onPressed: _requestingCode ? null : _requestActivationCode,
                       icon: _requestingCode
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.email_outlined, size: 18),
                       label: Text(_requestingCode ? 'Sending…' : 'Request Activation Code'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.accent,
-                        side: BorderSide(color: AppColors.accent),
-                        padding: EdgeInsets.symmetric(horizontal: 14.w),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                      ),
                     ),
                   ),
                 ]),
               ]),
+              ],
             ],
           ),
         ),
@@ -1027,38 +1154,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
         children: [
           // Affiliation card
           Container(
-            padding: EdgeInsets.all(isMobile ? 16 : 20.w),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            padding: EdgeInsets.all(isMobile ? 16 : AppUI.cardPad),
+            decoration: AppUI.card(),
             child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(8.w),
-                        decoration: BoxDecoration(
-                          color: AppColors.accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10.r),
-                        ),
-                        child: AppIcon('verify', color: AppColors.accent, size: 18),
-                      ),
-                      SizedBox(width: 12.w),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('Affiliation Information',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                          SizedBox(height: 2.h),
-                          Text('Enter affiliation and recognition details',
-                              style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                        ],
-                      ),
-                    ],
+                  AppUI.cardHeader(
+                    icon: 'verify',
+                    title: 'Affiliation Information',
+                    subtitle: 'Enter affiliation and recognition details',
                   ),
                   SizedBox(height: 20.h),
 
@@ -1090,10 +1194,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       InkWell(
                         onTap: _pickAffiliationStartYear,
                         child: InputDecorator(
-                          decoration: _inputDec('Select year', filled: _affiliationStartYear != null).copyWith(suffixIcon: AppIcon('calendar-1', size: 18, color: AppColors.textSecondary)),
+                          decoration: _inputDec('Select year', filled: _affiliationStartYear != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
                           child: Text(
                             _affiliationStartYear != null ? '${_affiliationStartYear!.year}' : 'Select year',
-                            style: TextStyle(color: _affiliationStartYear != null ? AppColors.textPrimary : AppColors.textSecondary.withValues(alpha: 0.6), fontSize: 13, fontWeight: _affiliationStartYear != null ? FontWeight.w600 : FontWeight.normal),
+                            style: _pickerText(_affiliationStartYear != null),
                           ),
                         ),
                       ),
@@ -1102,42 +1206,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ],
               ),
           ),
-          SizedBox(height: 20.h),
+          SizedBox(height: AppUI.gap),
 
           // Address card
           Container(
-            padding: EdgeInsets.all(isMobile ? 16 : 20.w),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            padding: EdgeInsets.all(isMobile ? 16 : AppUI.cardPad),
+            decoration: AppUI.card(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8.w),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10.r),
-                      ),
-                      child: AppIcon('location', color: AppColors.accent, size: 18),
-                    ),
-                    SizedBox(width: 12.w),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('Address',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                        SizedBox(height: 2.h),
-                        Text('Enter the institution address details',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
-                  ],
+                AppUI.cardHeader(
+                  icon: 'location',
+                  title: 'Address',
+                  subtitle: 'Enter the institution address details',
                 ),
                 SizedBox(height: 20.h),
 
@@ -1228,42 +1309,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ],
             ),
           ),
-          SizedBox(height: 20.h),
+          SizedBox(height: AppUI.gap),
 
           // Academic Year card
           Container(
-            padding: EdgeInsets.all(isMobile ? 16 : 20.w),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            padding: EdgeInsets.all(isMobile ? 16 : AppUI.cardPad),
+            decoration: AppUI.card(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8.w),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10.r),
-                      ),
-                      child: AppIcon('calendar-1', color: AppColors.accent, size: 18),
-                    ),
-                    SizedBox(width: 12.w),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('Academic Year',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                        SizedBox(height: 2.h),
-                        Text('Set up the academic year for your institution',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
-                  ],
+                AppUI.cardHeader(
+                  icon: 'calendar-1',
+                  title: 'Academic Year',
+                  subtitle: 'Set up the academic year for your institution',
                 ),
                 SizedBox(height: 20.h),
 
@@ -1272,24 +1330,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     _fieldLabel('Year Label *'),
                     TextFormField(
                       controller: _yearLabelController,
+                      // The academic year is fixed once the institution and its
+                      // schema exist — the schema name embeds it, and demands,
+                      // receipts and reports are all keyed to it. Read-only in
+                      // edit mode, and no longer required there, since an older
+                      // record may have a blank label that must not block a save.
+                      readOnly: _editMode,
+                      enabled: !_editMode,
                       decoration: _inputDec('e.g. 2025-2026', filled: _yearLabelController.text.trim().isNotEmpty),
                       style: _fieldStyleFilled(_yearLabelController.text.trim().isNotEmpty),
                       onChanged: (_) => setState(() {}),
-                      validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                      validator: _editMode
+                          ? null
+                          : (v) => v == null || v.trim().isEmpty ? 'Required' : null,
                     ),
                   ]),
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _fieldLabel('Start Date *'),
                     InkWell(
-                      onTap: () async {
+                      // Locked in edit mode, like the year label.
+                      onTap: _editMode ? null : () async {
                         final picked = await showDatePicker(context: context, initialDate: _yearStartDate ?? DateTime(DateTime.now().year, 6, 1), firstDate: DateTime(2000), lastDate: DateTime(2100));
                         if (picked != null) setState(() => _yearStartDate = picked);
                       },
                       child: InputDecorator(
-                        decoration: _inputDec('Select start date', filled: _yearStartDate != null).copyWith(suffixIcon: AppIcon('calendar-1', size: 18, color: AppColors.textSecondary)),
+                        decoration: _inputDec('Select start date', filled: _yearStartDate != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
                         child: Text(
                           _yearStartDate != null ? _formatDate(_yearStartDate!) : 'Select start date',
-                          style: TextStyle(color: _yearStartDate != null ? AppColors.textPrimary : AppColors.textSecondary.withValues(alpha: 0.6), fontSize: 13, fontWeight: _yearStartDate != null ? FontWeight.w600 : FontWeight.normal),
+                          style: _pickerText(_yearStartDate != null),
                         ),
                       ),
                     ),
@@ -1297,15 +1365,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _fieldLabel('End Date *'),
                     InkWell(
-                      onTap: () async {
+                      // Locked in edit mode, like the year label.
+                      onTap: _editMode ? null : () async {
                         final picked = await showDatePicker(context: context, initialDate: _yearEndDate ?? DateTime(DateTime.now().year + 1, 5, 31), firstDate: DateTime(2000), lastDate: DateTime(2100));
                         if (picked != null) setState(() => _yearEndDate = picked);
                       },
                       child: InputDecorator(
-                        decoration: _inputDec('Select end date', filled: _yearEndDate != null).copyWith(suffixIcon: AppIcon('calendar-1', size: 18, color: AppColors.textSecondary)),
+                        decoration: _inputDec('Select end date', filled: _yearEndDate != null).copyWith(suffixIcon: AppIcon.linear('calendar-1', size: 18, color: AppColors.textLight)),
                         child: Text(
                           _yearEndDate != null ? _formatDate(_yearEndDate!) : 'Select end date',
-                          style: TextStyle(color: _yearEndDate != null ? AppColors.textPrimary : AppColors.textSecondary.withValues(alpha: 0.6), fontSize: 13, fontWeight: _yearEndDate != null ? FontWeight.w600 : FontWeight.normal),
+                          style: _pickerText(_yearEndDate != null),
                         ),
                       ),
                     ),
@@ -1327,40 +1396,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return SingleChildScrollView(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32.w, vertical: 20.h),
       child: Container(
-        padding: EdgeInsets.all(isMobile ? 16 : 20.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
-        ),
+        padding: EdgeInsets.all(isMobile ? 16 : AppUI.cardPad),
+        decoration: AppUI.card(),
         child: Form(
           key: _formKeys[2],
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8.w),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10.r),
-                      ),
-                      child: AppIcon('lock', color: AppColors.accent, size: 18),
-                    ),
-                    SizedBox(width: 12.w),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('Account Setup',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                        SizedBox(height: 2.h),
-                        Text('Create an admin account for your institution',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
-                  ],
+                AppUI.cardHeader(
+                  icon: 'lock',
+                  title: 'Account Setup',
+                  subtitle: 'Create an admin account for your institution',
                 ),
                 SizedBox(height: 20.h),
 
@@ -1370,7 +1416,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     TextFormField(
                       controller: _adminNameController,
                       decoration: _inputDec('Enter admin name', filled: _adminNameController.text.trim().isNotEmpty).copyWith(
-                        prefixIcon: AppIcon('user', size: 14, color: AppColors.textSecondary),
+                        prefixIcon: AppIcon.linear('user', size: 16, color: AppColors.textLight),
                         errorMaxLines: 2,
                       ),
                       style: _fieldStyleFilled(_adminNameController.text.trim().isNotEmpty),
@@ -1382,19 +1428,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _fieldLabel('Designation *'),
                     SizedBox(
-                      height: 48,
+                      height: AppUI.controlHeight(context),
                       child: DropdownButtonFormField<String>(
                         initialValue: _adminDesignation,
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         elevation: 6,
                         decoration: _inputDec('Select designation', filled: true).copyWith(
-                          prefixIcon: AppIcon('personalcard', size: 14, color: AppColors.textSecondary),
+                          prefixIcon: AppIcon.linear('personalcard', size: 16, color: AppColors.textLight),
                         ),
-                        icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                        icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
                         style: _fieldStyle(),
-                        items: _designationOptions.map((d) => DropdownMenuItem(value: d, child: Text(d, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))).toList(),
-                        selectedItemBuilder: (context) => _designationOptions.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)))).toList(),
+                        items: _designationOptions.map((d) => DropdownMenuItem(value: d, child: Text(d, style: AppUI.fieldText(context)))).toList(),
+                        selectedItemBuilder: (context) => _designationOptions.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d, style: AppUI.fieldText(context)))).toList(),
                         onChanged: (v) => setState(() => _adminDesignation = v ?? 'Principal'),
                         validator: (v) => v == null || v.isEmpty ? 'Required' : null,
                       ),
@@ -1409,7 +1455,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     TextFormField(
                       controller: _adminEmailController,
                       decoration: _inputDec('Enter email', filled: _adminEmailController.text.trim().isNotEmpty).copyWith(
-                        prefixIcon: AppIcon('sms', size: 12, color: AppColors.textSecondary),
+                        prefixIcon: AppIcon.linear('sms', size: 16, color: AppColors.textLight),
                         errorMaxLines: 2,
                       ),
                       style: _fieldStyleFilled(_adminEmailController.text.trim().isNotEmpty),
@@ -1424,7 +1470,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     TextFormField(
                       controller: _adminPhoneController,
                       decoration: _inputDec('Enter phone', filled: _adminPhoneController.text.trim().isNotEmpty).copyWith(
-                        prefixIcon: AppIcon('call', size: 12, color: AppColors.textSecondary),
+                        prefixIcon: AppIcon.linear('call', size: 16, color: AppColors.textLight),
                         errorMaxLines: 2,
                       ),
                       style: _fieldStyleFilled(_adminPhoneController.text.trim().isNotEmpty),
@@ -1446,7 +1492,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       obscureText: _obscurePassword,
                       onChanged: (_) => setState(() {}),
                       decoration: _inputDec('Enter password', filled: _passwordController.text.isNotEmpty).copyWith(
-                        prefixIcon: AppIcon('lock', size: 18, color: AppColors.textSecondary),
+                        prefixIcon: AppIcon.linear('lock', size: 16, color: AppColors.textLight),
                         // Compact tap target — IconButton's default 48×48 hit
                         // area gets clipped inside the smaller field height,
                         // so wrap the icon in a tight InkWell instead.
@@ -1458,7 +1504,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             child: AppIcon(
                               _obscurePassword ? 'eye-slash' : 'eye',
                               size: 18,
-                              color: AppColors.textSecondary,
+                              color: AppColors.textLight,
                             ),
                           ),
                         ),
@@ -1476,7 +1522,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       obscureText: _obscureConfirm,
                       onChanged: (_) => setState(() {}),
                       decoration: _inputDec('Re-enter password', filled: _confirmPasswordController.text.isNotEmpty).copyWith(
-                        prefixIcon: AppIcon('lock', size: 18, color: AppColors.textSecondary),
+                        prefixIcon: AppIcon.linear('lock', size: 16, color: AppColors.textLight),
                         suffixIcon: InkWell(
                           onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
                           customBorder: const CircleBorder(),
@@ -1485,7 +1531,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             child: AppIcon(
                               _obscureConfirm ? 'eye-slash' : 'eye',
                               size: 18,
-                              color: AppColors.textSecondary,
+                              color: AppColors.textLight,
                             ),
                           ),
                         ),
@@ -1503,19 +1549,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                 Center(
                   child: SizedBox(
-                    height: 48,
+                    height: AppUI.controlHeight(context),
                     child: ElevatedButton.icon(
                       onPressed: _isCreating ? null : _handleRegister,
                       icon: _isCreating
                           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : AppIcon('tick-circle', size: 18, color: Colors.white),
-                      label: Text(_isCreating ? 'Creating...' : 'Create Institution', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 32),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      label: Text(_isCreating ? 'Creating...' : 'Create Institution'),
+                      style: AppUI.primary(context).copyWith(
+                        padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 32)),
                       ),
                     ),
                   ),
@@ -1527,15 +1569,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  // Kit label above a field; a trailing " *" becomes the kit's red marker.
   Widget _fieldLabel(String label) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 8.h),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary)),
-    );
+    return label.endsWith(' *')
+        ? AppUI.fieldLabel(label.substring(0, label.length - 2), required: true)
+        : AppUI.fieldLabel(label);
   }
 
   // Renders [fields] as a Row on desktop and stacks them vertically on mobile.
@@ -1557,17 +1595,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Row(children: children);
   }
 
-  TextStyle _fieldStyle() => TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary);
+  TextStyle _fieldStyle() => AppUI.fieldText(context);
 
-  // Normal value style — standard dark colour. The [filled] flag is retained
-  // for call-site compatibility but no longer changes the colour.
-  TextStyle _fieldStyleFilled(bool filled) => TextStyle(
-        fontWeight: FontWeight.w600,
-        fontSize: 13,
-        color: AppColors.textPrimary,
-      );
+  // Value style inside a field (the kit field text). The [filled] flag is
+  // retained for call-site compatibility.
+  TextStyle _fieldStyleFilled(bool filled) => AppUI.fieldText(context);
 
-  static const Color _kFieldFill = Color(0xFFF3F4F6);
+  // Text shown inside a date-picker field: the value, or a muted placeholder.
+  TextStyle _pickerText(bool set) => set
+      ? AppUI.fieldText(context)
+      : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500);
 
   // ── Validators (mapped to public.institution column types) ───
   String? _vRequiredMax(String? v, int max, String label) {
@@ -1607,24 +1644,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return null;
   }
 
-  // Standard decoration: grey border idle, navy (primary) border on focus.
-  // The [filled] param is retained but no longer affects the border.
+  // The kit field. [filled] gives the accent edge once the field holds a
+  // value. Callers add small prefix/suffix AppIcons, so keep a tight slot.
   InputDecoration _inputDec(String hint, {bool filled = false}) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.55), fontSize: 13, fontWeight: FontWeight.w500),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.border, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.border, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
-      errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.error, width: 1.5)),
-      focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.error, width: 1.5)),
-      filled: true,
-      fillColor: Colors.white,
-      isDense: false,
-      constraints: const BoxConstraints(minHeight: 48, maxHeight: 48),
-      suffixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 16, maxHeight: 16),
-      prefixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 16, maxHeight: 16),
+    return AppUI.field(context, hint, filled: filled).copyWith(
+      suffixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 16),
+      prefixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 16),
     );
   }
 }

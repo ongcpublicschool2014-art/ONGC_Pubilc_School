@@ -7,6 +7,7 @@ import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
+import '../../widgets/app_ui.dart';
 class StaffDesignationScreen extends StatefulWidget {
   const StaffDesignationScreen({super.key});
 
@@ -75,7 +76,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
         _fetchDesignations();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save designation'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to save designation'), backgroundColor: AppColors.error),
         );
         setState(() => _isLoading = false);
       }
@@ -91,7 +92,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
         content: const Text('Are you sure you want to delete this designation?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
         ],
       ),
     );
@@ -106,7 +107,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
         _fetchDesignations();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete designation'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to delete designation'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -125,21 +126,13 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
   }
 
   InputDecoration _inputDecoration(String label, {bool filled = false}) {
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      labelText: label,
-      labelStyle: TextStyle(fontSize: 13.sp),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-      contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
-    );
+    return AppUI.field(context, '', label: label, filled: filled);
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.all(20.w),
+      padding: EdgeInsets.all(AppUI.gap),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -147,12 +140,8 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
           SizedBox(
             width: 360.w,
             child: Container(
-              padding: EdgeInsets.all(20.w),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              padding: EdgeInsets.all(AppUI.cardPad),
+              decoration: AppUI.card(),
               child: Form(
                 key: _formKey,
                 child: FocusTraversalGroup(
@@ -160,20 +149,11 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        AppIcon('personalcard', color: AppColors.accent, size: 18),
-                        SizedBox(width: 8.w),
-                        Text(
-                          'Add Designation',
-                          style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
+                    AppUI.cardHeader(icon: 'personalcard', title: 'Add Designation'),
                     SizedBox(height: 20.h),
                     TextFormField(
                       controller: _nameController,
-                      style: TextStyle(color: _nameController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: _nameController.text.trim().isNotEmpty ? FontWeight.w600 : null),
+                      style: AppUI.fieldText(context, filled: _nameController.text.trim().isNotEmpty),
                       onChanged: (_) => setState(() {}),
                       decoration: _inputDecoration('Designation Name', filled: _nameController.text.trim().isNotEmpty),
                       validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
@@ -187,15 +167,15 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                       elevation: 6,
                       decoration: _inputDecoration('Reports To', filled: _selectedReportTo != null),
                       items: [
-                        DropdownMenuItem<int?>(value: null, child: Text('None', style: TextStyle(fontSize: 13.sp))),
+                        DropdownMenuItem<int?>(value: null, child: Text('None', style: AppUI.fieldText(context))),
                         ..._designations.map((d) => DropdownMenuItem<int?>(
                               value: d['des_id'] as int,
-                              child: Text(d['desname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp)),
+                              child: Text(d['desname']?.toString() ?? '', style: AppUI.fieldText(context)),
                             )),
                       ],
                       selectedItemBuilder: (context) => [
-                        Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                        ..._designations.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
+                        Align(alignment: Alignment.centerLeft, child: Text('None', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                        ..._designations.map((d) => Align(alignment: Alignment.centerLeft, child: Text(d['desname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
                       ],
                       onChanged: (v) => setState(() => _selectedReportTo = v),
                     ),
@@ -207,12 +187,6 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                             onPressed: _isLoading ? null : _saveDesignation,
                             icon: AppIcon('add', size: 18),
                             label: const Text('Add'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.accent,
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                            ),
                           ),
                         ),
                       ],
@@ -223,57 +197,42 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
               ),
             ),
           ),
-          SizedBox(width: 24.w),
+          SizedBox(width: AppUI.gap),
           // Table panel
           Expanded(
             child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              clipBehavior: Clip.antiAlias,
+              decoration: AppUI.card(),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Header
                   Container(
-                    padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(12.r)),
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 16.h),
                     child: Row(
                       children: [
                         const CardTitleBlock(icon: 'personalcard', title: 'Designations', subtitle: 'all staff designations in this institution'),
                         const Spacer(),
-                        Text('${_designations.length} records', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                        Text('${_designations.length} records', style: AppUI.muted),
                         SizedBox(width: 12.w),
-                        SizedBox(
-                          height: AppBtn.height(context),
-                          child: ElevatedButton.icon(
-                            onPressed: _fetchDesignations,
-                            icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                            label: const Text('Refresh'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF10B981),
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                            ),
-                          ),
+                        ElevatedButton.icon(
+                          onPressed: _fetchDesignations,
+                          icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
+                          label: const Text('Refresh'),
                         ),
                       ],
                     ),
                   ),
                   // Table header
                   Container(
-                    padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                    color: const Color(0xFF6C8EEF),
+                    padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
+                    decoration: AppUI.tableHeadBar,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S NO.', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 3, child: Text('DESIGNATION NAME', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        Expanded(flex: 3, child: Text('REPORTS TO', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
-                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.white))),
+                        SizedBox(width: 40.w, child: Text('S NO.', style: AppUI.tableHead)),
+                        AppUI.th('DESIGNATION NAME', flex: 3),
+                        AppUI.th('REPORTS TO', flex: 3),
+                        SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: AppUI.tableHead)),
                       ],
                     ),
                   ),
@@ -286,23 +245,23 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                   else if (_designations.isEmpty)
                     Padding(
                       padding: EdgeInsets.all(40.w),
-                      child: Center(child: Text('No designations found', style: TextStyle(color: AppColors.textSecondary))),
+                      child: AppUI.empty(title: 'No designations found', why: 'Add one with the form on the left.', icon: 'personalcard'),
                     )
                   else
                     ..._designations.asMap().entries.map((entry) {
                       final idx = entry.key;
                       final des = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                        decoration: BoxDecoration(
-                          color: idx.isEven ? Colors.white : AppColors.surface,
-                          border: Border(bottom: BorderSide(color: AppColors.border.withValues(alpha: 0.5))),
+                        padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(bottom: BorderSide(color: AppColors.divider)),
                         ),
                         child: Row(
                           children: [
-                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
-                            Expanded(flex: 3, child: Text(des['desname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500))),
-                            Expanded(flex: 3, child: Text(_getDesignationName(des['desrepto'] as int?), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
+                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+                            Expanded(flex: 3, child: Text(des['desname']?.toString() ?? '-', style: AppUI.cell)),
+                            Expanded(flex: 3, child: Text(_getDesignationName(des['desrepto'] as int?), style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
                             SizedBox(
                               width: 80.w,
                               child: Row(
@@ -313,7 +272,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                                     borderRadius: BorderRadius.circular(6.r),
                                     child: Padding(
                                       padding: EdgeInsets.all(4.w),
-                                      child: AppIcon('trash', size: 16, color: Colors.red),
+                                      child: AppIcon('trash', size: 16, color: AppColors.error),
                                     ),
                                   ),
                                 ],

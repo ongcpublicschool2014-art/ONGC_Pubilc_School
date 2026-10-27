@@ -17,9 +17,15 @@
 class PaytmConfig {
   PaytmConfig._();
 
-  /// Flip to true once production credentials are issued and verified.
-  /// Keep false for the staging/test environment.
-  static const bool isProduction = true;
+  /// PRODUCTION unless a config.json says otherwise.
+  ///
+  /// Deliberately NOT a hand-edited constant. Editing a committed `= false`
+  /// back and forth to test is how a staging build ships: the flag is invisible
+  /// in the exe and nobody remembers it at release time. Instead the same
+  /// untracked config.json that already points a machine at the TEST database
+  /// opts in, with "paytmStaging": true, and SupabaseConfig.load() sets this.
+  /// A production install has no such file, so it cannot be switched.
+  static bool isProduction = true;
 
   /// Paytm Split Settlement (per-unit banking). When true, each payment's funds
   /// are settled to the paying institution's CHILD MID (the value resolved from
@@ -31,65 +37,45 @@ class PaytmConfig {
   /// their banks registered — otherwise initiateTransaction rejects the split.
   static const bool splitSettlement = false;
 
-  /// Per-unit settlement via INDEPENDENT merchant IDs (the live model).
-  /// When true, each payment is created under the paying institution's OWN Paytm
-  /// MID (resolved from public.paytm_configuration via
-  /// SupabaseService.getPaytmMidForInstitution) and signed server-side with THAT
-  /// MID's OWN merchant key (from the edge function's PAYTM_MERCHANTS map), so
-  /// Paytm settles the funds directly to that unit's registered bank account.
+  // Per-unit settlement via INDEPENDENT merchant IDs is the live model, and it
+  // is no longer a flag. SupabaseService.resolvePaytmRouting resolves the
+  // paying institution's own merchant from public.paytm_configuration, and
+  // refuses the payment when it cannot — never falling back to the default
+  // parent merchant, which is how money silently reached the parent account
+  // after a database rebuild.
+  //
+  // Routing by FEE GROUP (a group naming a bank, the bank naming a merchant)
+  // was built and reverted: one Paytm order settles to exactly one merchant, so
+  // a student paying tuition and hostel fees together could not be collected in
+  // one transaction — the normal case at the counter.
+  //
+  // This is NOT Paytm "split settlement" and NOT the parent-key aggregator.
+  // Requires the edge functions (create-paytm-order, get-paytm-payment) to have
+  // PAYTM_MERCHANTS set to {"<mid>":"<key>", ...} — a routed MID with no key
+  // entry is rejected server-side rather than silently mis-settled.
+
+  // ---- Merchant id -------------------------------------------------------
+
+  /// There is deliberately NO default MID here.
   ///
-  /// This is NOT Paytm "split settlement" and NOT the parent-key aggregator: each
-  /// of the four unit MIDs is a full independent merchant with its own API key
-  /// (verified working against production, resultCode 0000). Requires the edge
-  /// functions (create-paytm-order, get-paytm-payment) to have PAYTM_MERCHANTS
-  /// set to {"<mid>":"<key>", ...} for the four units — otherwise a routed MID
-  /// with no key entry is rejected server-side. An institution with no config row
-  /// falls back to the default MID. Mutually exclusive with [splitSettlement].
-  static const bool perUnitSettlement = true;
-
-  // ---- Merchant IDs (non-secret) ----------------------------------------
-
-  /// Staging/Test MID. Two sets exist for this trust and only one is accepted
-  /// by the staging gateway — the onboarding-mail pair (MID below +
-  /// key f%FzIB&4t%GRo9m7 + WEBSTAGING) arrived matched, so try it first. The
-  /// dashboard "Test API Details" pair (Krishn06051431858637 / JtHK6ipYjpm_cuuE)
-  /// was rejected with resultCode 501. The edge function's PAYTM_MID env is what
-  /// actually signs — keep this in sync with it.
-  static const String stagingMid = 'iZngSb05004504656177';
-
-  /// Production DEFAULT/fallback MID. Krishn06051431858637 (key JtHK6ipYjpm_cuuE,
-  /// website DEFAULT, host secure.paytmpayments.com) is used only when an
-  /// institution has no active row in public.paytm_configuration.
+  /// A merchant id is not secret, but it identifies ONE institution, and this
+  /// binary is installed at several. Compiled in, it is a default that cannot
+  /// be seen from the outside and cannot be changed without a release.
   ///
-  /// The four units are INDEPENDENT production merchants, each with its OWN API
-  /// key (verified working, resultCode 0000). Routing is per-institution via
-  /// public.paytm_configuration; each MID's key lives in the edge function's
-  /// PAYTM_MERCHANTS map (never in this client):
-  ///   College (KCET) ins 1   Krishn36335928406501
-  ///   Polytechnic    ins 2   Krishn15569334364496
-  ///   Arts & Science ins 3   Krishn02645517368198
-  ///   Mens Hostel    ins 4   Krishn33556941260773
-  static const String productionMid = 'Krishn06051431858637';
+  /// The MID comes from the database instead, resolved per collection by
+  /// SupabaseService.resolvePaytmRouting:
+  ///     bank.paytm_mid            (the fee group's own account)  ->  else
+  ///     public.paytm_configuration.merchant_id  (the institution)  ->  else
+  ///     REFUSE the payment
+  /// Refusing is the correct third branch. Falling back to whichever merchant
+  /// happened to be in the build would settle one institution's money into
+  /// another's account with nothing on the receipt to show it.
+  ///
+  /// See docs/PAYTM_WORKFLOW.md.
 
-  /// Active MID for the selected environment.
-  static String get mid => isProduction ? productionMid : stagingMid;
-
-  // ---- websiteName (non-secret) -----------------------------------------
-
-  /// The `websiteName` parameter Paytm requires when initiating a transaction.
-  /// On the STAGING gateway (securestage) this must be 'WEBSTAGING' — the
-  /// dashboard's "Website: DEFAULT" is the *production* site name and is rejected
-  /// on staging (Paytm returns resultCode 501). The edge function actually reads
-  /// this from its PAYTM_WEBSITE env var; keep the two in sync.
-  static const String stagingWebsiteName = 'WEBSTAGING';
-
-  /// Production websiteName — 'DEFAULT' per the Paytm dashboard for these
-  /// merchants (verify with Paytm; production uses the merchant's real site name,
-  /// not WEBSTAGING). Edge function's PAYTM_WEBSITE env must match.
-  static const String productionWebsiteName = 'DEFAULT';
-
-  /// Active websiteName for the selected environment.
-  static String get websiteName => isProduction ? productionWebsiteName : stagingWebsiteName;
+  // websiteName lives server-side only: resolveMerchant() reads PAYTM_WEBSITE
+  // in the edge functions, and nothing in the client ever used the copy that
+  // was here. Two places to keep in sync was one too many.
 
   // ---- Gateway hosts -----------------------------------------------------
 
@@ -101,10 +87,6 @@ class PaytmConfig {
   static String get host => isProduction
       ? 'https://secure.paytmpayments.com'
       : 'https://securestage.paytmpayments.com';
-
-  /// Full URL of the merchant-specific JS Checkout SDK for the default MID.
-  /// Format: {host}/merchantpgpui/checkoutjs/merchants/{MID}.js
-  static String get checkoutJsUrl => checkoutJsUrlFor(mid);
 
   /// JS Checkout SDK URL for an explicit MID (per-fee-group / per-bank routing).
   static String checkoutJsUrlFor(String forMid) =>

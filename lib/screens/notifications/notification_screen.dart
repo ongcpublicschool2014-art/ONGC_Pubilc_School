@@ -6,6 +6,8 @@ import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 class NotificationScreen extends StatefulWidget {
   final VoidCallback? onReadChanged;
@@ -138,13 +140,28 @@ class _NotificationScreenState extends State<NotificationScreen> {
       case 'alert':
         return AppColors.error;
       case 'exam':
-        return Colors.orange;
+        return AppColors.warning;
       case 'attendance':
-        return Colors.purple;
+        return AppColors.demand;
       case 'notice':
-        return Colors.blue;
+        return AppColors.info;
       default:
         return AppColors.textSecondary;
+    }
+  }
+
+  AppStatus _typeStatus(String? type) {
+    switch (type?.toLowerCase()) {
+      case 'alert':
+        return AppStatus.danger;
+      case 'exam':
+        return AppStatus.warning;
+      case 'fee':
+      case 'payment':
+      case 'notice':
+        return AppStatus.info;
+      default:
+        return AppStatus.neutral;
     }
   }
 
@@ -193,138 +210,129 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
   }
 
+  // ── layout ──────────────────────────────────────────────────────────────────
+  // Master-detail: the notification list (search + All/Unread/Read) on the
+  // left, the opened notification on the right.
+  String _query = '';
+
+  List<Map<String, dynamic>> get _visibleNotifications {
+    final q = _query.trim().toLowerCase();
+    final base = _filteredNotifications;
+    if (q.isEmpty) return base;
+    return base.where((n) {
+      final hay = [
+        n['notititle'] ?? n['title'],
+        n['notibody'] ?? n['body'] ?? n['notidesc'],
+        n['notitype'] ?? n['type'],
+      ].map((e) => e?.toString().toLowerCase() ?? '').join(' ');
+      return hay.contains(q);
+    }).toList();
+  }
+
+  bool _isSelected(Map<String, dynamic> n) {
+    final sel = _selectedNotification;
+    if (sel == null) return false;
+    final a = sel['noti_id'], b = n['noti_id'];
+    return a != null ? a == b : identical(sel, n);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filtered = _filteredNotifications;
-
-    // When drilled into a notification detail, render only the detail
-    // (it has its own header). Otherwise render one combined card holding
-    // the header + zebra-striped list, like the report-page tables.
-    if (_selectedNotification != null) {
-      return _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _buildNotificationDetail(_selectedNotification!);
-    }
-
-    Widget headerBar() => Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 14.h),
-          child: Row(
-            children: [
-              AppIcon('notification', color: AppColors.accent, size: 18),
-              SizedBox(width: 10.w),
-              Text('Notifications', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
-              if (_unreadCount > 0) ...[
-                SizedBox(width: 10.w),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+    final visible = _visibleNotifications;
+    return AppMasterDetail(
+      listTitle: 'Notifications',
+      listIcon: 'notification',
+      listSubtitle: _unreadCount > 0 ? '$_unreadCount unread' : 'All caught up',
+      listActions: [
+        if (_unreadCount > 0) AppUI.chip('$_unreadCount new', AppStatus.danger),
+      ],
+      search: Row(children: [
+        Expanded(
+          child: AppSearchField(
+            hintText: 'Search notifications',
+            onChanged: (v) => setState(() => _query = v),
+          ),
+        ),
+        SizedBox(width: 8.w),
+        Tooltip(
+          message: 'Refresh',
+          child: OutlinedButton(
+            onPressed: _fetchNotifications,
+            style: OutlinedButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 12.w)),
+            child: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.primary),
+          ),
+        ),
+      ]),
+      filters: [
+        Wrap(
+          spacing: 6.w,
+          runSpacing: 6.h,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ...['All', 'Unread', 'Read'].map((f) {
+              final isActive = _filter == f;
+              return InkWell(
+                onTap: () => setState(() => _filter = f),
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
                   decoration: BoxDecoration(
-                    color: AppColors.error.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10.r),
+                    color: isActive ? AppColors.primaryLight : Colors.white,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: isActive ? AppColors.primary : AppColors.border),
                   ),
-                  child: Text('$_unreadCount new', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.error)),
+                  child: Text(f, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: isActive ? AppColors.primary : AppColors.textSecondary)),
                 ),
-              ],
-              const Spacer(),
-              ...['All', 'Unread', 'Read'].map((f) {
-                final isActive = _filter == f;
-                return Padding(
-                  padding: EdgeInsets.only(left: 6.w),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _filter = f),
-                    child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-                      decoration: BoxDecoration(
-                        color: isActive ? AppColors.accent : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8.r),
-                        border: Border.all(color: isActive ? AppColors.accent : AppColors.border),
-                      ),
-                      child: Text(f, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: isActive ? Colors.white : AppColors.textSecondary)),
-                    ),
-                  ),
-                );
-              }),
-              SizedBox(width: 10.w),
-              if (_unreadCount > 0)
-                TextButton.icon(
-                  onPressed: _markAllAsRead,
-                  icon: AppIcon('task-square', size: 16),
-                  label: Text('Mark all read', style: TextStyle(fontSize: 13.sp)),
-                  style: TextButton.styleFrom(foregroundColor: AppColors.accent, padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h)),
-                ),
-              SizedBox(
-                height: AppBtn.height(context),
-                child: ElevatedButton.icon(
-                  onPressed: _fetchNotifications,
-                  icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                  label: const Text('Refresh'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                ),
+              );
+            }),
+            if (_unreadCount > 0)
+              TextButton.icon(
+                onPressed: _markAllAsRead,
+                icon: AppIcon('task-square', size: AppBtn.iconSize(context), color: AppColors.primary),
+                label: const Text('Mark all read'),
               ),
-            ],
-          ),
-        );
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          headerBar(),
-          // Inner card holding the zebra-striped notification rows. Mirrors
-          // the report-page table that sits inside its outer wrapper card.
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(12.w, 0, 12.w, 12.h),
-              child: Container(
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10.r),
-                  border: Border.all(color: AppColors.border),
+          ],
+        ),
+      ],
+      list: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : visible.isEmpty
+              ? _buildEmptyState()
+              : AppVerticalScrollbar(
+                  builder: (context, controller) => ListView.separated(
+                    controller: controller,
+                    padding: EdgeInsets.zero,
+                    itemCount: visible.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1, thickness: 1, color: AppColors.divider),
+                    itemBuilder: (context, index) => _buildNotificationTile(visible[index], index),
+                  ),
                 ),
-                child: AppVerticalScrollbar(
-                  builder: (context, controller) => _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : filtered.isEmpty
-                        ? _buildEmptyState()
-                        : ListView.separated(
-                            controller: controller,
-                            padding: EdgeInsets.zero,
-                            itemCount: filtered.length,
-                            separatorBuilder: (_, __) => Divider(height: 1, thickness: 1, color: AppColors.border.withValues(alpha: 0.6)),
-                            itemBuilder: (context, index) => _buildNotificationTile(filtered[index], index),
-                          ),
-                ),
-              ),
-            ),
-          ),
-        ],
+      footer: Text(AppUI.showing(visible.isEmpty ? 0 : 1, visible.length, visible.length), style: AppUI.muted),
+      detail: _selectedNotification == null
+          ? null
+          : (_isLoading ? const Center(child: CircularProgressIndicator()) : _buildNotificationDetail(_selectedNotification!)),
+      emptyDetail: AppUI.empty(
+        icon: 'notification-bing',
+        title: 'Select a notification',
+        why: 'Pick a notification on the left to read it. Opening an unread one marks it read.',
       ),
+      showDetail: _selectedNotification != null,
+      onBack: () => setState(() => _selectedNotification = null),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          AppIcon('notification-bing', size: 56.sp, color: AppColors.textSecondary.withValues(alpha: 0.3)),
-          SizedBox(height: 14.h),
-          Text(
-            _filter == 'Unread' ? 'No unread notifications' : _filter == 'Read' ? 'No read notifications' : 'No notifications yet',
-            style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-          ),
-          SizedBox(height: 6.h),
-          Text('You\'re all caught up!', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-        ],
-      ),
+    if (_query.trim().isNotEmpty && _filteredNotifications.isNotEmpty) {
+      return AppUI.empty(
+        icon: 'search-normal',
+        title: 'No matching notifications',
+        why: 'Nothing matches "$_query". Clear the search to see them all.',
+      );
+    }
+    return AppUI.empty(
+      icon: 'notification-bing',
+      title: _filter == 'Unread' ? 'No unread notifications' : _filter == 'Read' ? 'No read notifications' : 'No notifications yet',
+      why: 'You\'re all caught up!',
     );
   }
 
@@ -334,101 +342,97 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final date = notif['createdat']?.toString();
     final type = notif['notitype']?.toString() ?? notif['type']?.toString();
     final isRead = notif['isread'] == true || notif['isread'] == 1;
+    final selected = _isSelected(notif);
 
     final tColor = _typeColor(type);
-    // Plain zebra (white / AppColors.surface) matching every other list/table
-    // in the project. Unread state is conveyed by the inline accent dot
-    // before the title — no row tint.
-    final bg = index.isEven ? Colors.white : AppColors.surface;
-    return InkWell(
-      onTap: () {
-        if (!isRead) _markAsRead(notif);
-        setState(() => _selectedNotification = notif);
-      },
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
-        color: bg,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Soft circular icon
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+    // Unread state is conveyed by the inline accent dot before the title (and
+    // a bolder title); the selected row takes the accent tint.
+    return Material(
+      color: selected ? AppColors.primaryLight : Colors.white,
+      child: InkWell(
+        onTap: () {
+          if (!isRead) _markAsRead(notif);
+          setState(() => _selectedNotification = notif);
+        },
+        hoverColor: AppColors.primaryLight.withValues(alpha: 0.6),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Soft circular icon
+              Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected ? Colors.white : AppColors.surface,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: AppIcon.linear(_typeIcon(type), size: 16, color: selected ? AppColors.primary : AppColors.textSecondary),
               ),
-              child: AppIcon.linear(_typeIcon(type), size: 18, color: AppColors.textSecondary),
-            ),
-            SizedBox(width: 12.w),
-            // Title (with inline unread dot) + body
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            if (!isRead) ...[
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(color: tColor, shape: BoxShape.circle),
-                              ),
-                              SizedBox(width: 6.w),
-                            ],
-                            Flexible(
-                              child: Text(
-                                title,
-                                style: TextStyle(
-                                  fontSize: 14.sp,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary,
-                                  height: 1.2,
+              SizedBox(width: 12.w),
+              // Title (with inline unread dot) + body
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Row(
+                            children: [
+                              if (!isRead) ...[
+                                Tooltip(
+                                  message: 'Unread',
+                                  child: Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(color: tColor, shape: BoxShape.circle),
+                                  ),
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                SizedBox(width: 6.w),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  title,
+                                  style: TextStyle(
+                                    fontSize: 14.sp,
+                                    fontWeight: isRead ? FontWeight.w600 : FontWeight.w800,
+                                    color: selected ? AppColors.primary : AppColors.textPrimary,
+                                    height: 1.2,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      SizedBox(width: 8.w),
+                        SizedBox(width: 8.w),
+                        Text(
+                          _timeAgo(date),
+                          style: AppUI.muted.copyWith(fontSize: 12.sp),
+                        ),
+                      ],
+                    ),
+                    if (body.isNotEmpty) ...[
+                      SizedBox(height: 4.h),
                       Text(
-                        _timeAgo(date),
-                        style: TextStyle(
-                          fontSize: 11.sp,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary.withValues(alpha: 0.75),
-                        ),
+                        body,
+                        style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.4),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
-                  ),
-                  if (body.isNotEmpty) ...[
-                    SizedBox(height: 4.h),
-                    Text(
-                      body,
-                      style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, height: 1.4),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
                   ],
-                ],
+                ),
               ),
-            ),
-            SizedBox(width: 10.w),
-            Padding(
-              padding: EdgeInsets.only(top: 2.h),
-              child: const AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -443,129 +447,92 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final target = notif['notitarget']?.toString() ?? notif['target']?.toString();
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Back header — matches the notice "Notice Details" header style
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: AppColors.border),
-          ),
+        // Pane header — matches the notice "Notice Details" header
+        Padding(
+          padding: EdgeInsets.fromLTRB(AppUI.cardPad, 14.h, 12.w, 14.h),
           child: Row(
             children: [
-              IconButton(
-                icon: const AppIcon.linear('Chevron Left', size: 20),
-                onPressed: () => setState(() => _selectedNotification = null),
-                tooltip: 'Back to notifications',
-              ),
+              Expanded(child: Text('Notification Details', style: AppUI.cardTitle)),
+              if (type != null) AppUI.chip(type, _typeStatus(type)),
               SizedBox(width: 4.w),
-              Text('Notification Details', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              if (type != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _typeColor(type).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text(type, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _typeColor(type))),
-                ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18, color: AppColors.textSecondary),
+                onPressed: () => setState(() => _selectedNotification = null),
+                tooltip: 'Close',
+              ),
             ],
           ),
         ),
-        SizedBox(height: 16.h),
+        const Divider(height: 1, color: AppColors.divider),
 
-        // Detail card
+        // Detail body
         Expanded(
           child: SingleChildScrollView(
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10.r),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title row
+            padding: EdgeInsets.all(AppUI.cardPad),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title row
+                Row(
+                  children: [
+                    AppUI.iconTile(_typeIcon(type), color: _typeColor(type)),
+                    SizedBox(width: 12.w),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: AppUI.cardTitle),
+                          SizedBox(height: 4.h),
+                          Wrap(
+                            spacing: 8.w,
+                            runSpacing: 4.h,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (type != null) AppUI.chip(type, _typeStatus(type)),
+                              Text(_formatDate(date), style: AppUI.muted.copyWith(color: AppColors.textSecondary)),
+                              Text(_timeAgo(date), style: AppUI.muted),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 32, color: AppColors.divider),
+
+                // Body
+                if (body.isNotEmpty)
+                  Text(body, style: AppUI.body.copyWith(height: 1.7)),
+
+                if (target != null && target.isNotEmpty) ...[
+                  SizedBox(height: 20.h),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 26,
-                        height: 26,
-                        decoration: BoxDecoration(
-                          color: _typeColor(type).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6.r),
-                        ),
-                        child: AppIcon(_typeIcon(type), size: 12, color: _typeColor(type)),
-                      ),
-                      SizedBox(width: 16.w),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(title, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700)),
-                            SizedBox(height: 4.h),
-                            Row(
-                              children: [
-                                if (type != null) ...[
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.accent.withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(6.r),
-                                    ),
-                                    child: Text(type, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-                                  ),
-                                  SizedBox(width: 10.w),
-                                ],
-                                Text(_formatDate(date), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                                SizedBox(width: 8.w),
-                                Text(_timeAgo(date), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary.withValues(alpha: 0.6))),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
+                      const AppIcon.linear('people', size: 16, color: AppColors.textLight),
+                      SizedBox(width: 6.w),
+                      Text('Target: ', style: AppUI.muted),
+                      Expanded(child: Text(target, style: AppUI.label)),
                     ],
                   ),
-                  const Divider(height: 32, color: AppColors.border),
-
-                  // Body
-                  if (body.isNotEmpty)
-                    Text(body, style: TextStyle(fontSize: 14.sp, height: 1.7, color: AppColors.textPrimary)),
-
-                  if (target != null && target.isNotEmpty) ...[
-                    SizedBox(height: 20.h),
-                    Row(
-                      children: [
-                        const AppIcon('people', size: 16, color: AppColors.textSecondary),
-                        SizedBox(width: 6.w),
-                        Text('Target: ', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                        Text(target, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ],
-
-                  if (createdBy != null && createdBy.isNotEmpty) ...[
-                    SizedBox(height: 12.h),
-                    const Divider(color: AppColors.border),
-                    SizedBox(height: 12.h),
-                    Row(
-                      children: [
-                        const AppIcon('user', size: 16, color: AppColors.textSecondary),
-                        SizedBox(width: 6.w),
-                        Text('Posted by: ', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                        Text(createdBy, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ],
                 ],
-              ),
+
+                if (createdBy != null && createdBy.isNotEmpty) ...[
+                  SizedBox(height: 12.h),
+                  const Divider(color: AppColors.divider),
+                  SizedBox(height: 12.h),
+                  Row(
+                    children: [
+                      const AppIcon.linear('user', size: 16, color: AppColors.textLight),
+                      SizedBox(width: 6.w),
+                      Text('Posted by: ', style: AppUI.muted),
+                      Flexible(child: Text(createdBy, style: AppUI.label, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                ],
+              ],
             ),
           ),
         ),

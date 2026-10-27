@@ -6,18 +6,22 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:csv/csv.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_search_field.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
 import 'package:supabase_flutter/supabase_flutter.dart' show FileOptions, PostgrestException;
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 
 class StudentsScreen extends StatefulWidget {
   final StudentModel? initialStudent;
@@ -59,6 +63,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   final _admittedYearController = TextEditingController();
   // Demographic / identity fields (also populated from bulk import)
   final _aadharController = TextEditingController();
+  final _emisController = TextEditingController();
+  final _umisController = TextEditingController();
   final _mediumController = TextEditingController();
   final _communityController = TextEditingController();
   final _casteController = TextEditingController();
@@ -114,6 +120,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
   bool _isGlobalSearching = false;
   // Import state
   bool _showImport = false;
+  // True only while the pre-import prerequisite check (master data + admission
+  // master) is running, so the Import button is disabled during that check.
+  bool _checkingImportPrereq = false;
   String? _importFileName;
   List<String> _importHeaders = [];
   List<List<dynamic>> _importRows = [];
@@ -144,13 +153,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'concession', 'quoname',
     'stumobile', 'stuemail',
     'stuaddress', 'stucity', 'stustate', 'stucountry', 'stupin', 'stubloodgrp',
-    'aadharno', 'community', 'caste', 'religion', 'nationality', 'transportmode', 'hostel',
+    'aadharno', 'community', 'caste', 'religion', 'nationality', 'transportmode', 'hostel', 'division',
     'fathername', 'fathermobile', 'fatheroccupation',
     'mothername', 'mothermobile', 'motheroccupation',
     'guardianname', 'guardianmobile', 'guardianoccupation', 'paremail',
     'payincharge', 'payinchargemob',
     'admitted_course_id', 'course_id', 'class_id', 'admission_type_id', 'concession_id', 'quota_id',
   ];
+
+  // A school has no admission type / quota / batch, so these grid columns are
+  // dropped there (grid, template, sample). College keeps the full list.
+  static const _schoolDropGridKeys = {'admname', 'batch', 'quoname', 'admission_type_id', 'quota_id'};
+  List<String> get _gridKeys => isSchool
+      ? _importGridKeys.where((k) => !_schoolDropGridKeys.contains(k)).toList()
+      : _importGridKeys;
 
   // Labels + order mirror the student import Excel template.
   static const Map<String, String> _importGridLabels = {
@@ -182,6 +198,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'nationality': 'Nationality',
     'transportmode': 'Transport Mode',
     'hostel': 'Hostel (Y/N)',
+    'division': 'Division',
     'fathername': 'Father Name',
     'fathermobile': 'Father Mobile',
     'fatheroccupation': 'Father Occupation',
@@ -210,7 +227,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   // _deriveImportPayer) when left blank, and validated conditionally.
   static const _importRequiredFields = {'stuadmno', 'stuname', 'stugender', 'studob', 'stuclass'};
 
-  static final TextStyle _inputStyle = TextStyle(fontWeight: FontWeight.w500, fontSize: 13.sp, color: const Color(0xFF555555));
+  TextStyle get _inputStyle => AppUI.fieldText(context);
 
   final List<String> _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
   final List<String> _genders = ['Male', 'Female', 'Other'];
@@ -347,6 +364,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // ordid fall to the end alphabetically.
     final allClasses = dedupedRaw
       ..sort((a, b) {
+        // Promotional and terminal classes first, TC batches last. Applied
+        // before ordid, because a TC class carries an ordid like any other and
+        // would otherwise sort back in among the live years.
+        final g = classGroupRank(a).compareTo(classGroupRank(b));
+        if (g != 0) return g;
         final oa = classOrdMap[a.trim()], ob = classOrdMap[b.trim()];
         if (oa != null && ob != null) return oa != ob ? oa.compareTo(ob) : a.compareTo(b);
         if (oa != null) return -1;
@@ -468,6 +490,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _admittedYearController.text = clean(s.admittyear);
     _mediumController.text = clean(s.medium);
     _aadharController.text = clean(s.aadharno);
+    _emisController.text = clean(s.emisno);
+    _umisController.text = clean(s.umisno);
     _communityController.text = clean(s.community);
     _casteController.text = clean(s.caste);
     _religionController.text = clean(s.religion);
@@ -506,7 +530,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _admDate = s.stuadmdate;
       _dob = s.studob;
       _photoUrl = s.stuphoto;
-      _isFormEnabled = false; // view mode until Edit is pressed
+      _isFormEnabled = false; // view only: student details are not edited here
     });
   }
 
@@ -563,13 +587,39 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
   bool _isSaving = false;
 
+  // Every mobile number must be exactly 10 digits (or left blank). The input
+  // formatters already block non-digits and >10; this catches a short (<10)
+  // entry at save. Returns the first offending field's message, else null.
+  String? _mobileError() {
+    final checks = <String, String>{
+      'Student Mobile': _mobileController.text.trim(),
+      'Father Mobile': _fatherMobileController.text.trim(),
+      'Mother Mobile': _motherMobileController.text.trim(),
+      'Guardian Mobile': _guardianMobileController.text.trim(),
+      'Payment Mobile': _payMobileController.text.trim(),
+    };
+    for (final e in checks.entries) {
+      if (e.value.isNotEmpty && e.value.length != 10) {
+        return '${e.key} must be exactly 10 digits';
+      }
+    }
+    return null;
+  }
+
   Future<void> _saveNewStudent() async {
     if (_admNoController.text.trim().isEmpty ||
         _nameController.text.trim().isEmpty ||
         _selectedClass == null ||
         _mobileController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields (Roll No, Name, Class, Mobile)'), backgroundColor: AppColors.error),
+        SnackBar(content: Text(schoolTerm('Please fill all required fields (Roll No, Name, Class, Mobile)')), backgroundColor: AppColors.error),
+      );
+      return;
+    }
+    final mobErr = _mobileError();
+    if (mobErr != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mobErr), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -605,12 +655,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuclass': _selectedClass,
         'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
         'stucondesc': _selectedConId != null ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId, orElse: () => {})['condesc'] : null,
-        'admname': _selectedAdmName,
-        'quoname': _selectedQuoName,
-        'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
+        // A school has no admission type / quota / batch columns.
+        if (!isSchool) 'admname': _selectedAdmName,
+        if (!isSchool) 'quoname': _selectedQuoName,
+        if (!isSchool) 'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
         'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
         'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
         'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
+        'emisno': _emisController.text.trim().isNotEmpty ? _emisController.text.trim() : null,
+        if (!isSchool) 'umisno': _umisController.text.trim().isNotEmpty ? _umisController.text.trim() : null,
         'community': _communityController.text.trim().isNotEmpty ? _communityController.text.trim() : null,
         'caste': _casteController.text.trim().isNotEmpty ? _casteController.text.trim() : null,
         'religion': _religionController.text.trim().isNotEmpty ? _religionController.text.trim() : null,
@@ -703,7 +756,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _nameController.text.trim().isEmpty ||
         _selectedClass == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields (Roll No, Name, Class)'), backgroundColor: AppColors.error),
+        SnackBar(content: Text(schoolTerm('Please fill all required fields (Roll No, Name, Class)')), backgroundColor: AppColors.error),
+      );
+      return;
+    }
+    final mobErr = _mobileError();
+    if (mobErr != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mobErr), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -726,12 +786,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuclass': _selectedClass,
         'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
         'stucondesc': _selectedConId != null ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId, orElse: () => {})['condesc'] : null,
-        'admname': _selectedAdmName,
-        'quoname': _selectedQuoName,
-        'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
+        // A school has no admission type / quota / batch columns.
+        if (!isSchool) 'admname': _selectedAdmName,
+        if (!isSchool) 'quoname': _selectedQuoName,
+        if (!isSchool) 'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
         'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
         'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
         'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
+        'emisno': _emisController.text.trim().isNotEmpty ? _emisController.text.trim() : null,
+        if (!isSchool) 'umisno': _umisController.text.trim().isNotEmpty ? _umisController.text.trim() : null,
         'community': _communityController.text.trim().isNotEmpty ? _communityController.text.trim() : null,
         'caste': _casteController.text.trim().isNotEmpty ? _casteController.text.trim() : null,
         'religion': _religionController.text.trim().isNotEmpty ? _religionController.text.trim() : null,
@@ -775,7 +838,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Student updated successfully'), backgroundColor: AppColors.success),
         );
-        setState(() => _isFormEnabled = false); // back to view mode
         _loadDropdowns();
       }
     } catch (e) {
@@ -843,7 +905,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Photo upload failed. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Photo upload failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -862,7 +924,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // file inside and uploads them - much faster than Ctrl+A in the file
     // picker when a school has hundreds of photos.
     final folderPath = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select folder of photos named by Roll No (e.g. 6522.jpg)',
+      dialogTitle: schoolTerm('Select folder of photos named by Roll No (e.g. 6522.jpg)'),
     );
     if (folderPath == null) return;
 
@@ -883,7 +945,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not read folder. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Could not read folder. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
       return;
@@ -893,7 +955,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No image files found in that folder'),
-            backgroundColor: Colors.orange,
+            backgroundColor: AppColors.warning,
           ),
         );
       }
@@ -988,7 +1050,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       style: TextStyle(color: AppColors.success, fontWeight: FontWeight.w700, fontSize: 14.sp)),
                   if (unmatched.isNotEmpty) ...[
                     SizedBox(height: 8.h),
-                    Text('Unmatched (${unmatched.length}) - no student with this Roll No:',
+                    Text(schoolTerm('Unmatched (${unmatched.length}) - no student with this Roll No:'),
                         style: TextStyle(color: AppColors.warning, fontWeight: FontWeight.w700, fontSize: 13.sp)),
                     for (final n in unmatched.take(20))
                       Padding(padding: EdgeInsets.only(left: 8.w, top: 2.h), child: Text('* $n', style: TextStyle(fontSize: 12.sp))),
@@ -1031,6 +1093,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
       final ca = courseOrd(a);
       final cb = courseOrd(b);
       if (ca != cb) return ca.compareTo(cb);
+      // Within a course: promotional, then terminal, then TC -- so the main
+      // list mirrors the sidebar, which groups the same way.
+      final g = classGroupRank(a.stuclass).compareTo(classGroupRank(b.stuclass));
+      if (g != 0) return g;
       final la = classOrd(a);
       final lb = classOrd(b);
       if (la != lb) return la.compareTo(lb);
@@ -1159,7 +1225,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
             }
           },
           tilePadding: EdgeInsets.symmetric(horizontal: 14.w),
-          title: Text(courseName, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
+          // Expanded course gets a grey backdrop; its classes render as indented
+          // white cards inside it, so parent (course) vs child (class) is clear.
+          backgroundColor: AppColors.surface,
+          collapsedBackgroundColor: Colors.transparent,
+          shape: const Border(),
+          collapsedShape: const Border(),
+          childrenPadding: EdgeInsets.fromLTRB(12.w, 2.h, 10.w, 8.h),
+          title: Text(courseName.toUpperCase(), style: TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w800, color: AppColors.primary, letterSpacing: 0.4)),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1174,8 +1247,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
           ),
           children: (classCounts.keys.toList()
                 ..sort((a, b) {
-                  // Sort classes within a course by master-table ordid;
-                  // unknown classes fall to the end alphabetically.
+                  // Promotional, then terminal, then TC -- before ordid, for
+                  // the same reason the master list does it: a TC batch
+                  // carries an ordid like any other class, so ordid alone
+                  // sorted CSE TC 25 and TC 26 above B.E CSE -I.
+                  final g = classGroupRank(a).compareTo(classGroupRank(b));
+                  if (g != 0) return g;
+                  // Then the master-table ordid, the institution's preferred
+                  // order; unknown classes fall to the end alphabetically.
                   int ordOf(String n) =>
                       _classOrdMap[n.trim()] ?? _classOrdMap[n] ?? 1 << 30;
                   final oa = ordOf(a);
@@ -1187,9 +1266,12 @@ class _StudentsScreenState extends State<StudentsScreen> {
             final count = classCounts[className] ?? 0;
             final classColor = _getClassColor(className);
             final isSelected = _selectedClassFilter == className && _selectedCourseFilter == courseName;
-            return Material(
+            return Padding(
+              padding: EdgeInsets.only(bottom: 6.h),
+              child: Material(
               color: Colors.transparent,
               child: InkWell(
+                borderRadius: BorderRadius.circular(10.r),
                 onTap: () async {
                   setState(() {
                     _selectedClassFilter = className;
@@ -1211,20 +1293,21 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   }
                 },
                 child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
                   decoration: BoxDecoration(
-                    color: isSelected ? classColor.withValues(alpha: 0.08) : null,
-                    border: const Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+                    color: isSelected ? classColor.withValues(alpha: 0.10) : Colors.white,
+                    borderRadius: BorderRadius.circular(10.r),
+                    border: Border.all(color: isSelected ? classColor.withValues(alpha: 0.55) : AppColors.border, width: isSelected ? 1.4 : 1),
                   ),
                   child: Row(
                     children: [
                       Container(
-                        width: 34.w, height: 34.h,
+                        width: 30.w, height: 30.h,
                         decoration: BoxDecoration(
                           color: classColor.withValues(alpha: isSelected ? 0.2 : 0.1),
-                          borderRadius: BorderRadius.circular(9.r),
+                          borderRadius: BorderRadius.circular(8.r),
                         ),
-                        child: Center(child: AppIcon('book-1', size: 16, color: classColor)),
+                        child: Center(child: AppIcon('book-1', size: 15, color: classColor)),
                       ),
                       SizedBox(width: 10.w),
                       Expanded(
@@ -1250,6 +1333,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   ),
                 ),
               ),
+            ),
             );
           }).toList(),
         );
@@ -1299,7 +1383,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ),
               AppIcon('book-1', size: 14, color: classColor.withValues(alpha: 0.7)),
               SizedBox(width: 6.w),
-              Text('Class $className', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: classColor)),
+              Text(schoolTerm('Class $className'), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: classColor)),
               SizedBox(width: 6.w),
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 1.h),
@@ -1316,7 +1400,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         // Student list
         Expanded(
           child: students.isEmpty
-              ? Center(child: Text('No students found', style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp)))
+              ? const EmptyState(icon: 'people', title: 'No students found', subtitle: 'Try a different search, or import students.')
               : ListView.builder(
                   padding: EdgeInsets.symmetric(vertical: 4.h),
                   itemCount: students.length,
@@ -1360,53 +1444,26 @@ class _StudentsScreenState extends State<StudentsScreen> {
   }
 
   List<Widget> _buildImportActionButtons() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final btnHeight = compact ? 30.0 : 40.0;
-    final iconSize = compact ? 12.0 : 16.0;
-    final hPad = compact ? 10.0 : 18.0;
-    final radius = compact ? 6.0 : 10.0;
-    final textSize = compact ? 11.0 : 13.0;
-    final gap = compact ? 6.0 : 10.0;
+    final iconSize = AppBtn.iconSize(context);
+    final gap = AppBtn.gap(context);
 
-    Widget importPhotos = SizedBox(
-      height: btnHeight,
-      child: ElevatedButton.icon(
-        onPressed: _isImportingPhotos ? null : _bulkImportPhotos,
-        icon: _isImportingPhotos
-            ? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-            : Icon(Icons.photo_library, size: iconSize),
-        label: Text(_isImportingPhotos
-            ? 'Uploading ${_photoUploadDone}/$_photoUploadTotal…'
-            : 'Import Photos'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          padding: EdgeInsets.symmetric(horizontal: hPad),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-          elevation: 0,
-        ),
-      ),
+    Widget importPhotos = ElevatedButton.icon(
+      onPressed: _isImportingPhotos ? null : _bulkImportPhotos,
+      icon: _isImportingPhotos
+          ? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : Icon(Icons.photo_library, size: iconSize),
+      label: Text(_isImportingPhotos
+          ? 'Uploading ${_photoUploadDone}/$_photoUploadTotal…'
+          : 'Import Photos'),
     );
 
-    Widget importCsv = SizedBox(
-      height: btnHeight,
-      child: ElevatedButton.icon(
-        onPressed: () => setState(() {
-          _showImport = !_showImport;
-          if (!_showImport) _resetImport();
-        }),
-        icon: AppIcon(_showImport ? 'close-circle' : 'document-upload', size: iconSize),
-        label: Text(_showImport ? 'Close Import' : 'Import CSV/Excel'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _showImport ? AppColors.error : AppColors.accent,
-          foregroundColor: Colors.white,
-          padding: EdgeInsets.symmetric(horizontal: hPad),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-          elevation: 0,
-        ),
-      ),
+    Widget importCsv = ElevatedButton.icon(
+      onPressed: _checkingImportPrereq ? null : _onImportCsvPressed,
+      icon: _checkingImportPrereq
+          ? SizedBox(width: iconSize, height: iconSize, child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : AppIcon(_showImport ? 'close-circle' : 'document-upload', size: iconSize),
+      label: Text(_showImport ? 'Close Import' : 'Import CSV/Excel'),
+      style: _showImport ? AppUI.danger(context) : null,
     );
 
     return [
@@ -1417,6 +1474,93 @@ class _StudentsScreenState extends State<StudentsScreen> {
     ];
   }
 
+  /// Opens the CSV/Excel import panel — but only after confirming the import
+  /// prerequisites are in place. Students can be imported only once Master Data
+  /// (classes) and Admission Master (admission types) have been imported, so the
+  /// incoming rows have course/class and admission mappings to resolve against.
+  Future<void> _onImportCsvPressed() async {
+    // Closing the panel is always allowed.
+    if (_showImport) {
+      setState(() {
+        _showImport = false;
+        _resetImport();
+      });
+      return;
+    }
+
+    final auth = context.read<AuthProvider>();
+    final insId = auth.insId ?? 1;
+    setState(() => _checkingImportPrereq = true);
+    final pre = await SupabaseService.getStudentImportPrerequisites(insId);
+    if (!mounted) return;
+    setState(() => _checkingImportPrereq = false);
+
+    if (!pre.hasMasterData || !pre.hasAdmissionMaster) {
+      _showImportPrereqDialog(pre.hasMasterData, pre.hasAdmissionMaster);
+      return;
+    }
+    setState(() => _showImport = true);
+  }
+
+  void _showImportPrereqDialog(bool hasMasterData, bool hasAdmissionMaster) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.info_outline_rounded, color: AppColors.warning),
+            const SizedBox(width: 10),
+            const Text('Import prerequisites'),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Before importing students, please import the following first:'),
+              const SizedBox(height: 16),
+              _prereqRow(schoolTerm('Master Data (Courses & Classes)'), hasMasterData),
+              // A school has no admission types to import.
+              if (!isSchool) ...[
+              const SizedBox(height: 10),
+              _prereqRow('Admission Master (Admission Types)', hasAdmissionMaster),
+              ],
+              const SizedBox(height: 16),
+              Text(
+                isSchool
+                    ? 'Go to Setup → Master Data to import these, then try again.'
+                    : 'Go to Setup → Master Data and Setup → Admission Master to import these, then try again.',
+                style: AppUI.muted.copyWith(height: 1.4),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _prereqRow(String label, bool done) {
+    return Row(
+      children: [
+        Icon(done ? Icons.check_circle_rounded : Icons.cancel_rounded,
+            color: done ? AppColors.success : AppColors.error, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(label, style: AppUI.label),
+        ),
+        AppUI.chip(done ? 'Done' : 'Missing', done ? AppStatus.success : AppStatus.danger),
+      ],
+    );
+  }
+
   Widget _buildAllStudentsTable() {
     final q = _searchController.text.toLowerCase();
     final allStudents = q.isEmpty
@@ -1424,7 +1568,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         : _students.where((s) => s.stuname.toLowerCase().contains(q) || s.stuadmno.toLowerCase().contains(q) || (s.courname ?? '').toLowerCase().contains(q)).toList();
     final totalStudents = allStudents.length;
 
-    final cellStyle = TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+    final cellStyle = AppUI.cell;
 
     return Column(
       children: [
@@ -1455,11 +1599,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.w),
             child: Container(
               clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              decoration: AppUI.card(),
               child: AppVerticalScrollbar(
                 header: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1469,24 +1609,24 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 2, child: Text('MOBILE NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                        Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
+                        if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text('MOBILE NO', style: AppUI.tableHead)),
+                        Expanded(flex: 1, child: Text('VIEW', textAlign: TextAlign.right, style: AppUI.tableHead)),
                       ],
                     ),
                   ),
-                  Container(height: 1, color: AppColors.border),
+                  Container(height: 1, color: AppColors.divider),
                   ],
                 ),
                 builder: (context, controller) => ListView.separated(
                       controller: controller,
                       itemCount: allStudents.length,
-                      separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border),
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                       itemBuilder: (context, index) {
                         final s = allStudents[index];
                         final serialNo = index + 1;
@@ -1502,9 +1642,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                 Expanded(flex: 3, child: Text(s.stuname, style: cellStyle, overflow: TextOverflow.ellipsis)),
                                 Expanded(flex: 2, child: Text(s.courname ?? '-', style: cellStyle)),
                                 Expanded(flex: 2, child: Text(s.stuclass, style: cellStyle)),
-                                Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
+                                if (!isSchool) Expanded(flex: 2, child: Text(s.batch ?? '-', style: cellStyle)),
                                 Expanded(flex: 2, child: Text(s.stumobile.isEmpty ? '-' : s.stumobile, style: cellStyle)),
-                                Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary))),
+                                Expanded(flex: 1, child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Container(
+                                    width: 30.w,
+                                    height: 30.w,
+                                    decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
+                                    child: const Center(child: AppIcon('user', size: 16, color: AppColors.accent)),
+                                  ),
+                                )),
                               ],
                             ),
                           ),
@@ -1541,26 +1689,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
             s.stuadmno.toLowerCase().contains(q)).toList();
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Ledger-style class header: icon + class name (colored) + count
-          // pill + search field. No back/breadcrumb/export - class switching
-          // happens via the sidebar.
+          // pill + search field + import buttons (same as the All Students view).
+          // Class switching happens via the sidebar.
           Container(
             padding: EdgeInsets.fromLTRB(12.w, 10.h, 16.w, 10.h),
             decoration: BoxDecoration(
               color: classColor.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(12.r),
-                topRight: Radius.circular(12.r),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(AppUI.cardRadius),
+                topRight: Radius.circular(AppUI.cardRadius),
               ),
-              border: const Border(bottom: BorderSide(color: AppColors.border)),
+              border: const Border(bottom: BorderSide(color: AppColors.divider)),
             ),
             child: Row(
               children: [
@@ -1589,6 +1733,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   onChanged: (_) => setState(() {}),
                   width: 260.w,
                 ),
+                ..._buildImportActionButtons(),
               ],
             ),
           ),
@@ -1600,24 +1745,30 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 3, child: Text('STUDENT NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('BATCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('GENDER', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('MOBILE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('ACTION', textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                    Expanded(flex: 1, child: Text('S NO.', style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                    Expanded(flex: 3, child: Text('STUDENT NAME', style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                    if (!isSchool) Expanded(flex: 2, child: Text('BATCH', style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text('GENDER', style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text('MOBILE', style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text('VIEW', textAlign: TextAlign.right, style: AppUI.tableHead)),
                   ],
                 ),
               ),
               builder: (context, controller) => filteredStudents.isEmpty
-                ? Center(child: Text('No students found', style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp)))
+                ? AppUI.empty(
+                    icon: 'people',
+                    title: 'No students found',
+                    why: q.isEmpty
+                        ? schoolTerm('No students in this class yet. Use Import CSV/Excel to add them.')
+                        : 'No student matches your search.',
+                  )
                 : ListView.separated(
                     controller: controller,
                     padding: EdgeInsets.zero,
                     itemCount: filteredStudents.length,
-                    separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.4)),
+                    separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                     itemBuilder: (context, index) {
                       final s = filteredStudents[index];
                       return InkWell(
@@ -1630,14 +1781,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
                           color: index.isEven ? Colors.white : AppColors.surface,
                           child: Row(
                             children: [
-                              Expanded(flex: 1, child: Text('${index + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                              Expanded(flex: 1, child: Text('${index + 1}', style: AppUI.cell)),
                               Expanded(flex: 2, child: Text(s.stuadmno, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                              Expanded(flex: 3, child: Text(s.stuname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), overflow: TextOverflow.ellipsis)),
-                              Expanded(flex: 2, child: Text(s.courname ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                              Expanded(flex: 2, child: Text(s.batch ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                              Expanded(flex: 1, child: Text(s.stugender, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                              Expanded(flex: 2, child: Text(s.stumobile, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                              Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.accent))),
+                              Expanded(flex: 3, child: Text(s.stuname, style: AppUI.cell, overflow: TextOverflow.ellipsis)),
+                              Expanded(flex: 2, child: Text(s.courname ?? '-', style: AppUI.cell)),
+                              if (!isSchool) Expanded(flex: 2, child: Text(s.batch ?? '-', style: AppUI.cell)),
+                              Expanded(flex: 1, child: Text(s.stugender, style: AppUI.cell)),
+                              Expanded(flex: 2, child: Text(s.stumobile, style: AppUI.cell)),
+                              Expanded(flex: 1, child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Container(
+                                  width: 30.w,
+                                  height: 30.w,
+                                  decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
+                                  child: const Center(child: AppIcon('user', size: 16, color: AppColors.accent)),
+                                ),
+                              )),
                             ],
                           ),
                         ),
@@ -1662,22 +1821,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
         if (_globalSearchController.text.isNotEmpty) ...[
           Container(
             constraints: BoxConstraints(maxHeight: 300.h),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10.r),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(),
             child: _isGlobalSearching
                 ? const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()))
                 : _globalSearchResults.isEmpty
-                    ? Padding(
-                        padding: EdgeInsets.all(16.w),
-                        child: Center(child: Text('No students found', style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp))),
+                    ? AppUI.empty(
+                        icon: 'people',
+                        title: 'No students found',
+                        why: 'No student matches that search. Try a different name or number.',
                       )
                     : ListView.separated(
                         shrinkWrap: true,
                         itemCount: _globalSearchResults.length,
-                        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border),
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                         itemBuilder: (context, index) {
                           final s = _globalSearchResults[index];
                           return ListTile(
@@ -1688,7 +1844,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               child: Text(s.stuname[0].toUpperCase(), style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700, fontSize: 12.sp)),
                             ),
                             title: Text(s.stuname, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.sp)),
-                            subtitle: Text('Adm No: ${s.stuadmno} | Mobile: ${s.stumobile} | Class: ${s.stuclass}', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+                            subtitle: Text(schoolTerm('Adm No: ${s.stuadmno} | Mobile: ${s.stumobile} | Class: ${s.stuclass}'), style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
                             onTap: () async {
                               _globalSearchController.clear();
                               setState(() {
@@ -1727,11 +1883,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 SizedBox(
                   width: 260.w,
             child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              decoration: AppUI.card(),
               child: Column(
                 children: [
                   // Header
@@ -1739,13 +1891,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 10.h),
                     child: Column(
                       children: [
-                        Row(
-                          children: [
-                            AppIcon('people', color: AppColors.accent, size: 20),
-                            SizedBox(width: 8.w),
-                            Expanded(
-                              child: Text('Students', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                            ),
+                        AppUI.cardHeader(
+                          icon: 'people',
+                          title: 'Students',
+                          trailing: [
                             Container(
                               padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
                               decoration: BoxDecoration(
@@ -1760,7 +1909,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       ],
                     ),
                   ),
-                  Divider(height: 1.h, color: AppColors.border),
+                  const Divider(height: 1, color: AppColors.divider),
                   // Class list (always visible)
                   Expanded(
                     child: _buildClassList(),
@@ -1770,17 +1919,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
             ),
           ),
 
-          SizedBox(width: 16.w),
+          SizedBox(width: AppUI.gap),
 
           // RIGHT - Student Details or Class Table
           Expanded(
             child: _selectedStudent == null
                 ? Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12.r),
-                      border: Border.all(color: AppColors.border),
-                    ),
+                    decoration: AppUI.card(),
                     clipBehavior: Clip.antiAlias,
                     child: _selectedClassFilter != null ? _buildClassStudentTable(_selectedClassFilter!) : _buildAllStudentsTable(),
                   )
@@ -1791,11 +1936,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                         Container(
                           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                           margin: EdgeInsets.only(bottom: 8.h),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(10.r),
-                            border: Border.all(color: AppColors.border),
-                          ),
+                          decoration: AppUI.card(),
                           child: Row(
                             children: [
                               InkWell(
@@ -1805,7 +1946,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                   padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
                                   decoration: BoxDecoration(
                                     color: AppColors.accent,
-                                    borderRadius: BorderRadius.circular(8.r),
+                                    borderRadius: BorderRadius.circular(AppUI.controlRadius),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -1838,12 +1979,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               // Student Information panel
                               Container(
                                 width: double.infinity,
-                                padding: EdgeInsets.all(20.w),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12.r),
-                                  border: Border.all(color: AppColors.border),
-                                ),
+                                padding: EdgeInsets.all(AppUI.cardPad),
+                                decoration: AppUI.card(),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -1854,23 +1991,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Row(children: [
-                                                AppIcon('user', color: AppColors.accent, size: 20),
-                                                SizedBox(width: 8.w),
-                                                Text('Student Information',
-                                                    style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                                                const Spacer(),
-                                                if (_selectedStudent != null && !_isFormEnabled)
-                                                  OutlinedButton.icon(
-                                                    onPressed: () => setState(() => _isFormEnabled = true),
-                                                    icon: AppIcon('edit-2', size: 16, color: AppColors.primary),
-                                                    label: const Text('Edit'),
-                                                    style: OutlinedButton.styleFrom(
-                                                      foregroundColor: AppColors.primary,
-                                                      side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
-                                                    ),
-                                                  ),
-                                              ]),
+                                              AppUI.cardHeader(icon: 'user', title: 'Student Information'),
                                               SizedBox(height: 6.h),
                                               Row(children: [
                                                 if (_insLogo != null)
@@ -1915,7 +2036,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                         ),
                                       ],
                                     ),
-                                    const Divider(color: AppColors.border),
+                                    const Divider(color: AppColors.divider),
                                     SizedBox(height: 4.h),
                                     IgnorePointer(
                                       ignoring: !_isFormEnabled,
@@ -1924,9 +2045,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                   ],
                                 ),
                               ),
-                              SizedBox(height: 16.h),
+                              SizedBox(height: AppUI.gap),
                               _panel(title: 'Parent / Guardian Information', icon: 'people', child: _buildParentFields()),
-                              SizedBox(height: 16.h),
+                              SizedBox(height: AppUI.gap),
                               _panel(title: 'Payment In Charge', icon: 'indianrupeesign.circle.fill', child: _buildPaymentFields()),
                               if (_selectedStudent == null || _isFormEnabled) ...[
                                 SizedBox(height: 16.h),
@@ -1936,11 +2057,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                       child: TextButton.icon(
                                         onPressed: _isSaving ? null : _cancelForm,
                                         icon: AppIcon('close-circle', size: 16),
-                                        label: Text('Cancel', style: TextStyle(fontWeight: FontWeight.w500)),
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: AppColors.textSecondary,
-                                          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                                        ),
+                                        label: const Text('Cancel'),
+                                        style: TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
                                       ),
                                     ),
                                     SizedBox(width: 12.w),
@@ -1950,13 +2068,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                         icon: _isSaving
                                             ? SizedBox(width: 18.w, height: 18.h, child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                                             : AppIcon('save-2', size: 18),
-                                        label: Text(_isSaving ? 'Saving...' : (_selectedStudent == null ? 'Save' : 'Update'), style: const TextStyle(fontWeight: FontWeight.w600)),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: AppColors.accent,
-                                          foregroundColor: Colors.white,
-                                          padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                                        ),
+                                        label: Text(_isSaving ? 'Saving...' : (_selectedStudent == null ? 'Save' : 'Update')),
                                       ),
                                     ),
                                   ],
@@ -1995,7 +2107,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: _years.map((y) => DropdownMenuItem(value: y['yr_id'].toString(), child: Text(y['yrlabel']))).toList(),
-            selectedItemBuilder: (context) => _years.map((y) => Align(alignment: Alignment.centerLeft, child: Text(y['yrlabel'], overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+            selectedItemBuilder: (context) => _years.map((y) => Align(alignment: Alignment.centerLeft, child: Text(y['yrlabel'], overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
             onChanged: (v) => setState(() {
               _selectedYrId = v;
               _selectedYrLabel = v != null
@@ -2004,9 +2116,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
             }),
             validator: (v) => v == null ? 'Required' : null,
           )),
-          _fieldFull(label: 'Roll Number *', child: TextFormField(
+          _fieldFull(label: schoolTerm('Roll Number *'), child: TextFormField(
             controller: _admNoController,
-            decoration: _dec('Enter roll no', filled: _admNoController.text.trim().isNotEmpty),
+            decoration: _dec(schoolTerm('Enter roll no'), filled: _admNoController.text.trim().isNotEmpty),
             style: _inputStyle.copyWith(color: _admNoController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
@@ -2045,11 +2157,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   _admDate != null
                       ? '${_admDate!.day.toString().padLeft(2, '0')}/${_admDate!.month.toString().padLeft(2, '0')}/${_admDate!.year}'
                       : 'Select admission date',
-                  style: TextStyle(
-                    color: _admDate != null ? AppColors.accent : AppColors.textSecondary.withValues(alpha: 0.6),
-                    fontSize: 13.sp,
-                    fontWeight: _admDate != null ? FontWeight.w700 : FontWeight.normal,
-                  ),
+                  style: _admDate != null
+                      ? AppUI.fieldText(context, filled: true)
+                      : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
                 ),
               ),
             ),
@@ -2063,7 +2173,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: _genders.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-            selectedItemBuilder: (context) => _genders.map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+            selectedItemBuilder: (context) => _genders.map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
             onChanged: (v) => setState(() => _selectedGender = v),
             validator: (v) => v == null ? 'Required' : null,
           )),
@@ -2083,11 +2193,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 _dob != null
                     ? '${_dob!.day.toString().padLeft(2, '0')}/${_dob!.month.toString().padLeft(2, '0')}/${_dob!.year}'
                     : 'DD/MM/YYYY',
-                style: TextStyle(
-                  color: _dob != null ? AppColors.accent : AppColors.textSecondary.withValues(alpha: 0.6),
-                  fontSize: 13.sp,
-                  fontWeight: _dob != null ? FontWeight.w700 : FontWeight.normal,
-                ),
+                style: _dob != null
+                    ? AppUI.fieldText(context, filled: true)
+                    : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
               ),
             ),
           )),
@@ -2101,7 +2209,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             style: _inputStyle.copyWith(color: _mobileController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             keyboardType: TextInputType.phone,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
           )),
           _fieldFull(label: 'Email', child: TextFormField(
             controller: _emailController,
@@ -2110,9 +2218,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
             onChanged: (_) => setState(() {}),
             keyboardType: TextInputType.emailAddress,
           )),
-          _fieldFull(label: 'Course', child: TextFormField(
+          _fieldFull(label: schoolTerm('Course'), child: TextFormField(
             initialValue: _selectedStudent?.courname ?? '',
-            decoration: _dec('Course', filled: (_selectedStudent?.courname ?? '').trim().isNotEmpty),
+            decoration: _dec(schoolTerm('Course'), filled: (_selectedStudent?.courname ?? '').trim().isNotEmpty),
             style: _inputStyle.copyWith(color: (_selectedStudent?.courname ?? '').trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             enabled: false,
           )),
@@ -2120,7 +2228,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         SizedBox(height: 14.h),
 
         _row3(
-          _fieldFull(label: 'Class *', child: Builder(builder: (_) {
+          _fieldFull(label: schoolTerm('Class *'), child: Builder(builder: (_) {
             final classOptions = [
               ..._classes,
               if (_selectedClass != null &&
@@ -2133,11 +2241,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
               elevation: 6,
-              decoration: _dec('Select class', filled: _selectedClass != null),
+              decoration: _dec(schoolTerm('Select class'), filled: _selectedClass != null),
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               style: _inputStyle,
               items: classOptions.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-              selectedItemBuilder: (context) => classOptions.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+              selectedItemBuilder: (context) => classOptions.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
               onChanged: (v) => setState(() => _selectedClass = v),
               validator: (v) => v == null ? 'Required' : null,
             );
@@ -2152,7 +2260,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
             style: _inputStyle,
             items: _bloodGroups.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-            selectedItemBuilder: (context) => _bloodGroups.map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+            selectedItemBuilder: (context) => _bloodGroups.map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
             onChanged: (v) => setState(() => _selectedBloodGroup = v),
           )),
           _fieldFull(label: 'Concession', child: Builder(builder: (_) {
@@ -2176,13 +2284,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               style: _inputStyle,
               items: items,
-              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
               onChanged: (v) => setState(() => _selectedConId = v),
             );
           })),
         ),
         SizedBox(height: 14.h),
 
+        // A school has no admission type / quota / batch.
+        if (!isSchool) ...[
         _row3(
           _fieldFull(label: 'Admission Type', child: Builder(builder: (_) {
             final seen = <String>{};
@@ -2203,7 +2313,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               style: _inputStyle,
               items: items,
-              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
               onChanged: (v) => setState(() => _selectedAdmName = v),
             );
           })),
@@ -2226,7 +2336,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               style: _inputStyle,
               items: items,
-              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+              selectedItemBuilder: (context) => items.map((e) => Align(alignment: Alignment.centerLeft, child: Text((e.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
               onChanged: (v) => setState(() => _selectedQuoName = v),
             );
           })),
@@ -2238,6 +2348,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           )),
         ),
         SizedBox(height: 14.h),
+        ],
 
         _fieldFull(label: 'Address *', child: TextFormField(
           controller: _addressController,
@@ -2259,8 +2370,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
             style: _inputStyle.copyWith(color: _pinController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
             onChanged: (_) => setState(() {}),
             keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+            validator: (v) => (v == null || v.trim().isEmpty)
+                ? 'Required'
+                : v.trim().length != 6 ? 'Must be 6 digits' : null,
           )),
         ),
         SizedBox(height: 14.h),
@@ -2277,6 +2390,30 @@ class _StudentsScreenState extends State<StudentsScreen> {
           _fieldFull(label: 'Community', child: TextFormField(controller: _communityController, decoration: _dec('Enter community', filled: _communityController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _communityController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
           _fieldFull(label: 'Caste', child: TextFormField(controller: _casteController, decoration: _dec('Enter caste', filled: _casteController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _casteController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
           _fieldFull(label: 'Religion', child: TextFormField(controller: _religionController, decoration: _dec('Enter religion', filled: _religionController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _religionController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+        ),
+        // EMIS / UMIS — government identifiers carried over from admission.
+        // Digits only, like Aadhar, but no fixed length: the formats differ and
+        // have changed between intakes.
+        _row4(
+          _fieldFull(label: schoolTerm('EMIS No'), child: TextFormField(
+            controller: _emisController,
+            decoration: _dec(schoolTerm('Enter EMIS no'), filled: _emisController.text.trim().isNotEmpty),
+            style: _inputStyle.copyWith(color: _emisController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            onChanged: (_) => setState(() {}),
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          )),
+          // A school has no UMIS number.
+          isSchool ? const SizedBox.shrink() : _fieldFull(label: 'UMIS No', child: TextFormField(
+            controller: _umisController,
+            decoration: _dec('Enter UMIS no', filled: _umisController.text.trim().isNotEmpty),
+            style: _inputStyle.copyWith(color: _umisController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            onChanged: (_) => setState(() {}),
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          )),
+          const SizedBox.shrink(),
+          const SizedBox.shrink(),
         ),
         SizedBox(height: 14.h),
 
@@ -2296,7 +2433,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               DropdownMenuItem(value: 'Y', child: Text('Yes')),
               DropdownMenuItem(value: 'N', child: Text('No')),
             ],
-            selectedItemBuilder: (context) => ['Yes', 'No'].map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+            selectedItemBuilder: (context) => ['Yes', 'No'].map((g) => Align(alignment: Alignment.centerLeft, child: Text(g, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
             onChanged: (v) => setState(() => _selectedHostel = v),
           )),
           _fieldFull(label: 'Admitted Year', child: TextFormField(controller: _admittedYearController, decoration: _dec('e.g. 2025-2026', filled: _admittedYearController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _admittedYearController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
@@ -2337,9 +2474,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               label: Text(tab),
               selected: selected,
               onSelected: (_) => setState(() => _selectedParentTab = tab),
-              selectedColor: AppColors.accent,
-              labelStyle: TextStyle(color: selected ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w600),
-              backgroundColor: AppColors.border.withValues(alpha: 0.3),
+              labelStyle: TextStyle(color: selected ? AppColors.primary : AppColors.textSecondary, fontWeight: FontWeight.w700),
             );
           }).toList(),
         ),
@@ -2360,7 +2495,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               style: _inputStyle.copyWith(color: controllers.$2.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
               onChanged: (_) => setState(() {}),
               keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
             )),
             _fieldFull(label: '$prefix Occupation', child: TextFormField(
               controller: controllers.$3,
@@ -2411,7 +2546,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         style: _inputStyle.copyWith(color: _payMobileController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
         onChanged: (_) => setState(() {}),
         keyboardType: TextInputType.phone,
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
         validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
       )),
     ),
@@ -2444,6 +2579,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'nationality': 'Nationality',
     'transportmode': 'Transport Mode',
     'hostel': 'Hostel (Y/N)',
+    'division': 'Division',
     'stuadmdate': 'Admission Date',
     'admittyear': 'Admitted Year',
     'fathername': 'Father Name',
@@ -2477,7 +2613,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // ("Roll No *" â†’ "roll no") so re-uploaded templates still auto-map.
     // Normalise: drop the "*" mandatory flag, turn dots into spaces ("REG.NO"
     // -> "reg no"), lowercase, and collapse runs of whitespace.
-    final h = header.replaceAll('*', '').replaceAll('.', ' ').toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+    final h = collegeTerm(header).replaceAll('*', '').replaceAll('.', ' ').toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
     const map = {
       'adm no': 'stuadmno', 'admission number': 'stuadmno', 'admno': 'stuadmno', 'admission no': 'stuadmno', 'roll no': 'stuadmno', 'rollno': 'stuadmno', 'roll number': 'stuadmno',
       'reg no': 'stuadmno', 'regno': 'stuadmno', 'reg number': 'stuadmno', 'register no': 'stuadmno', 'register number': 'stuadmno', 'registration no': 'stuadmno', 'registration number': 'stuadmno',
@@ -2496,6 +2632,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'blood group': 'stubloodgrp', 'bloodgroup': 'stubloodgrp',
       'aadhar no': 'aadharno', 'aadhaar no': 'aadharno', 'aadhar': 'aadharno', 'aadhaar': 'aadharno', 'aadharno': 'aadharno', 'aadhar number': 'aadharno', 'aadhaar number': 'aadharno',
       'community': 'community',
+      'division': 'division', 'div': 'division', 'division name': 'division',
       'caste': 'caste',
       'religion': 'religion',
       'nationality': 'nationality',
@@ -2768,7 +2905,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     // Headers follow the import grid exactly (same order + labels + the new
     // Medium / ID columns), so the template always matches what the grid shows.
-    final headers = _importGridKeys.map((k) => _importGridLabels[k] ?? k).toList();
+    final headers = _gridKeys.map((k) => _importGridLabels[k] ?? k).toList();
 
     final headerStyle = xl.CellStyle(
       backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
@@ -2778,7 +2915,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     for (int i = 0; i < headers.length; i++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-      cell.value = xl.TextCellValue(headers[i]);
+      cell.value = xl.TextCellValue(schoolTerm(headers[i]));
       cell.cellStyle = headerStyle;
       sheet.setColumnWidth(i, 18.0);
     }
@@ -2818,7 +2955,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     // Headers + row values keyed to the import grid, so the sample always
     // matches the grid's order + new columns (Medium / IDs left blank).
-    final headers = _importGridKeys.map((k) => _importGridLabels[k] ?? k).toList();
+    final headers = _gridKeys.map((k) => _importGridLabels[k] ?? k).toList();
     final sampleMaps = <Map<String, String>>[
       {
         'stuadmno': 'CS001', 'stuname': 'RAHUL KUMAR', 'stugender': 'Male', 'studob': '2004-06-15',
@@ -2826,7 +2963,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuemail': 'rahul@email.com', 'concession': 'GENERAL', 'stuaddress': 'No.5 Main Street',
         'stucity': 'Chennai', 'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600001',
         'stubloodgrp': 'B+', 'aadharno': '234567890123', 'community': 'OC', 'caste': 'Iyer',
-        'religion': 'Hindu', 'nationality': 'Indian', 'transportmode': 'Y', 'hostel': 'N',
+        'religion': 'Hindu', 'nationality': 'Indian', 'transportmode': 'Y', 'hostel': 'N', 'division': 'PRIMARY',
         'fathername': 'KUMAR S', 'fathermobile': '9876543210', 'fatheroccupation': 'Business',
         'mothername': 'LAKSHMI K', 'mothermobile': '9876543211', 'motheroccupation': 'Teacher',
         'paremail': 'kumar@email.com', 'payincharge': 'KUMAR S', 'payinchargemob': '9876543210',
@@ -2845,7 +2982,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'batch': '2025-2026', 'admittyear': '2025-2026', 'medium': 'Tamil',
       },
     ];
-    final sampleRows = sampleMaps.map((m) => _importGridKeys.map((k) => m[k] ?? '').toList()).toList();
+    final sampleRows = sampleMaps.map((m) => _gridKeys.map((k) => m[k] ?? '').toList()).toList();
 
     final headerStyle = xl.CellStyle(
       backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
@@ -2855,7 +2992,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     for (int i = 0; i < headers.length; i++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-      cell.value = xl.TextCellValue(headers[i]);
+      cell.value = xl.TextCellValue(schoolTerm(headers[i]));
       cell.cellStyle = headerStyle;
       sheet.setColumnWidth(i, 18);
     }
@@ -2970,6 +3107,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
   /// Per-field validation. Returns a map of fieldKey â†’ reason for every cell
   /// that's invalid. Empty map means the row passes.
+  /// Digits-only form of a mobile number (strips spaces, ':', '+', '-', etc.).
+  /// Returns null when the result is empty.
+  static String? _digitsOnly(String? v) {
+    if (v == null) return null;
+    final d = v.replaceAll(RegExp(r'[^0-9]'), '');
+    return d.isEmpty ? null : d;
+  }
+
   Map<String, String> _validateImportRow(int rowIdx) {
     final row = _importRows[rowIdx];
     final errors = <String, String>{};
@@ -2992,6 +3137,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (dobRaw.isNotEmpty && _parseDate(dobRaw) == null) {
       errors['studob'] = 'Invalid date (use YYYY-MM-DD)';
     }
+    // Mobile numbers must be EXACTLY 10 digits (spaces / punctuation ignored,
+    // so "9043531846" and ":9043531846" both count as 10). Only checked when a
+    // value is present — required-ness is handled above.
+    for (final mk in const ['stumobile', 'fathermobile', 'mothermobile', 'guardianmobile']) {
+      final raw = (_importCellByKey(row, mk) ?? '').trim();
+      if (raw.isEmpty) continue;
+      if (raw.replaceAll(RegExp(r'[^0-9]'), '').length != 10) {
+        errors[mk] = schoolTerm('${_importGridLabels[mk] ?? _importFields[mk] ?? mk} must be 10 digits');
+      }
+    }
+    if (payMob != null && payMob.replaceAll(RegExp(r'[^0-9]'), '').length != 10) {
+      errors['payinchargemob'] = 'Pay Mobile must be 10 digits';
+    }
     // Class + course must exist in the master and (if both supplied) agree
     // with the class-course mapping. Skip if masters haven't loaded yet -
     // server enforces too.
@@ -3001,15 +3159,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (classRaw.isNotEmpty && _importClassNames.isNotEmpty) {
       final k = norm(classRaw);
       if (!_importClassNames.contains(k)) {
-        errors['stuclass'] = 'Class "$classRaw" not found in master';
+        errors['stuclass'] = schoolTerm('Class "$classRaw" not found in master');
       } else if (courseRaw.isNotEmpty && _importCourseNames.isNotEmpty) {
         final ck = norm(courseRaw);
         if (!_importCourseNames.contains(ck)) {
-          errors['courname'] = 'Course "$courseRaw" not found in master';
+          errors['courname'] = schoolTerm('Course "$courseRaw" not found in master');
         } else {
           final expected = _importClassToCourse[k];
           if (expected != null && expected != ck) {
-            errors['courname'] = 'Class "$classRaw" belongs to "$expected"';
+            errors['courname'] = schoolTerm('Class "$classRaw" belongs to "$expected"');
           }
         }
       }
@@ -3023,7 +3181,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final detail = <String>[];
     fieldErrors.forEach((k, v) {
       if (v == 'Required') {
-        missing.add(_importGridLabels[k] ?? _importFields[k] ?? k);
+        missing.add(schoolTerm(_importGridLabels[k] ?? _importFields[k] ?? k));
       } else {
         detail.add(v);
       }
@@ -3037,7 +3195,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
   static String _friendlyError(String msg) {
     final m = msg.toLowerCase();
     if (m.contains('duplicate key') || m.contains('unique constraint')) {
-      if (m.contains('stuadmno') || m.contains('admission')) return 'Roll number already exists';
+      if (m.contains('stuadmno') || m.contains('admission')) return schoolTerm('Roll number already exists');
       if (m.contains('stuemail') || m.contains('email')) return 'Email already exists';
       if (m.contains('payinchargemob')) return 'Payment mobile already exists';
       return 'Duplicate record found';
@@ -3046,9 +3204,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
       final match = RegExp(r'column "(\w+)"').firstMatch(msg);
       final col = match?.group(1) ?? '';
       final labels = {'stuadmno': 'Roll No', 'stuname': 'Name', 'stugender': 'Gender', 'studob': 'Date of Birth', 'stumobile': 'Mobile', 'stuclass': 'Class', 'payincharge': 'Pay In Charge', 'payinchargemob': 'Payment Mobile'};
-      return '${labels[col] ?? col} is required';
+      return schoolTerm('${labels[col] ?? col} is required');
     }
-    if (m.contains('foreign key') || m.contains('fkey')) return 'Invalid reference - check class, year, or concession values';
+    if (m.contains('foreign key') || m.contains('fkey')) return schoolTerm('Invalid reference - check class, year, or concession values');
     if (m.contains('check constraint')) {
       if (m.contains('gender')) return 'Gender must be M, F, or T';
       if (m.contains('email')) return 'Invalid email format';
@@ -3137,9 +3295,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
     // Admission type / concession / quota masters — used to resolve the import's
     // ID columns (Admission Type Id / Concession Id / Quota Id) to canonical
     // names. An ID (when present) wins over the corresponding name column.
-    final admMasterRaw = await SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', insId).eq('activestatus', 1);
+    // A school has no admissiontype / quota tables -- skip those reads there.
+    final admMasterRaw = isSchool ? <Map<String, dynamic>>[] : await SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', insId).eq('activestatus', 1);
     final conMasterRaw = await SupabaseService.fromSchema('concessioncategory').select('con_id, condesc').eq('ins_id', insId).eq('activestatus', 1);
-    final quoMasterRaw = await SupabaseService.fromSchema('quota').select('quo_id, quoname').eq('ins_id', insId).eq('activestatus', 1);
+    final quoMasterRaw = isSchool ? <Map<String, dynamic>>[] : await SupabaseService.fromSchema('quota').select('quo_id, quoname').eq('ins_id', insId).eq('activestatus', 1);
     final admNameById = <int, String>{ for (final r in (admMasterRaw as List)) if (r['adm_id'] != null) (r['adm_id'] as int): (r['admname'] ?? '').toString().trim() };
     final conNameById = <int, String>{ for (final r in (conMasterRaw as List)) if (r['con_id'] != null) (r['con_id'] as int): (r['condesc'] ?? '').toString().trim() };
     final quoNameById = <int, String>{ for (final r in (quoMasterRaw as List)) if (r['quo_id'] != null) (r['quo_id'] as int): (r['quoname'] ?? '').toString().trim() };
@@ -3246,7 +3405,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'courname': courNameCanon,
         'cour_id': courId,
         'admit_cour_id': admitCourId,
-        'stumobile': _importCellByKey(row, 'stumobile'),
+        'stumobile': _digitsOnly(_importCellByKey(row, 'stumobile')),
         'stuemail': _validEmail(_importCellByKey(row, 'stuemail')),
         'concession': conNameResolved,
         'stuaddress': _nullIfEmpty(_importCellByKey(row, 'stuaddress')),
@@ -3264,23 +3423,25 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'nationality': _nullIfEmpty(_importCellByKey(row, 'nationality')),
         'transportmode': _normalizeTransportMode(_importCellByKey(row, 'transportmode')),
         'hostel': _normalizeYesNo(_importCellByKey(row, 'hostel')),
+        'division': _truncate(_nullIfEmpty(_importCellByKey(row, 'division')), 50),
         'fathername': _nullIfEmpty(_importCellByKey(row, 'fathername')),
-        'fathermobile': _nullIfEmpty(_importCellByKey(row, 'fathermobile')),
+        'fathermobile': _digitsOnly(_importCellByKey(row, 'fathermobile')),
         'fatheroccupation': _nullIfEmpty(_importCellByKey(row, 'fatheroccupation')),
         'mothername': _nullIfEmpty(_importCellByKey(row, 'mothername')),
-        'mothermobile': _nullIfEmpty(_importCellByKey(row, 'mothermobile')),
+        'mothermobile': _digitsOnly(_importCellByKey(row, 'mothermobile')),
         'motheroccupation': _nullIfEmpty(_importCellByKey(row, 'motheroccupation')),
         'guardianname': _nullIfEmpty(_importCellByKey(row, 'guardianname')),
-        'guardianmobile': _nullIfEmpty(_importCellByKey(row, 'guardianmobile')),
+        'guardianmobile': _digitsOnly(_importCellByKey(row, 'guardianmobile')),
         'guardianoccupation': _nullIfEmpty(_importCellByKey(row, 'guardianoccupation')),
         'paremail': _validEmail(_importCellByKey(row, 'paremail')),
         'payincharge': payName ?? '-',
-        'payinchargemob': payMob,
-        'admname': admNameResolved,
-        'adm_id': admId,
-        'quoname': quoNameResolved,
-        'quo_id': quoId,
-        'batch': _truncate(_nullIfEmpty(_importCellByKey(row, 'batch')), 9),
+        'payinchargemob': _digitsOnly(payMob),
+        // student_import on a school has no admission type / quota / batch.
+        if (!isSchool) 'admname': admNameResolved,
+        if (!isSchool) 'adm_id': admId,
+        if (!isSchool) 'quoname': quoNameResolved,
+        if (!isSchool) 'quo_id': quoId,
+        if (!isSchool) 'batch': _truncate(_nullIfEmpty(_importCellByKey(row, 'batch')), 9),
         'admittyear': _truncate(_nullIfEmpty(_importCellByKey(row, 'admittyear')), 9),
         'medium': _truncate(_nullIfEmpty(_importCellByKey(row, 'medium')), 30),
         'status': 'PENDING',
@@ -3364,11 +3525,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
     return Container(
       padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3377,13 +3534,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
             children: [
               InkWell(
                 onTap: _resetImport,
-                borderRadius: BorderRadius.circular(MediaQuery.of(context).size.width <= 1366 ? 6 : 10),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 child: Builder(builder: (context) {
-                  final compact = MediaQuery.of(context).size.width <= 1366;
-                  final hPad = compact ? 10.0 : 14.0;
-                  final radius = compact ? 6.0 : 10.0;
-                  final textSize = compact ? 11.0 : 13.0;
-                  final innerGap = compact ? 4.0 : 6.0;
+                  final compact = AppUI.compact(context);
+                  final hPad = compact ? 14.0 : 18.0;
+                  const radius = AppUI.controlRadius;
+                  final textSize = compact ? 13.0 : 14.0;
+                  final innerGap = AppBtn.gap(context);
                   return Container(
                     height: AppBtn.height(context),
                     padding: EdgeInsets.symmetric(horizontal: hPad),
@@ -3396,7 +3553,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       children: [
                         AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                         SizedBox(width: innerGap),
-                        Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                        Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                       ],
                     ),
                   );
@@ -3405,22 +3562,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
               SizedBox(width: 12.w),
               AppIcon('document-upload', size: 20, color: AppColors.accent),
               SizedBox(width: 8.w),
-              Text('Import Students', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+              Text('Import Students', style: AppUI.cardTitle),
               const Spacer(),
               if (_importFileName != null)
-                Text(_importFileName!, style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                Text(_importFileName!, style: AppUI.muted),
               SizedBox(width: 12.w),
               ElevatedButton.icon(
                 onPressed: _pickImportFile,
                 icon: AppIcon('document-upload', size: 16),
                 label: const Text('Import'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
               SizedBox(width: 8.w),
               Builder(builder: (_) {
@@ -3433,13 +3583,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   onPressed: hasErrors ? _exportImportRowsWithErrors : _exportStudentTemplate,
                   icon: AppIcon(hasErrors ? 'document-download' : 'grid-1', size: 16),
                   label: Text(hasErrors ? 'Export with Errors' : 'Format to Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF217346),
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                    textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
                 );
               }),
               SizedBox(width: 8.w),
@@ -3447,13 +3591,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 onPressed: _exportSampleData,
                 icon: AppIcon('document-download', size: 16),
                 label: const Text('Sample Data'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE65100),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
             ],
           ),
@@ -3467,15 +3604,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(8.r),
+                color: Colors.white,
+                border: Border.all(color: AppColors.cardBorder),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
               ),
               clipBehavior: Clip.hardEdge,
               child: LayoutBuilder(builder: (ctx, constraints) {
                 final viewportW = constraints.maxWidth;
                 final sNoW = 50.w;
-                final dividers = (_importGridKeys.length + 1) * 1.0;
-                final dataColsRaw = _importGridKeys.fold<double>(0, (sum, k) => sum + _gridColWidth(k));
+                final gridKeys = _gridKeys;
+                final dividers = (gridKeys.length + 1) * 1.0;
+                final dataColsRaw = gridKeys.fold<double>(0, (sum, k) => sum + _gridColWidth(k));
                 final totalRaw = sNoW + dataColsRaw + dividers;
                 // If natural width fits the viewport, scale data columns up to fill it
                 // (keeps S.No fixed). Otherwise keep widths and let the user scroll.
@@ -3496,19 +3635,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
                             children: [
                               // Header row
                               Container(
-                                decoration: BoxDecoration(
-                                  color: AppColors.tableHeadBg,
-                                  borderRadius: BorderRadius.only(
-                                    topLeft: Radius.circular(7.r),
-                                    topRight: Radius.circular(7.r),
-                                  ),
-                                ),
+                                decoration: AppUI.tableHeadBar,
                                 child: Row(
                                   children: [
                                     _gridHeaderCell('S.No', width: sNoW, center: true),
                                     _gridHeaderDivider(),
-                                    for (final key in _importGridKeys) ...[
-                                      _gridHeaderCell(_importGridLabels[key] ?? key, width: colW(key)),
+                                    for (final key in gridKeys) ...[
+                                      _gridHeaderCell(schoolTerm(_importGridLabels[key] ?? key), width: colW(key)),
                                       _gridHeaderDivider(),
                                     ],
                                   ],
@@ -3517,17 +3650,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               // Data rows
                               Expanded(
                                 child: _importRows.isEmpty
-                                    ? Center(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            AppIcon('element-4', size: 48.sp, color: AppColors.textSecondary.withValues(alpha: 0.3)),
-                                            SizedBox(height: 8.h),
-                                            Text('No data loaded', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                                            SizedBox(height: 4.h),
-                                            Text('Click Browse to load a CSV or Excel file', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                                          ],
-                                        ),
+                                    ? AppUI.empty(
+                                        icon: 'element-4',
+                                        title: 'No data loaded',
+                                        why: 'Click Browse to load a CSV or Excel file',
                                       )
                                     : ListView.builder(
                                         itemCount: _importRows.length,
@@ -3542,12 +3668,12 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                             child: Row(
                                               children: [
                                                 _gridDataCell('${index + 1}', width: sNoW, center: true),
-                                                for (final key in _importGridKeys)
+                                                for (final key in gridKeys)
                                                   cellErrs.containsKey(key)
                                                       ? Tooltip(
                                                           message: cellErrs[key]!,
                                                           child: Container(
-                                                            color: const Color(0xFFFCE4E4),
+                                                            color: AppColors.errorBg,
                                                             child: _gridDataCell(_importMappedCell(row, key), width: colW(key)),
                                                           ),
                                                         )
@@ -3590,7 +3716,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             children: [
               Text(
                 '${_importRows.length} rows',
-                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                style: AppUI.cell,
               ),
               const Spacer(),
               ElevatedButton.icon(
@@ -3598,11 +3724,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 icon: AppIcon(_importValidated ? 'tick-circle' : 'tick-circle', size: 16),
                 label: Text(_importValidated ? 'Validated' : 'Validate'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _importRows.isNotEmpty && !_importValidated ? Colors.orange : (_importValidated ? AppColors.success : Colors.grey),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
+                  backgroundColor: _importRows.isNotEmpty && !_importValidated ? AppColors.warning : (_importValidated ? AppColors.success : AppColors.textLight),
                 ),
               ),
               SizedBox(width: 8.w),
@@ -3610,22 +3732,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 onPressed: _importValidated ? _startStudentImport : null,
                 icon: AppIcon('save-2', size: 16),
                 label: const Text('Save'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
               SizedBox(width: 8.w),
               OutlinedButton(
                 onPressed: _resetImport,
-                style: OutlinedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
                 child: const Text('Close'),
               ),
             ],
@@ -3641,21 +3751,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
       child: Container(
         width: 400.w,
         padding: EdgeInsets.all(32.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10.r),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const CircularProgressIndicator(),
             SizedBox(height: 20.h),
-            Text('Importing... ${_importedCount + _skippedCount} / $_totalCount', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+            Text('Importing... ${_importedCount + _skippedCount} / $_totalCount', style: AppUI.label),
             SizedBox(height: 12.h),
-            LinearProgressIndicator(value: progress, backgroundColor: AppColors.border, valueColor: const AlwaysStoppedAnimation(AppColors.accent)),
+            LinearProgressIndicator(value: progress, backgroundColor: AppColors.divider, valueColor: const AlwaysStoppedAnimation(AppColors.primary)),
             SizedBox(height: 8.h),
-            Text('$_importedCount imported, $_skippedCount skipped', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+            Text('$_importedCount imported, $_skippedCount skipped', style: AppUI.muted),
           ],
         ),
       ),
@@ -3667,27 +3773,23 @@ class _StudentsScreenState extends State<StudentsScreen> {
       child: Container(
         width: 500.w,
         padding: EdgeInsets.all(32.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10.r),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             AppIcon('tick-circle', size: 64.sp, color: AppColors.success),
             SizedBox(height: 16.h),
-            Text('Import Complete', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            Text('Import Complete', style: AppUI.cardTitle),
             SizedBox(height: 12.h),
-            Text('$_importedCount imported successfully, $_skippedCount skipped', style: TextStyle(fontSize: 13.sp)),
+            Text('$_importedCount imported successfully, $_skippedCount skipped', style: AppUI.body),
             if (_importErrors.isNotEmpty) ...[
               SizedBox(height: 16.h),
               Container(
                 height: 150.h,
                 padding: EdgeInsets.all(12.w),
                 decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(8.r),
+                  color: AppColors.errorBg,
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 ),
                 child: ListView(
                   children: _importErrors.map((e) => Padding(
@@ -3700,12 +3802,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
             SizedBox(height: 20.h),
             ElevatedButton(
               onPressed: _resetImport,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-              ),
               child: const Text('Done'),
             ),
           ],
@@ -3714,7 +3810,25 @@ class _StudentsScreenState extends State<StudentsScreen> {
     );
   }
 
+  /// Column width = the fixed width below, or the header's own width when the
+  /// label is longer (school wording such as "ADMITTED STANDARD ID" is longer
+  /// than the college label the fixed width was sized for), so a header never
+  /// runs into the next column.
   double _gridColWidth(String key) {
+    final label = schoolTerm(_importGridLabels[key] ?? key).toUpperCase();
+    final tp = TextPainter(
+      text: TextSpan(
+          text: label,
+          style: AppUI.tableHead),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final headerW = tp.width + 20.w + 8; // cell padding (10.w each side) + slack
+    final base = _gridColBaseWidth(key);
+    return headerW > base ? headerW : base;
+  }
+
+  double _gridColBaseWidth(String key) {
     // Widths sized to fit header text on a single line at 13.sp / w700
     // (e.g., "GUARDIAN MOBILE" needs ~150px; "CONCESSION *" needs ~140px).
     switch (key) {
@@ -3736,6 +3850,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'stubloodgrp': return 130;       // BLOOD GROUP
       case 'aadharno': return 140;          // AADHAR NO
       case 'community': return 130;         // COMMUNITY
+      case 'division': return 120;          // DIVISION
       case 'caste': return 110;             // CASTE
       case 'religion': return 120;          // RELIGION
       case 'nationality': return 130;       // NATIONALITY
@@ -3773,14 +3888,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.visible,
-        style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3.w),
+        style: AppUI.tableHead,
       ),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
   }
 
   Widget _gridHeaderDivider() {
-    return Container(width: 1, height: 36.h, color: AppColors.border);
+    return Container(width: 1, height: 36.h, color: AppColors.divider);
   }
 
   Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = false}) {
@@ -3788,9 +3903,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
       padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
       decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: AppColors.border.withValues(alpha: 0.3))),
+        border: const Border(right: BorderSide(color: AppColors.divider)),
       ),
-      child: Text(text, style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+      child: Text(text, style: AppUI.cell, overflow: TextOverflow.ellipsis),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
   }
@@ -3801,22 +3916,14 @@ class _StudentsScreenState extends State<StudentsScreen> {
   Widget _panel({required String title, required String icon, required Widget child}) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            AppIcon(icon, color: AppColors.accent, size: 20),
-            SizedBox(width: 8.w),
-            Text(title, style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-          ]),
-          SizedBox(height: 4.h),
-          const Divider(color: AppColors.border),
+          AppUI.cardHeader(icon: icon, title: title),
+          SizedBox(height: 12.h),
+          const Divider(color: AppColors.divider),
           SizedBox(height: 12.h),
           child,
         ],
@@ -3871,27 +3978,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: Colors.black)),
-        SizedBox(height: 6.h),
+        label.endsWith(' *')
+            ? AppUI.fieldLabel(label.substring(0, label.length - 2), required: true)
+            : AppUI.fieldLabel(label),
         child,
       ],
     );
   }
 
-  // [filled] = the field has a value. Filled fields get an amber (accent)
-  // border; empty fields stay grey; the focused border is always amber.
+  // [filled] = the field has a value (accent edge); empty fields stay grey.
   InputDecoration _dec(String hint, {bool filled = false}) {
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.6), fontSize: 13.sp),
-      contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-      filled: true,
-      fillColor: Colors.white,
-    );
+    return AppUI.field(context, hint, filled: filled);
   }
 }
 

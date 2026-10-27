@@ -65,14 +65,22 @@ class PaymentModel {
           (json['transtotalamount'] as num?)?.toDouble() ??
           (json['payamount'] as num?)?.toDouble() ?? 0,
       transcurrency: json['transcurrency'] ?? json['paycurrency'] ?? 'INR',
-      paydate:
-          json['paydate'] != null ? DateTime.parse(json['paydate'].toString()) : null,
+      // .toLocal() is NOT optional here. fn_get_transactions returns
+      // paydate::timestamptz, so once the database was moved to Asia/Kolkata it
+      // arrives carrying an offset -- "2026-10-05T00:25:50+05:30". DateTime.parse
+      // normalises ANY offset to UTC, so .day then reads back as the 4th, and a
+      // receipt taken at 00:25 on the 5th vanished from the 5th's list and from
+      // the DATE column. Everything downstream reads .year/.month/.day off these
+      // two fields, so the conversion has to happen at the parse, once.
+      paydate: json['paydate'] != null
+          ? DateTime.parse(json['paydate'].toString()).toLocal()
+          : null,
       paystatus: json['paystatus'],
       paymethod: json['paymethod'],
       payreference: json['payreference'],
       createdby: json['createdby'],
       createdat: json['createdat'] != null
-          ? DateTime.parse(json['createdat'].toString())
+          ? DateTime.parse(json['createdat'].toString()).toLocal()
           : DateTime.now(),
       activestatus: json['activestatus'] ?? 1,
       stuname: json['stuname'],

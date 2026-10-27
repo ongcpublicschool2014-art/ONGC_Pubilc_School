@@ -41,17 +41,12 @@ class _SplashScreenState extends State<SplashScreen>
     await Future.delayed(const Duration(seconds: 4));
     if (!mounted) return;
 
+    // No auto-login: closing the app ends the session, so every launch goes to
+    // the login screen and asks for the password. This also clears any password
+    // an older build had saved for auto-login.
     final auth = context.read<AuthProvider>();
-    final loggedIn = await auth.tryAutoLogin();
+    await auth.forgetSavedPassword();
     if (!mounted) return;
-
-    if (loggedIn) {
-      Navigator.pushReplacementNamed(
-        context,
-        auth.isSuperAdmin ? AppRoutes.superAdminDashboard : AppRoutes.dashboard,
-      );
-      return;
-    }
 
     // First-run gate: on a brand-new database there is no super-admin
     // account. Until one is created, route to the Super Admin

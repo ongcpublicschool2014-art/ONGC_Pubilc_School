@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 import 'app_icon.dart';
+import 'app_ui.dart';
 
 /// Pill-style tab button used across the app's screens (Fee Collection,
 /// Reports, Master Data, Bank Reconciliation, Settings, Transactions).
@@ -30,11 +31,10 @@ class PillTab extends StatelessWidget {
     final compact = MediaQuery.of(context).size.width <= 1366;
     final hPad = compact ? 14.0 : 18.0;
     final vPad = compact ? 8.0 : 10.0;
-    final radius = compact ? 18.0 : 22.0;
     final iconSize = compact ? 14.0 : 16.0;
     final textSize = compact ? 12.0 : 13.0;
     final innerGap = compact ? 6.0 : 8.0;
-    final fg = selected ? AppColors.textOnPrimary : AppColors.textPrimary;
+    final fg = selected ? AppColors.textOnPrimary : AppColors.textSecondary;
 
     return GestureDetector(
       onTap: onTap,
@@ -44,7 +44,7 @@ class PillTab extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
         decoration: BoxDecoration(
           color: selected ? AppColors.tabSelected : Colors.transparent,
-          borderRadius: BorderRadius.circular(radius),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -55,7 +55,7 @@ class PillTab extends StatelessWidget {
               label,
               style: TextStyle(
                 fontSize: textSize,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 color: fg,
               ),
             ),

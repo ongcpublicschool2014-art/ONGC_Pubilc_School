@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 
 import './app_icon.dart';
+import './app_ui.dart';
 class StatData {
   final String label;
   final String value;
@@ -39,52 +40,47 @@ class _StatCardState extends State<StatCard> {
       onExit: (_) => setState(() => _isHovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+        padding: const EdgeInsets.all(16),
+        // AppUI.kpi anatomy: icon tile, CAPS label, 20/800 value, muted sub
+        // (here the change pill). Hover only tints the card edge.
+        decoration: AppUI.card().copyWith(
           border: Border.all(
             color: _isHovered
                 ? widget.data.color.withValues(alpha: 0.3)
-                : AppColors.border,
+                : AppColors.cardBorder,
           ),
-          boxShadow: [
-            if (_isHovered)
-              BoxShadow(
-                color: widget.data.color.withValues(alpha: 0.08),
-                blurRadius: 20,
-                offset: const Offset(0, 8),
-              ),
-          ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: widget.data.color.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
+            AppUI.iconTile(widget.data.icon, color: widget.data.color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.data.label.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppUI.caps,
                   ),
-                  child: AppIcon(
-                    widget.data.icon,
-                    color: widget.data.color,
-                    size: 18,
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.data.value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
                   ),
-                ),
-                Flexible(
-                  child: Container(
+                  const SizedBox(height: 4),
+                  Container(
                     padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: widget.data.isPositive
-                          ? AppColors.success.withValues(alpha: 0.08)
-                          : AppColors.error.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(6),
+                          ? AppColors.successBg
+                          : AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(999),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -107,31 +103,16 @@ class _StatCardState extends State<StatCard> {
                               color: widget.data.isPositive
                                   ? AppColors.success
                                   : AppColors.error,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              widget.data.value,
-              style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              widget.data.label,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.textSecondary,
-                    fontSize: 13,
-                  ),
+                ],
+              ),
             ),
           ],
         ),

@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/auth_provider.dart';
 import '../utils/friendly_error.dart';
+import '../utils/master_usage.dart';
 import '../services/admission_service.dart';
 import '../screens/admin/master_import_screen.dart';
 import 'app_icon.dart';
+import 'app_ui.dart';
 import 'card_title_block.dart';
 
 /// Reusable add/list/delete panel for a simple smallint-PK lookup master
@@ -31,6 +33,9 @@ class MasterCrudPanel extends StatefulWidget {
   /// Some lookup tables (e.g. concessioncategory) have no `createdby` audit
   /// column. Set false to omit it from inserts so the save doesn't fail.
   final bool includeCreatedBy;
+  /// Hide the Import button entirely (add-one-at-a-time only). Used for masters
+  /// like Division where bulk import isn't wanted.
+  final bool hideImport;
   const MasterCrudPanel({
     super.key,
     required this.table,
@@ -41,6 +46,7 @@ class MasterCrudPanel extends StatefulWidget {
     this.countLabel,
     this.importTabIndex,
     this.includeCreatedBy = true,
+    this.hideImport = false,
   });
 
   @override
@@ -131,7 +137,41 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     }
   }
 
+  /// What each master this panel drives is referenced BY.
+  ///
+  /// Keyed on the table, so adding a new master here without an entry is
+  /// visible: it gets no check, and that is a decision rather than an
+  /// oversight. The id is listed before the name deliberately -- see
+  /// countReferencing.
+  static const _usage = <String, (String, String, String, String, String)>{
+    // table              refs table   id col    name col        noun       what to do
+    'admissiontype':     ('students', 'adm_id', 'admname',      'student', 'Change their admission type first.'),
+    'quota':             ('students', 'quo_id', 'quoname',      'student', 'Change their quota first.'),
+    'concessioncategory':('students', 'con_id', 'stucondesc',   'student', 'Remove the concession from them first.'),
+    'community':         ('students', '',       'community',    'student', 'Change their community first.'),
+  };
+
+  /// Refused before the confirmation dialog: being asked "are you sure?" and
+  /// only then told it was never allowed is worse than not being asked.
+  Future<bool> _blockedByUsage(int id, String name) async {
+    final u = _usage[widget.table];
+    if (u == null) return false;
+    final (refTable, idCol, nameCol, noun, fix) = u;
+    final n = await countReferencing(refTable, [
+      if (idCol.isNotEmpty) (idCol, id),
+      (nameCol, name),
+    ]);
+    if (n == 0) return false;
+    if (mounted) {
+      await showMasterInUseDialog(context,
+          name: name, count: n, noun: noun, fix: fix);
+    }
+    return true;
+  }
+
   Future<void> _delete(int id, String name) async {
+    if (await _blockedByUsage(id, name)) return;
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -170,13 +210,12 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
             backgroundColor: Colors.white,
             foregroundColor: AppColors.textPrimary,
             elevation: 0,
-            shape: const Border(bottom: BorderSide(color: AppColors.border)),
+            shape: const Border(bottom: BorderSide(color: AppColors.cardBorder)),
             title: Row(
               children: [
                 const AppIcon('document-upload', size: 20, color: AppColors.primary),
                 SizedBox(width: 10.w),
-                Text('Import ${widget.title}',
-                    style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                Text('Import ${widget.title}', style: AppUI.cardTitle),
               ],
             ),
           ),
@@ -213,7 +252,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
             children: [
               Text('Paste one ${widget.title.toLowerCase()} per line. '
                   'Duplicates and existing records are skipped.',
-                  style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+                  style: AppUI.muted),
               SizedBox(height: 10.h),
               TextField(
                 controller: ctrl,
@@ -231,7 +270,6 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
             child: const Text('Import'),
           ),
         ],
@@ -292,86 +330,32 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
 
   // ── design helpers (mirror master_data_screen / fee-master / admission-master) ──
 
-  Widget _lbl(String text) =>
-      Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
+  Widget _lbl(String text) => Text(text, style: AppUI.label);
 
-  InputDecoration _filledFieldDec(String hint, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-      filled: true,
-      fillColor: Colors.white,
-    );
-  }
+  InputDecoration _filledFieldDec(String hint, {bool filled = false}) =>
+      AppUI.field(context, hint, filled: filled);
 
-  TextStyle _fieldTextStyle() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    return TextStyle(fontWeight: FontWeight.w500, fontSize: compact ? 11 : 14, color: const Color(0xFF555555));
-  }
+  TextStyle _fieldTextStyle() => AppUI.fieldText(context);
 
-  TextStyle _hStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-  TextStyle _cStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+  TextStyle _hStyle() => AppUI.tableHead;
+  TextStyle _cStyle() => AppUI.cell;
 
 
   Widget _importButton() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final btnHeight = compact ? 30.0 : 40.0;
-    final iconSize = compact ? 12.0 : 16.0;
-    final hPad = compact ? 10.0 : 18.0;
-    final radius = compact ? 6.0 : 10.0;
-    final textSize = compact ? 11.0 : 13.0;
-    return SizedBox(
-      height: btnHeight,
-      child: ElevatedButton.icon(
-        onPressed: _saving ? null : _openImport,
-        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
-        label: const Text('Import CSV/Excel'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.accent,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          padding: EdgeInsets.symmetric(horizontal: hPad),
-          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-        ),
-      ),
+    return ElevatedButton.icon(
+      onPressed: _saving ? null : _openImport,
+      icon: AppIcon('document-upload', size: AppBtn.iconSize(context), color: Colors.white),
+      label: const Text('Import CSV/Excel'),
     );
   }
 
   /// Lightweight paste-a-list import button for simple name-only masters
   /// (shown when there is no full CSV/Excel importer for this master).
   Widget _bulkImportButton() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final btnHeight = compact ? 30.0 : 40.0;
-    final iconSize = compact ? 12.0 : 16.0;
-    final hPad = compact ? 10.0 : 18.0;
-    final radius = compact ? 6.0 : 10.0;
-    final textSize = compact ? 11.0 : 13.0;
-    return SizedBox(
-      height: btnHeight,
-      child: ElevatedButton.icon(
-        onPressed: _saving ? null : _bulkImport,
-        icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
-        label: const Text('Import'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.accent,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          padding: EdgeInsets.symmetric(horizontal: hPad),
-          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-        ),
-      ),
+    return ElevatedButton.icon(
+      onPressed: _saving ? null : _bulkImport,
+      icon: AppIcon('document-upload', size: AppBtn.iconSize(context), color: Colors.white),
+      label: const Text('Import'),
     );
   }
 
@@ -386,22 +370,17 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(width: 320.w, child: _addPanel()),
-        SizedBox(width: 16.w),
+        SizedBox(width: AppUI.gap),
         Expanded(child: _listPanel()),
       ],
     );
   }
 
-  /// Add/Edit card. White fill, 10r radius, full border, 20.w padding. Title
-  /// row: amber icon + 15.sp w700 title. Bold-black label above the input.
+  /// Add/Edit card: the kit card with a title block and a labelled input.
   Widget _addPanel() {
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: FocusTraversalGroup(
         child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -417,7 +396,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
           SizedBox(height: 6.h),
           TextField(
             controller: _nameController,
-            style: _fieldTextStyle().copyWith(color: _nameController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            style: AppUI.fieldText(context, filled: _nameController.text.trim().isNotEmpty),
             textCapitalization: TextCapitalization.characters,
             decoration: _filledFieldDec('Enter ${widget.title.toLowerCase()} name', filled: _nameController.text.trim().isNotEmpty),
             onChanged: (_) => setState(() {}),
@@ -433,7 +412,6 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : Icon(_editId != null ? Icons.save : Icons.add, size: 16),
                   label: Text(_editId != null ? 'Update' : 'Add'),
-                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
                 ),
               ),
               if (_editId != null) ...[
@@ -448,18 +426,13 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     );
   }
 
-  /// List card. White fill, 10r radius, full border, 16.w padding. Title bar:
-  /// amber icon + 15.sp w700 title + amber count badge + Spacer + optional
-  /// amber Import CSV/Excel button. Inside is the inner bordered table card.
+  /// List card: the kit card with a title block, count chip, optional
+  /// Import button, and the inner bordered table.
   Widget _listPanel() {
     final countLabel = widget.countLabel ?? '${widget.title.toLowerCase()}s';
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
@@ -467,30 +440,23 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
             child: Row(children: [
               CardTitleBlock(icon: widget.icon, title: '${widget.title}s', subtitle: 'all ${widget.title.toLowerCase()} records'),
               SizedBox(width: 10.w),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8.r),
-                ),
-                child: Text('${_rows.length} $countLabel',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-              ),
+              AppUI.chip('${_rows.length} $countLabel', AppStatus.info),
               const Spacer(),
-              if (widget.importTabIndex != null) _importButton() else _bulkImportButton(),
+              if (!widget.hideImport)
+                (widget.importTabIndex != null ? _importButton() : _bulkImportButton()),
             ]),
           ),
           Expanded(
             child: Container(
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Column(
                 children: [
                   Container(
-                    color: AppColors.tableHeadBg,
+                    decoration: AppUI.tableHeadBar,
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     child: Row(
                       children: [
@@ -504,11 +470,13 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                     child: _loading
                         ? const Center(child: CircularProgressIndicator())
                         : _rows.isEmpty
-                            ? Center(child: Text('No ${widget.title.toLowerCase()} records',
-                                style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                            ? AppUI.empty(
+                                title: 'No ${widget.title.toLowerCase()} records',
+                                why: 'Nothing has been added yet. Use the Add form on the left.',
+                                icon: widget.icon)
                             : ListView.separated(
                                 itemCount: _rows.length,
-                                separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+                                separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                                 itemBuilder: (_, i) {
                                   final r = _rows[i];
                                   final id = r[widget.idCol] is int
@@ -516,7 +484,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                                       : int.tryParse(r[widget.idCol].toString()) ?? 0;
                                   final name = r[widget.nameCol]?.toString() ?? '';
                                   return Container(
-                                    color: i.isEven ? Colors.white : AppColors.surface,
+                                    color: Colors.white,
                                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
                                     child: Row(
                                       children: [

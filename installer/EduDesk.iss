@@ -46,7 +46,11 @@ Name: "quicklaunchicon"; Description: "Create a &Quick Launch shortcut"; GroupDe
 
 [Files]
 ; Copy the entire Release folder
-Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; NEVER package a config.json. A leftover one in the build folder points the
+; installed app at whatever project it names -- a TEST config shipped to
+; customers would send live fee collection, and its Paytm routing, at the
+; wrong database. config.example.json is the deliberate opt-in instead.
+Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "config.json"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -7,6 +7,7 @@ import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
+import '../../widgets/app_ui.dart';
 class CustomRolesScreen extends StatefulWidget {
   const CustomRolesScreen({super.key});
 
@@ -80,7 +81,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         _fetchRoles();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save role'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to save role'), backgroundColor: AppColors.error),
         );
       }
     } catch (e) {
@@ -88,7 +89,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
       // custuserroles before the session-gated RPC is deployed).
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save role'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to save role'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -111,7 +112,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         content: const Text('Are you sure you want to delete this role?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
         ],
       ),
     );
@@ -126,7 +127,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         _fetchRoles();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete role'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Failed to delete role'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -139,29 +140,16 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
 
   /// Table-header cell style, matching _h() in master_data_screen.dart so
   /// every master table reads identically.
-  TextStyle _th() => TextStyle(
-        fontSize: 12.sp,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-        letterSpacing: 0.3,
-      );
+  TextStyle _th() => AppUI.tableHead;
 
   InputDecoration _inputDecoration(String label, {bool filled = false}) {
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      labelText: label,
-      labelStyle: TextStyle(fontSize: 13.sp),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-      contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
-    );
+    return AppUI.field(context, '', label: label, filled: filled);
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.all(20.w),
+      padding: EdgeInsets.all(AppUI.gap),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -169,12 +157,8 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
           SizedBox(
             width: 360.w,
             child: Container(
-              padding: EdgeInsets.all(20.w),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              padding: EdgeInsets.all(AppUI.cardPad),
+              decoration: AppUI.card(),
               child: Form(
                 key: _formKey,
                 child: FocusTraversalGroup(
@@ -182,20 +166,11 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        AppIcon('shield-tick', color: AppColors.accent, size: 18),
-                        SizedBox(width: 8.w),
-                        Text(
-                          _editingUrId != null ? 'Edit Role' : 'Add Role',
-                          style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
+                    AppUI.cardHeader(icon: 'shield-tick', title: _editingUrId != null ? 'Edit Role' : 'Add Role'),
                     SizedBox(height: 20.h),
                     TextFormField(
                       controller: _nameController,
-                      style: TextStyle(color: _nameController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: _nameController.text.trim().isNotEmpty ? FontWeight.w600 : null),
+                      style: AppUI.fieldText(context, filled: _nameController.text.trim().isNotEmpty),
                       onChanged: (_) => setState(() {}),
                       decoration: _inputDecoration('Role Name', filled: _nameController.text.trim().isNotEmpty),
                       validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
@@ -208,12 +183,6 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                             onPressed: _isLoading ? null : _saveRole,
                             icon: AppIcon(_editingUrId != null ? 'save-2' : 'add', size: 18),
                             label: Text(_editingUrId != null ? 'Update' : 'Add'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.accent,
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                            ),
                           ),
                         ),
                         if (_editingUrId != null) ...[
@@ -231,15 +200,12 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
               ),
             ),
           ),
-          SizedBox(width: 24.w),
+          SizedBox(width: AppUI.gap),
           // Table panel
           Expanded(
             child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: AppColors.border),
-              ),
+              clipBehavior: Clip.antiAlias,
+              decoration: AppUI.card(),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -247,34 +213,17 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                   // Plain header + accent count pill, matching Bank Accounts /
                   // Master Data (they don't tint the header band).
                   Container(
-                    padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+                    padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 16.h),
                     child: Row(
                       children: [
                         const CardTitleBlock(icon: 'security-user', title: 'Custom Roles', subtitle: 'all custom roles in this institution'),
                         const Spacer(),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                          decoration: BoxDecoration(
-                            color: AppColors.accent.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8.r),
-                          ),
-                          child: Text('${_roles.length} roles',
-                              style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-                        ),
+                        AppUI.chip('${_roles.length} roles', AppStatus.info),
                         SizedBox(width: 12.w),
-                        SizedBox(
-                          height: AppBtn.height(context),
-                          child: ElevatedButton.icon(
-                            onPressed: _fetchRoles,
-                            icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                            label: const Text('Refresh'),
-                            style: ElevatedButton.styleFrom(
-                              // App-wide Refresh green (used across 13 screens).
-                              backgroundColor: const Color(0xFF10B981),
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                            ),
-                          ),
+                        ElevatedButton.icon(
+                          onPressed: _fetchRoles,
+                          icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
+                          label: const Text('Refresh'),
                         ),
                       ],
                     ),
@@ -283,8 +232,8 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                   // (Master Data, Fee Master): light slate band, dark bold
                   // labels. See _h() in master_data_screen.dart.
                   Container(
-                    padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                    color: AppColors.tableHeadBg,
+                    padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
+                    decoration: AppUI.tableHeadBar,
                     child: Row(
                       children: [
                         SizedBox(width: 40.w, child: Text('S NO.', style: _th())),
@@ -303,20 +252,23 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                   else if (_roles.isEmpty)
                     Padding(
                       padding: EdgeInsets.all(40.w),
-                      child: Center(child: Text('No roles found', style: TextStyle(color: AppColors.textSecondary))),
+                      child: AppUI.empty(title: 'No roles found', why: 'Add one with the form on the left.', icon: 'security-user'),
                     )
                   else
                     ..._roles.asMap().entries.map((entry) {
                       final idx = entry.key;
                       final role = entry.value;
                       return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                        color: idx.isEven ? Colors.white : AppColors.surface,
+                        padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(bottom: BorderSide(color: AppColors.divider)),
+                        ),
                         child: Row(
                           children: [
-                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
-                            Expanded(flex: 3, child: Text(role['urname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500))),
-                            Expanded(flex: 2, child: Text(role['inscode']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
+                            SizedBox(width: 40.w, child: Text('${idx + 1}', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+                            Expanded(flex: 3, child: Text(role['urname']?.toString() ?? '-', style: AppUI.cell)),
+                            Expanded(flex: 2, child: Text(role['inscode']?.toString() ?? '-', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
                             SizedBox(
                               width: 80.w,
                               child: Row(
@@ -336,7 +288,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                                     borderRadius: BorderRadius.circular(6.r),
                                     child: Padding(
                                       padding: EdgeInsets.all(4.w),
-                                      child: AppIcon('trash', size: 16, color: Colors.red),
+                                      child: AppIcon('trash', size: 16, color: AppColors.error),
                                     ),
                                   ),
                                 ],

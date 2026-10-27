@@ -35,7 +35,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 ; Bundle the entire Flutter release output (exe + DLLs + data\).
-Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; NEVER package a config.json. A leftover one in the build folder points the
+; installed app at whatever project it names -- a TEST config shipped to
+; customers would send live fee collection, and its Paytm routing, at the
+; wrong database. config.example.json is the deliberate opt-in instead.
+Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "config.json"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

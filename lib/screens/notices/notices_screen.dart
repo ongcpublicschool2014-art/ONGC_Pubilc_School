@@ -6,9 +6,12 @@ import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 class NoticesScreen extends StatefulWidget {
   const NoticesScreen({super.key});
 
@@ -124,6 +127,18 @@ class _NoticesScreenState extends State<NoticesScreen> {
     }
   }
 
+  AppStatus _priorityStatus(String? priority) {
+    switch (priority?.toLowerCase()) {
+      case 'high':
+      case 'urgent':
+        return AppStatus.danger;
+      case 'medium':
+        return AppStatus.warning;
+      default:
+        return AppStatus.info;
+    }
+  }
+
   String _categoryIcon(String? category) {
     switch (category?.toLowerCase()) {
       case 'exam':
@@ -141,128 +156,118 @@ class _NoticesScreenState extends State<NoticesScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_showCreateForm) return _buildCreateForm();
-    if (_selectedNotice != null) return _buildNoticeDetail(_selectedNotice!);
-    return _buildNoticeList();
+  // ── layout ──────────────────────────────────────────────────────────────────
+  // Master-detail: the notice list (searchable) on the left; the picked notice
+  // -- or the Create Notice form -- on the right.
+  String _query = '';
+
+  dynamic _noticeId(Map<String, dynamic> n) => n['notice_id'] ?? n['id'];
+
+  List<Map<String, dynamic>> get _visibleNotices {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _notices;
+    return _notices.where((n) {
+      final hay = [
+        n['noticetitle'] ?? n['title'],
+        n['noticedesc'] ?? n['description'],
+        n['noticecategory'] ?? n['category'],
+        n['noticetarget'],
+      ].map((e) => e?.toString().toLowerCase() ?? '').join(' ');
+      return hay.contains(q);
+    }).toList();
   }
 
-  Widget _buildNoticeList() {
-    Widget headerBar() => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Row(
-            children: [
-              AppIcon('volume-high', color: AppColors.accent, size: 18),
-              SizedBox(width: 10.w),
-              Text('Notices & Announcements', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8.r),
-                ),
-                child: Text('${_notices.length} notices', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-              ),
-              SizedBox(width: AppBtn.gap(context)),
-              SizedBox(
-                height: AppBtn.height(context),
-                child: ElevatedButton.icon(
-                  onPressed: () => setState(() => _showCreateForm = true),
-                  icon: AppIcon('add', size: AppBtn.iconSize(context), color: Colors.white),
-                  label: Text('Create Notice', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                ),
-              ),
-              SizedBox(width: AppBtn.gap(context)),
-              SizedBox(
-                height: AppBtn.height(context),
-                child: ElevatedButton.icon(
-                  onPressed: _fetchNotices,
-                  icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                  label: const Text('Refresh'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
+  void _openCreate() => setState(() {
+        _showCreateForm = true;
+        _selectedNotice = null;
+      });
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          headerBar(),
-          // Inner card holding zebra-striped notice rows. Same outer/inner
-          // card layout as the report-page tables and the Notifications page.
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(12.w, 0, 12.w, 12.h),
-              child: Container(
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10.r),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: AppVerticalScrollbar(
-                  builder: (context, controller) => _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _notices.isEmpty
-                        ? _buildEmptyState()
-                        : ListView.separated(
-                            controller: controller,
-                            padding: EdgeInsets.zero,
-                            itemCount: _notices.length,
-                            separatorBuilder: (_, __) => Divider(height: 1, thickness: 1, color: AppColors.border.withValues(alpha: 0.6)),
-                            itemBuilder: (context, index) => _buildNoticeCard(_notices[index], index),
-                          ),
-                ),
-              ),
-            ),
+  void _closeDetail() => setState(() {
+        _showCreateForm = false;
+        _selectedNotice = null;
+      });
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = _visibleNotices;
+    return AppMasterDetail(
+      listTitle: 'Notices',
+      listIcon: 'volume-high',
+      listSubtitle: 'Announcements  ·  ${_notices.length} notices',
+      listActions: [
+        ElevatedButton.icon(
+          onPressed: _openCreate,
+          icon: AppIcon('add', size: AppBtn.iconSize(context), color: Colors.white),
+          label: const Text('Create Notice'),
+        ),
+      ],
+      search: Row(children: [
+        Expanded(
+          child: AppSearchField(
+            hintText: 'Search notices',
+            onChanged: (v) => setState(() => _query = v),
           ),
-        ],
+        ),
+        SizedBox(width: 8.w),
+        Tooltip(
+          message: 'Refresh',
+          child: OutlinedButton(
+            onPressed: _fetchNotices,
+            style: OutlinedButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 12.w)),
+            child: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.primary),
+          ),
+        ),
+      ]),
+      list: _buildNoticeList(visible),
+      footer: Text(AppUI.showing(visible.isEmpty ? 0 : 1, visible.length, visible.length), style: AppUI.muted),
+      detail: _showCreateForm
+          ? _buildCreateForm()
+          : (_selectedNotice != null ? _buildNoticeDetail(_selectedNotice!) : null),
+      emptyDetail: AppUI.empty(
+        icon: 'notification-bing',
+        title: 'Select a notice',
+        why: 'Pick a notice on the left to read it, or create a new one.',
+        action: ElevatedButton.icon(
+          onPressed: _openCreate,
+          icon: AppIcon('add', size: AppBtn.iconSize(context), color: Colors.white),
+          label: const Text('Create Notice'),
+        ),
+      ),
+      showDetail: _showCreateForm || _selectedNotice != null,
+      onBack: _closeDetail,
+    );
+  }
+
+  Widget _buildNoticeList(List<Map<String, dynamic>> visible) {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_notices.isEmpty) return _buildEmptyState();
+    if (visible.isEmpty) {
+      return AppUI.empty(
+        icon: 'search-normal',
+        title: 'No matching notices',
+        why: 'Nothing matches "$_query". Clear the search to see every notice.',
+      );
+    }
+    return AppVerticalScrollbar(
+      builder: (context, controller) => ListView.separated(
+        controller: controller,
+        padding: EdgeInsets.zero,
+        itemCount: visible.length,
+        separatorBuilder: (_, __) => const Divider(height: 1, thickness: 1, color: AppColors.divider),
+        itemBuilder: (context, index) => _buildNoticeCard(visible[index], index),
       ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          AppIcon('notification-bing', size: 64, color: AppColors.textSecondary.withValues(alpha: 0.3)),
-          SizedBox(height: 16.h),
-          Text('No notices yet', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-          SizedBox(height: 6.h),
-          Text('Notices and announcements will appear here', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-          SizedBox(height: 20.h),
-          ElevatedButton.icon(
-            onPressed: () => setState(() => _showCreateForm = true),
-            icon: const AppIcon('add', size: 18),
-            label: const Text('Create First Notice'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-              elevation: 0,
-            ),
-          ),
-        ],
+    return AppUI.empty(
+      icon: 'notification-bing',
+      title: 'No notices yet',
+      why: 'Notices and announcements will appear here',
+      action: ElevatedButton.icon(
+        onPressed: _openCreate,
+        icon: AppIcon('add', size: AppBtn.iconSize(context), color: Colors.white),
+        label: const Text('Create First Notice'),
       ),
     );
   }
@@ -273,88 +278,89 @@ class _NoticesScreenState extends State<NoticesScreen> {
     final date = notice['createdat']?.toString() ?? notice['noticedate']?.toString();
     final priority = notice['noticepriority']?.toString() ?? notice['priority']?.toString();
     final category = notice['noticecategory']?.toString() ?? notice['category']?.toString();
+    final selected = !_showCreateForm && _selectedNotice != null && _noticeId(_selectedNotice!) == _noticeId(notice);
 
     final pColor = _priorityColor(priority);
-    return InkWell(
-      onTap: () => setState(() => _selectedNotice = notice),
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
-        color: index.isEven ? Colors.white : AppColors.surface,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Soft circular icon
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.border.withValues(alpha: 0.6)),
+    return Material(
+      color: selected ? AppColors.primaryLight : Colors.white,
+      child: InkWell(
+        onTap: () => setState(() {
+          _showCreateForm = false;
+          _selectedNotice = notice;
+        }),
+        hoverColor: AppColors.primaryLight.withValues(alpha: 0.6),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Soft circular icon
+              Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected ? Colors.white : AppColors.surface,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: AppIcon.linear(_categoryIcon(category), size: 16, color: selected ? AppColors.primary : AppColors.textSecondary),
               ),
-              child: AppIcon.linear(_categoryIcon(category), size: 18, color: AppColors.textSecondary),
-            ),
-            SizedBox(width: 12.w),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            if (priority != null) ...[
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(color: pColor, shape: BoxShape.circle),
+              SizedBox(width: 12.w),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Row(
+                            children: [
+                              if (priority != null) ...[
+                                Tooltip(
+                                  message: '$priority priority',
+                                  child: Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(color: pColor, shape: BoxShape.circle),
+                                  ),
+                                ),
+                                SizedBox(width: 6.w),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  title,
+                                  style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: selected ? AppColors.primary : AppColors.textPrimary, height: 1.2),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                              SizedBox(width: 6.w),
                             ],
-                            Flexible(
-                              child: Text(
-                                title,
-                                style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, height: 1.2),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
-                      SizedBox(width: 8.w),
+                        SizedBox(width: 8.w),
+                        Text(
+                          _timeAgo(date),
+                          style: AppUI.muted.copyWith(fontSize: 12.sp),
+                        ),
+                      ],
+                    ),
+                    if (desc.isNotEmpty) ...[
+                      SizedBox(height: 4.h),
                       Text(
-                        _timeAgo(date),
-                        style: TextStyle(
-                          fontSize: 11.sp,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary.withValues(alpha: 0.75),
-                        ),
+                        desc,
+                        style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.4),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
-                  ),
-                  if (desc.isNotEmpty) ...[
-                    SizedBox(height: 4.h),
-                    Text(
-                      desc,
-                      style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, height: 1.4),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
                   ],
-                ],
+                ),
               ),
-            ),
-            SizedBox(width: 10.w),
-            Padding(
-              padding: EdgeInsets.only(top: 2.h),
-              child: const AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -370,128 +376,91 @@ class _NoticesScreenState extends State<NoticesScreen> {
     final target = notice['noticetarget']?.toString();
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Back header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: AppColors.border),
-          ),
+        // Pane header
+        Padding(
+          padding: EdgeInsets.fromLTRB(AppUI.cardPad, 14.h, 12.w, 14.h),
           child: Row(
             children: [
-              IconButton(
-                icon: const AppIcon.linear('Chevron Left', size: 20),
-                onPressed: () => setState(() => _selectedNotice = null),
-                tooltip: 'Back to notices',
-              ),
+              Expanded(child: Text('Notice Details', style: AppUI.cardTitle)),
+              if (priority != null) AppUI.chip(priority, _priorityStatus(priority)),
               SizedBox(width: 4.w),
-              Text('Notice Details', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              if (priority != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _priorityColor(priority).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text(priority, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: _priorityColor(priority))),
-                ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18, color: AppColors.textSecondary),
+                onPressed: _closeDetail,
+                tooltip: 'Close',
+              ),
             ],
           ),
         ),
-        SizedBox(height: 16.h),
+        const Divider(height: 1, color: AppColors.divider),
 
-        // Detail card
+        // Detail body
         Expanded(
           child: SingleChildScrollView(
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10.r),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title row
+            padding: EdgeInsets.all(AppUI.cardPad),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title row
+                Row(
+                  children: [
+                    AppUI.iconTile(_categoryIcon(category), color: _priorityColor(priority)),
+                    SizedBox(width: 12.w),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: AppUI.cardTitle),
+                          SizedBox(height: 4.h),
+                          Wrap(
+                            spacing: 8.w,
+                            runSpacing: 4.h,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (category != null) AppUI.chip(category, AppStatus.info),
+                              Text(_formatDate(date), style: AppUI.muted.copyWith(color: AppColors.textSecondary)),
+                              Text(_timeAgo(date), style: AppUI.muted),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 32, color: AppColors.divider),
+
+                // Description
+                Text(desc, style: AppUI.body.copyWith(height: 1.7)),
+
+                if (target != null && target.isNotEmpty) ...[
+                  SizedBox(height: 20.h),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 26,
-                        height: 26,
-                        decoration: BoxDecoration(
-                          color: _priorityColor(priority).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6.r),
-                        ),
-                        child: AppIcon(_categoryIcon(category), size: 12, color: _priorityColor(priority)),
-                      ),
-                      SizedBox(width: 16.w),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(title, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700)),
-                            SizedBox(height: 4.h),
-                            Row(
-                              children: [
-                                if (category != null) ...[
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.accent.withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(6.r),
-                                    ),
-                                    child: Text(category, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-                                  ),
-                                  SizedBox(width: 10.w),
-                                ],
-                                Text(_formatDate(date), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                                SizedBox(width: 8.w),
-                                Text(_timeAgo(date), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary.withValues(alpha: 0.6))),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
+                      const AppIcon.linear('people', size: 16, color: AppColors.textLight),
+                      SizedBox(width: 6.w),
+                      Text('Target: ', style: AppUI.muted),
+                      Expanded(child: Text(target, style: AppUI.label)),
                     ],
                   ),
-                  const Divider(height: 32, color: AppColors.border),
-
-                  // Description
-                  Text(desc, style: TextStyle(fontSize: 14.sp, height: 1.7, color: AppColors.textPrimary)),
-
-                  if (target != null && target.isNotEmpty) ...[
-                    SizedBox(height: 20.h),
-                    Row(
-                      children: [
-                        const AppIcon('people', size: 16, color: AppColors.textSecondary),
-                        SizedBox(width: 6.w),
-                        Text('Target: ', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                        Text(target, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ],
-
-                  if (createdBy != null && createdBy.isNotEmpty) ...[
-                    SizedBox(height: 12.h),
-                    const Divider(color: AppColors.border),
-                    SizedBox(height: 12.h),
-                    Row(
-                      children: [
-                        const AppIcon('user', size: 16, color: AppColors.textSecondary),
-                        SizedBox(width: 6.w),
-                        Text('Posted by: ', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                        Text(createdBy, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ],
                 ],
-              ),
+
+                if (createdBy != null && createdBy.isNotEmpty) ...[
+                  SizedBox(height: 12.h),
+                  const Divider(color: AppColors.divider),
+                  SizedBox(height: 12.h),
+                  Row(
+                    children: [
+                      const AppIcon.linear('user', size: 16, color: AppColors.textLight),
+                      SizedBox(width: 6.w),
+                      Text('Posted by: ', style: AppUI.muted),
+                      Flexible(child: Text(createdBy, style: AppUI.label, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -611,32 +580,37 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
     return _courseClassMap[_selectedCourse] ?? const [];
   }
 
+  /// Same edge / fill / radius / height as [AppUI.field], for the tap-to-pick
+  /// controls (dropdown buttons, date and term pickers) on this form.
+  BoxDecoration _controlBox(bool filled) => BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
+        border: Border.all(color: filled ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
+      );
+
   Widget _buildCourseFilterDropdown() {
     final courses = _courseClassMap.keys.toList()..sort();
     final filled = _selectedCourse != null;
     return Container(
+      constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8.r),
-        border: Border.all(color: filled ? AppColors.accent : AppColors.border, width: 1.5),
-      ),
+      decoration: _controlBox(filled),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String?>(
           value: _selectedCourse,
           isExpanded: true,
-          hint: Text('All Courses', style: TextStyle(fontSize: 13.sp)),
+          hint: Text(schoolTerm('All Courses'), style: AppUI.fieldText(context)),
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           elevation: 6,
-          style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+          style: AppUI.fieldText(context),
           icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
           selectedItemBuilder: (context) => [
-            Align(alignment: Alignment.centerLeft, child: Text('All Courses', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: filled ? AppColors.accent : AppColors.textPrimary))),
-            ...courses.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
+            Align(alignment: Alignment.centerLeft, child: Text(schoolTerm('All Courses'), style: AppUI.fieldText(context, filled: filled))),
+            ...courses.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, style: AppUI.fieldText(context, filled: true)))),
           ],
           items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('All Courses')),
+            DropdownMenuItem<String?>(value: null, child: Text(schoolTerm('All Courses'))),
             ...courses.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
           ],
           onChanged: (v) => setState(() {
@@ -659,9 +633,15 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
 
     setState(() => _isLoadingFeeTerms = true);
     try {
-      final demands = await SupabaseService.getFeeDemands(insId);
+      // Only the term column is needed for the dropdown — fetch just that
+      // (deduped client-side) instead of pulling every full feedemand row.
+      final rows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('feedemand')
+          .select('demfeeterm')
+          .eq('ins_id', insId)
+          .eq('activestatus', 1));
       final terms = <String>{};
-      for (final d in demands) {
+      for (final d in rows) {
         final term = d['demfeeterm']?.toString() ?? '';
         if (term.isNotEmpty) terms.add(term);
       }
@@ -713,7 +693,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
             child: StatefulBuilder(builder: (ctx, setLocalState) {
               return Material(
                 elevation: 6,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 color: Colors.white,
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: popupMaxHeight),
@@ -725,23 +705,23 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                         padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                         child: Row(
                           children: [
-                            const Expanded(
-                              child: Text('Select Fee Terms', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                            Expanded(
+                              child: Text('Select Fee Terms', style: AppUI.label),
                             ),
                             InkWell(
                               onTap: () => setLocalState(() => tempSelected
                                 ..clear()
                                 ..addAll(_availableFeeTerms)),
-                              child: const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Select All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                child: Text('Select All', style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.primary)),
                               ),
                             ),
                             InkWell(
                               onTap: () => setLocalState(tempSelected.clear),
-                              child: const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Clear', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                child: Text('Clear', style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.error)),
                               ),
                             ),
                           ],
@@ -758,7 +738,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                     visualDensity: VisualDensity.compact,
                                     controlAffinity: ListTileControlAffinity.leading,
                                     value: tempSelected.contains(t),
-                                    title: Text(t, style: const TextStyle(fontSize: 12)),
+                                    title: Text(t, style: AppUI.cell.copyWith(fontSize: 13.sp)),
                                     onChanged: (v) => setLocalState(() {
                                       if (v == true) {
                                         tempSelected.add(t);
@@ -818,7 +798,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
     }
     if (_targetType == 'Specific Classes' && _selectedClasses.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select at least one class'), backgroundColor: AppColors.error),
+        SnackBar(content: Text(schoolTerm('Please select at least one class')), backgroundColor: AppColors.error),
       );
       return;
     }
@@ -876,16 +856,19 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
         }
       } else if (_targetType == 'Pending Fees') {
         // Get students with pending fee balance, optionally filtered by
-        // term and / or course / classes.
-        final demands = await SupabaseService.getFeeDemands(insId);
+        // term and / or course / classes. Fetch only the two needed columns
+        // and let the server filter balancedue>0 (was: pull every full demand).
+        final rows = await SupabaseService.fetchAll(() => SupabaseService
+            .fromSchema('feedemand')
+            .select('stu_id, demfeeterm')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .gt('balancedue', 0));
         final pendingStuIds = <int>{};
-        for (final d in demands) {
-          final balance = (d['balancedue'] as num?)?.toDouble() ?? 0;
-          if (balance > 0) {
-            if (_pendingFeeTerms.isNotEmpty && !_pendingFeeTerms.contains(d['demfeeterm']?.toString() ?? '')) continue;
-            final stuId = d['stu_id'] as int?;
-            if (stuId != null) pendingStuIds.add(stuId);
-          }
+        for (final d in rows) {
+          if (_pendingFeeTerms.isNotEmpty && !_pendingFeeTerms.contains(d['demfeeterm']?.toString() ?? '')) continue;
+          final stuId = (d['stu_id'] as num?)?.toInt();
+          if (stuId != null) pendingStuIds.add(stuId);
         }
         if (pendingStuIds.isNotEmpty) {
           final allStudents = await SupabaseService.getStudents(insId);
@@ -958,90 +941,45 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
 
   @override
   Widget build(BuildContext context) {
+    // Lives in the right pane of the notices master-detail: pane header, the
+    // scrolling form, then a Cancel + Send footer.
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const AppIcon.linear('Chevron Left', size: 20),
-                onPressed: widget.onBack,
-                tooltip: 'Back to notices',
-              ),
-              SizedBox(width: 4.w),
-              const AppIcon('notification-bing', size: 20, color: AppColors.accent),
-              SizedBox(width: 8.w),
-              Text('Create Notice', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              if (_isSending)
-                SizedBox(width: 20.w, height: 20.h, child: CircularProgressIndicator(strokeWidth: 2))
-              else
-                ElevatedButton.icon(
-                  onPressed: _submitNotice,
-                  icon: const AppIcon('send-2', size: 16),
-                  label: Text('Send Notice', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                    elevation: 0,
-                    textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                  ),
-                ),
-            ],
-          ),
+        // Pane header
+        Padding(
+          padding: EdgeInsets.fromLTRB(AppUI.cardPad, 14.h, AppUI.cardPad, 14.h),
+          child: AppUI.cardHeader(icon: 'notification-bing', title: 'Create Notice'),
         ),
-        SizedBox(height: 16.h),
+        const Divider(height: 1, color: AppColors.divider),
 
         // Form
         Expanded(
           child: SingleChildScrollView(
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10.r),
-                border: Border.all(color: AppColors.border),
-              ),
+            padding: EdgeInsets.all(AppUI.cardPad),
               child: FocusTraversalGroup(
                 child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  AppUI.sectionLabel('Notice'),
                   // Title
-                  Text('Notice Title', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8.h),
+                  AppUI.fieldLabel('Notice Title', required: true),
                   Builder(builder: (context) {
                     final filled = _titleController.text.trim().isNotEmpty;
-                    final idle = filled ? AppColors.accent : AppColors.border;
                     return TextField(
                       controller: _titleController,
                       onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: 'Enter notice title...',
-                        hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.5), fontSize: 13),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      ),
-                      style: TextStyle(fontSize: 14.sp, color: filled ? AppColors.accent : null, fontWeight: filled ? FontWeight.w600 : null),
+                      decoration: AppUI.field(context, 'Enter notice title...', filled: filled),
+                      style: AppUI.fieldText(context, filled: filled),
                     );
                   }),
                   SizedBox(height: 20.h),
 
                   // Target Audience
-                  Text('Target Audience', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8.h),
-                  Row(
+                  AppUI.sectionLabel('Audience'),
+                  AppUI.fieldLabel('Target Audience'),
+                  Wrap(
+                    runSpacing: 10,
                     children: _targetTypes.map((t) {
                       final isSelected = _targetType == t;
                       return Padding(
@@ -1062,9 +1000,9 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                             decoration: BoxDecoration(
-                              color: isSelected ? AppColors.accent : Colors.white,
-                              borderRadius: BorderRadius.circular(8.r),
-                              border: Border.all(color: isSelected ? AppColors.accent : AppColors.border),
+                              color: isSelected ? AppColors.primaryLight : Colors.white,
+                              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                              border: Border.all(color: isSelected ? AppColors.primary : AppColors.border),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -1072,10 +1010,10 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                 AppIcon(
                                   t == 'All Students' ? 'profile-2user' : t == 'Staff' ? 'personalcard' : t == 'Pending Fees' ? 'timer' : 'book-1',
                                   size: 16,
-                                  color: isSelected ? Colors.white : AppColors.textSecondary,
+                                  color: isSelected ? AppColors.primary : AppColors.textSecondary,
                                 ),
                                 SizedBox(width: 6.w),
-                                Text(t, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: isSelected ? Colors.white : AppColors.textSecondary)),
+                                Text(schoolTerm(t), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: isSelected ? AppColors.primary : AppColors.textSecondary)),
                               ],
                             ),
                           ),
@@ -1092,8 +1030,8 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(10.r),
-                        border: Border.all(color: AppColors.border),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.cardBorder),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1109,24 +1047,24 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                           if (_selectedCourse == null) ...[
                             SizedBox(height: 12.h),
                             Text(
-                              'Select a course above to choose classes.',
-                              style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontStyle: FontStyle.italic),
+                              schoolTerm('Select a course above to choose classes.'),
+                              style: AppUI.muted,
                             ),
                           ] else ...[
                           SizedBox(height: 12.h),
                           Row(
                             children: [
-                              Text('Select Classes', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+                              Text(schoolTerm('Select Classes'), style: AppUI.label),
                               const Spacer(),
                               if (_selectedClasses.isNotEmpty)
                                 FocusableTap(
                                   onTap: () => setState(() => _selectedClasses.clear()),
-                                  child: Text('Clear all', style: TextStyle(fontSize: 13.sp, color: AppColors.error, fontWeight: FontWeight.w500)),
+                                  child: Text('Clear all', style: AppUI.label.copyWith(color: AppColors.error)),
                                 ),
                               SizedBox(width: 12.w),
                               FocusableTap(
                                 onTap: () => setState(() => _selectedClasses = List.from(_classesInScope)),
-                                child: Text('Select all', style: TextStyle(fontSize: 13.sp, color: AppColors.accent, fontWeight: FontWeight.w500)),
+                                child: Text('Select all', style: AppUI.label.copyWith(color: AppColors.primary)),
                               ),
                             ],
                           ),
@@ -1152,9 +1090,9 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                         decoration: BoxDecoration(
-                                          color: isSelected ? AppColors.accent.withValues(alpha: 0.1) : Colors.white,
-                                          borderRadius: BorderRadius.circular(8.r),
-                                          border: Border.all(color: isSelected ? AppColors.accent : AppColors.border),
+                                          color: isSelected ? AppColors.primaryLight : Colors.white,
+                                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                                          border: Border.all(color: isSelected ? AppColors.primary : AppColors.border),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
@@ -1174,8 +1112,8 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                 ),
                           if (_selectedClasses.isNotEmpty) ...[
                             SizedBox(height: 10.h),
-                            Text('${_selectedClasses.length} class${_selectedClasses.length > 1 ? 'es' : ''} selected',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.accent)),
+                            Text(schoolTerm('${_selectedClasses.length} class${_selectedClasses.length > 1 ? 'es' : ''} selected'),
+                                style: AppUI.label.copyWith(color: AppColors.primary)),
                           ],
                           ],
                         ],
@@ -1191,27 +1129,26 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(10.r),
-                        border: Border.all(color: AppColors.border),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.cardBorder),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // Course narrows the class chips below; class chips
                           // narrow which pending-fee students get the notice.
-                          Text('Filter by Course', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                          SizedBox(height: 8.h),
+                          AppUI.fieldLabel(schoolTerm('Filter by Course')),
                           _buildCourseFilterDropdown(),
                           if (_selectedCourse != null) ...[
                             SizedBox(height: 12.h),
                             Row(
                               children: [
-                                Text('Filter by Class', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
+                                Text(schoolTerm('Filter by Class'), style: AppUI.label),
                                 const Spacer(),
                                 if (_selectedClasses.isNotEmpty)
                                   FocusableTap(
                                     onTap: () => setState(() => _selectedClasses.clear()),
-                                    child: Text('Clear', style: TextStyle(fontSize: 13.sp, color: AppColors.error, fontWeight: FontWeight.w500)),
+                                    child: Text('Clear', style: AppUI.label.copyWith(color: AppColors.error)),
                                   ),
                               ],
                             ),
@@ -1231,34 +1168,30 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                     }
                                   }),
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                     decoration: BoxDecoration(
-                                      color: isSelected ? AppColors.accent.withValues(alpha: 0.1) : Colors.white,
-                                      borderRadius: BorderRadius.circular(8.r),
-                                      border: Border.all(color: isSelected ? AppColors.accent : AppColors.border),
+                                      color: isSelected ? AppColors.primaryLight : Colors.white,
+                                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                                      border: Border.all(color: isSelected ? AppColors.primary : AppColors.border),
                                     ),
-                                    child: Text(cls, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: isSelected ? AppColors.accent : AppColors.textPrimary)),
+                                    child: Text(cls, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: isSelected ? AppColors.primary : AppColors.textPrimary)),
                                   ),
                                 );
                               }).toList(),
                             ),
                           ],
                           SizedBox(height: 12.h),
-                          Text('Filter by Fee Term', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                          SizedBox(height: 8.h),
+                          AppUI.fieldLabel('Filter by Fee Term'),
                           _isLoadingFeeTerms
                               ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
                               : InkWell(
                                   key: _feeTermPickerKey,
-                                  borderRadius: BorderRadius.circular(8.r),
+                                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                                   onTap: _openFeeTermPicker,
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(8.r),
-                                      border: Border.all(color: _pendingFeeTerms.isNotEmpty ? AppColors.accent : AppColors.border, width: 1.5),
-                                    ),
+                                    constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    decoration: _controlBox(_pendingFeeTerms.isNotEmpty),
                                     child: Row(
                                       children: [
                                         Expanded(
@@ -1268,7 +1201,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                                                 : _pendingFeeTerms.length == 1
                                                     ? _pendingFeeTerms.first
                                                     : '${_pendingFeeTerms.length} terms',
-                                            style: TextStyle(fontSize: 13.sp, color: _pendingFeeTerms.isNotEmpty ? AppColors.accent : AppColors.textPrimary, fontWeight: _pendingFeeTerms.isNotEmpty ? FontWeight.w600 : FontWeight.w500),
+                                            style: AppUI.fieldText(context, filled: _pendingFeeTerms.isNotEmpty),
                                           ),
                                         ),
                                         const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
@@ -1283,24 +1216,16 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   SizedBox(height: 20.h),
 
                   // Description
-                  Text('Description', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8.h),
+                  AppUI.sectionLabel('Details'),
+                  AppUI.fieldLabel('Description', required: true),
                   Builder(builder: (context) {
                     final filled = _descController.text.trim().isNotEmpty;
-                    final idle = filled ? AppColors.accent : AppColors.border;
                     return TextField(
                       controller: _descController,
                       maxLines: 5,
                       onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: 'Enter notice description...',
-                        hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.5), fontSize: 13),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: BorderSide(color: idle, width: 1.5)),
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      ),
-                      style: TextStyle(fontSize: 14.sp, color: filled ? AppColors.accent : null, fontWeight: filled ? FontWeight.w600 : null),
+                      decoration: AppUI.field(context, 'Enter notice description...', filled: filled),
+                      style: AppUI.fieldText(context, filled: filled),
                     );
                   }),
                   SizedBox(height: 20.h),
@@ -1316,6 +1241,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   SizedBox(height: 20.h),
 
                   // From Date & To Date row
+                  AppUI.sectionLabel('Schedule'),
                   Row(
                     children: [
                       Expanded(child: _buildDatePicker('From Date', _fromDate, (d) => setState(() => _fromDate = d))),
@@ -1327,29 +1253,25 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   SizedBox(height: 20.h),
 
                   // From / To Date
-                  Text('Notice Period', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8.h),
+                  AppUI.fieldLabel('Notice Period'),
                   Row(
                     children: [
                       Expanded(
                         child: FocusableTap(
                           onTap: () => _pickDate(true),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: _fromDate != null ? AppColors.accent : AppColors.border, width: 1.5),
-                              borderRadius: BorderRadius.circular(10.r),
-                              color: AppColors.surface,
-                            ),
+                            constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: _controlBox(_fromDate != null),
                             child: Row(
                               children: [
-                                AppIcon('calendar-1', size: 15, color: _fromDate != null ? AppColors.accent : AppColors.textSecondary),
+                                AppIcon.linear('calendar-1', size: 16, color: _fromDate != null ? AppColors.primary : AppColors.textLight),
                                 SizedBox(width: 8.w),
                                 Text(
                                   _fromDate != null
                                       ? '${_fromDate!.day.toString().padLeft(2,'0')}/${_fromDate!.month.toString().padLeft(2,'0')}/${_fromDate!.year}'
                                       : 'From Date',
-                                  style: TextStyle(fontSize: 13.sp, fontWeight: _fromDate != null ? FontWeight.w600 : FontWeight.normal, color: _fromDate != null ? AppColors.accent : AppColors.textSecondary),
+                                  style: _fromDate != null ? AppUI.fieldText(context, filled: true) : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
                                 ),
                               ],
                             ),
@@ -1364,21 +1286,18 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                         child: FocusableTap(
                           onTap: () => _pickDate(false),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: _toDate != null ? AppColors.accent : AppColors.border, width: 1.5),
-                              borderRadius: BorderRadius.circular(10.r),
-                              color: AppColors.surface,
-                            ),
+                            constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: _controlBox(_toDate != null),
                             child: Row(
                               children: [
-                                AppIcon('calendar-remove', size: 15, color: _toDate != null ? AppColors.accent : AppColors.textSecondary),
+                                AppIcon.linear('calendar-remove', size: 16, color: _toDate != null ? AppColors.primary : AppColors.textLight),
                                 SizedBox(width: 8.w),
                                 Text(
                                   _toDate != null
                                       ? '${_toDate!.day.toString().padLeft(2,'0')}/${_toDate!.month.toString().padLeft(2,'0')}/${_toDate!.year}'
                                       : 'To Date (Auto-expire)',
-                                  style: TextStyle(fontSize: 13.sp, fontWeight: _toDate != null ? FontWeight.w600 : FontWeight.normal, color: _toDate != null ? AppColors.accent : AppColors.textSecondary),
+                                  style: _toDate != null ? AppUI.fieldText(context, filled: true) : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
                                 ),
                               ],
                             ),
@@ -1390,56 +1309,41 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                   SizedBox(height: 6.h),
                   Text(
                     'Notice will be automatically removed after the To Date.',
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary),
+                    style: AppUI.muted,
                   ),
 
-                  SizedBox(height: 28.h),
+                  SizedBox(height: AppUI.gap),
 
                   // Preview section
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.03),
-                      borderRadius: BorderRadius.circular(10.r),
-                      border: Border.all(color: AppColors.accent.withValues(alpha: 0.15)),
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.cardBorder),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        AppUI.sectionLabel('Preview'),
+                        const Divider(height: 1, color: AppColors.divider),
+                        SizedBox(height: 12.h),
                         Row(
                           children: [
-                            const AppIcon('eye', size: 16, color: AppColors.accent),
-                            SizedBox(width: 6.w),
-                            Text('Preview', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.accent)),
-                          ],
-                        ),
-                        const Divider(height: 20, color: AppColors.border),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: _priorityColorForPreview.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(6.r),
-                              ),
-                              child: Text(_priority ?? 'Normal', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: _priorityColorForPreview)),
-                            ),
+                            AppUI.chip(_priority ?? 'Normal', _priorityStatusForPreview),
                             SizedBox(width: 8.w),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: AppColors.surface,
-                                borderRadius: BorderRadius.circular(6.r),
-                              ),
-                              child: Text(_category ?? 'General', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
-                            ),
+                            AppUI.chip(_category ?? 'General', AppStatus.neutral),
                             SizedBox(width: 8.w),
-                            AppIcon('people', size: 12, color: AppColors.textSecondary.withValues(alpha: 0.6)),
+                            const AppIcon.linear('people', size: 14, color: AppColors.textLight),
                             SizedBox(width: 4.w),
-                            Text(
-                              _targetType == 'All Students' ? 'All Students' : _targetType == 'Staff' ? 'Staff' : _targetType == 'Pending Fees' ? 'Pending Fees${_pendingFeeTerms.isNotEmpty ? ' - ${_pendingFeeTerms.join(', ')}' : ''}' : '${_selectedClasses.length} classes',
-                              style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary.withValues(alpha: 0.7)),
+                            Flexible(
+                              child: Text(
+                                _targetType == 'All Students' ? 'All Students' : _targetType == 'Staff' ? 'Staff' : _targetType == 'Pending Fees' ? 'Pending Fees${_pendingFeeTerms.isNotEmpty ? ' - ${_pendingFeeTerms.join(', ')}' : ''}' : schoolTerm('${_selectedClasses.length} classes'),
+                                style: AppUI.muted,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ],
                         ),
@@ -1449,7 +1353,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                           style: TextStyle(
                             fontSize: 14.sp,
                             fontWeight: FontWeight.w700,
-                            color: _titleController.text.isEmpty ? AppColors.textSecondary.withValues(alpha: 0.4) : AppColors.textPrimary,
+                            color: _titleController.text.isEmpty ? AppColors.textLight : AppColors.textPrimary,
                           ),
                         ),
                         SizedBox(height: 6.h),
@@ -1458,7 +1362,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                           style: TextStyle(
                             fontSize: 13.sp,
                             height: 1.4,
-                            color: _descController.text.isEmpty ? AppColors.textSecondary.withValues(alpha: 0.4) : AppColors.textSecondary,
+                            color: _descController.text.isEmpty ? AppColors.textLight : AppColors.textSecondary,
                           ),
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
@@ -1469,22 +1373,35 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
                 ],
               ),
               ),
-            ),
           ),
+        ),
+
+        // Footer: Cancel (= the old Back) + Send Notice
+        AppFormFooter(
+          onCancel: _isSending ? null : widget.onBack,
+          actions: [
+            ElevatedButton.icon(
+              onPressed: _isSending ? null : _submitNotice,
+              icon: _isSending
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : AppIcon('send-2', size: AppBtn.iconSize(context), color: Colors.white),
+              label: const Text('Send Notice'),
+            ),
+          ],
         ),
       ],
     );
   }
 
-  Color get _priorityColorForPreview {
+  AppStatus get _priorityStatusForPreview {
     switch ((_priority ?? 'Normal').toLowerCase()) {
       case 'high':
       case 'urgent':
-        return AppColors.error;
+        return AppStatus.danger;
       case 'medium':
-        return AppColors.warning;
+        return AppStatus.warning;
       default:
-        return AppColors.accent;
+        return AppStatus.info;
     }
   }
 
@@ -1496,8 +1413,7 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-        SizedBox(height: 8.h),
+        AppUI.fieldLabel(label),
         FocusableTap(
           onTap: () async {
             final picked = await showDatePicker(
@@ -1510,24 +1426,20 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
           },
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10.r),
-              border: Border.all(color: selectedDate != null ? AppColors.accent : AppColors.border, width: 1.5),
-            ),
+            constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: _controlBox(selectedDate != null),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
                     selectedDate != null ? _formatDateDisplay(selectedDate) : 'Select date...',
-                    style: TextStyle(
-                      fontSize: 13.sp,
-                      fontWeight: selectedDate != null ? FontWeight.w600 : FontWeight.normal,
-                      color: selectedDate != null ? AppColors.accent : AppColors.textSecondary.withValues(alpha: 0.5),
-                    ),
+                    style: selectedDate != null
+                        ? AppUI.fieldText(context, filled: true)
+                        : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
                   ),
                 ),
-                AppIcon('calendar-1', size: 16, color: selectedDate != null ? AppColors.accent : AppColors.textSecondary.withValues(alpha: 0.6)),
+                AppIcon.linear('calendar-1', size: 16, color: selectedDate != null ? AppColors.primary : AppColors.textLight),
               ],
             ),
           ),
@@ -1540,14 +1452,11 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-        SizedBox(height: 8.h),
+        AppUI.fieldLabel(label),
         Container(
+          constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: value != null ? AppColors.accent : AppColors.border, width: 1.5),
-          ),
+          decoration: _controlBox(value != null),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: value,
@@ -1555,10 +1464,10 @@ class _CreateNoticeFormState extends State<_CreateNoticeForm> {
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
               elevation: 6,
-              hint: Text('Select ${label.toLowerCase()}', style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary.withValues(alpha: 0.6))),
-              icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-              style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-              selectedItemBuilder: (context) => items.map((i) => Align(alignment: Alignment.centerLeft, child: Text(i, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+              hint: Text('Select ${label.toLowerCase()}', style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+              icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+              style: AppUI.fieldText(context),
+              selectedItemBuilder: (context) => items.map((i) => Align(alignment: Alignment.centerLeft, child: Text(i, style: AppUI.fieldText(context, filled: true)))).toList(),
               items: items.map((i) => DropdownMenuItem(value: i, child: Text(i))).toList(),
               onChanged: onChanged,
             ),

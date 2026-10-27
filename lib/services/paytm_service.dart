@@ -26,7 +26,18 @@ class PaytmStatus {
   /// Paytm txnId — stored as `payreference` on success.
   final String? paymentId;
 
-  const PaytmStatus({required this.status, this.paymentId});
+  /// What the gateway said about it ("Txn Success", "Wallet balance
+  /// insufficient", ...). Empty when the response carried no message.
+  ///
+  /// payment.paygwresponse is a numeric column, so there is nowhere to STORE
+  /// this today -- it goes to the run log and into what the cashier is shown.
+  /// Without it a failure reads only as "payment failed", which is the same
+  /// sentence for a declined card, a closed window and a merchant that is not
+  /// enabled for the instrument.
+  final String message;
+
+  const PaytmStatus(
+      {required this.status, this.paymentId, this.message = ''});
 
   bool get isCaptured => status == 'captured';
   bool get isFailed => status == 'failed';
@@ -44,7 +55,7 @@ class PaytmService {
   /// Initiate a transaction. The payment row (status 'I') must already exist;
   /// pass its [payId]. Returns the order id + txnToken for the checkout page.
   /// [mid] is the merchant resolved for this payment via
-  /// SupabaseService.getPaytmMidForFeeGroups (the fee group's bank.paytm_mid).
+  /// SupabaseService.resolvePaytmRouting (the fee group's bank, else the institution).
   ///
   /// Routing depends on PaytmConfig.splitSettlement:
   ///   * false (single-account): [mid] is used directly as the order MID; when
@@ -53,6 +64,12 @@ class PaytmService {
   ///     MID and [mid] becomes the CHILD MID that funds settle to, sent as
   ///     `split_mid` so the edge function attaches splitSettlementInfo. A null
   ///     [mid] means no split (funds stay with the parent) — a safe fallback.
+  /// [payId] for a collection that has no payment row behind it (a Misc
+  /// receipt). NOT 0: the edge function guards with `if (!amount || !pay_id)`
+  /// and 0 is falsy in JavaScript, so a 0 is rejected as a missing field
+  /// before the order ever reaches Paytm.
+  static const int kNoPaymentRow = -1;
+
   static Future<PaytmOrder> createOrder({
     required int payId,
     required double amount,
@@ -94,10 +111,35 @@ class PaytmService {
       txnToken: token,
       amount: data['amount']?.toString() ?? amount.toStringAsFixed(2),
       // Trust the MID the server actually created the order under (the parent
-      // in split mode); fall back to the order MID / default, never the child.
-      mid: data['mid']?.toString() ?? orderMid ?? PaytmConfig.mid,
+      // in split mode), else the one we asked for.
+      //
+      // There is no third fallback any more. It used to end in
+      // PaytmConfig.mid, a merchant compiled into the build -- unreachable in
+      // practice, because every caller refuses before getting here when
+      // routing cannot resolve, but it meant "we do not know which merchant"
+      // could silently become "this one". If both are null the edge function
+      // broke its contract, and that is worth hearing about.
+      mid: () {
+        final m = data['mid']?.toString() ?? orderMid;
+        if (m == null || m.trim().isEmpty) {
+          throw Exception(
+              'Paytm order $order was created without a merchant id. '
+              'The payment was NOT taken.');
+        }
+        return m;
+      }(),
     );
   }
+
+  /// RESPMSG from the last checkout that reached a terminal state, e.g.
+  /// "Sorry, you do not have enough balance in your bank account."
+  ///
+  /// The Transaction Status API answers status=failed and nothing else, so
+  /// this is the only place the REASON exists. The checkout dialog fills it
+  /// from the JS transactionStatus callback and the collection screens read it
+  /// when the verify call has no message of its own. Cleared when a checkout
+  /// opens, so a stale reason can never be shown against a later payment.
+  static String lastGatewayMessage = '';
 
   /// Authoritative status check via the Transaction Status API. [mid] must be
   /// the merchant the order was created under (PaytmOrder.mid).
@@ -114,9 +156,29 @@ class PaytmService {
         : <String, dynamic>{};
     final status = data['status']?.toString() ?? 'pending';
     final paymentId = data['payment_id']?.toString();
+    // The edge function passes Paytm's body through more or less as it finds
+    // it, and the message has lived under several names, so take the first one
+    // that is actually there rather than guessing one.
+    String message = '';
+    for (final k in const [
+      'message',
+      'resultMsg',
+      'RESPMSG',
+      'respMsg',
+      'error',
+    ]) {
+      final v = data[k]?.toString().trim() ?? '';
+      if (v.isNotEmpty) {
+        message = v;
+        break;
+      }
+    }
+    debugPrint('Paytm verify $orderId -> status=$status '
+        'txn=${paymentId ?? '-'} msg=${message.isEmpty ? '-' : message}');
     return PaytmStatus(
       status: status,
       paymentId: (paymentId != null && paymentId.isNotEmpty) ? paymentId : null,
+      message: message,
     );
   }
 
@@ -131,6 +193,12 @@ class PaytmService {
   }) {
     final mid = order.mid;
     final sdkUrl = PaytmConfig.checkoutJsUrlFor(mid);
+    // Which ENVIRONMENT the checkout page is about to use. A staging txnToken
+    // opened against the production host (or the reverse) is reported by
+    // CheckoutJS as 'token session expired', which reads like a timeout and
+    // is not one -- so the host, MID and order are logged before it loads.
+    debugPrint('Paytm checkout: production=${PaytmConfig.isProduction} '
+        'sdk=$sdkUrl mid=$mid order=${order.orderId} amount=${order.amount}');
     final safeName = studentName.replaceAll("'", "\\'");
     // Merchant display name is injected into a double-quoted JSON string inside
     // the checkout JS, so escape backslashes/quotes and flatten newlines.
@@ -183,12 +251,16 @@ class PaytmService {
         "handler": {
           "notifyMerchant": function(eventName, data) {
             console.log("notifyMerchant", eventName, data);
+            // Posted, not just logged: the WebView's console is not readable
+            // from Dart, and this is the only place a close/abort is reported.
+            try { post('notifyMerchant: ' + eventName + ' ' + JSON.stringify(data)); } catch (e) { post('notifyMerchant: ' + eventName); }
           },
           // Required when merchant.redirect = false. The Flutter side polls
           // get-paytm-payment for the authoritative result and closes the
           // dialog, so here we just surface progress and close the checkout UI.
           "transactionStatus": function(paymentStatus) {
             console.log("transactionStatus", paymentStatus);
+            try { post('txnStatus: ' + JSON.stringify(paymentStatus)); } catch (e) { post('txnStatus: (unreadable)'); }
             showStatus('Payment submitted. Verifying with the bank...');
             try { window.Paytm.CheckoutJS.close(); } catch (e) {}
           }
@@ -225,10 +297,12 @@ class PaytmService {
 ''';
   }
 
-  /// Convenience: is the gateway configured enough to attempt a payment?
-  static bool get isConfigured {
-    final ok = PaytmConfig.mid.isNotEmpty;
-    if (!ok) debugPrint('PaytmService: MID is empty — check PaytmConfig.');
-    return ok;
-  }
+  // isConfigured removed. It asked whether a compiled-in constant was
+  // non-empty, so it answered true on every build and could never detect the
+  // one thing it existed to detect. Nothing called it.
+  //
+  // Whether a payment can be taken is a per-collection question, not a
+  // per-build one, and SupabaseService.resolvePaytmRouting already answers it
+  // for the fee group being collected -- returning an error the counter is
+  // shown, rather than a boolean nobody checked.
 }

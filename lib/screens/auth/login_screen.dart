@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:provider/provider.dart';
 import '../../services/supabase_service.dart';
+import '../../services/device_service.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/auth_provider.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -22,6 +24,11 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _rememberMe = false;
 
   List<Map<String, dynamic>> _institutions = [];
+
+  /// What this PC was activated for. A device bound to an institution may only
+  /// sign into THAT institution; a super-admin device may sign in either way.
+  int? _boundInsId;
+  bool _isSuperAdminDevice = false;
   int? _selectedInsId;
   bool _loadingInstitutions = true;
   bool _isSuperAdmin = false;
@@ -33,16 +40,38 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _loadInstitutions();
+    _prefillEmail();
+  }
+
+  /// Pre-fill the last email used on this machine so only the password has to
+  /// be typed. The password itself is never stored.
+  Future<void> _prefillEmail() async {
+    final saved = await context.read<AuthProvider>().savedEmail();
+    if (!mounted || saved == null || _emailController.text.isNotEmpty) return;
+    setState(() => _emailController.text = saved);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final args = ModalRoute.of(context)?.settings.arguments as String?;
-    _isSuperAdmin = args == 'super_admin';
+    // Only a super-admin device may open the super-admin form; the route
+    // argument alone must not get past the activation binding.
+    _isSuperAdmin = args == 'super_admin' && _isSuperAdminDevice;
   }
 
   Future<void> _loadInstitutions() async {
+    // Read the activation binding first — it decides both which institutions
+    // may be listed and whether the super-admin option exists at all.
+    final superDevice = await DeviceService.isSuperAdminDevice();
+    final boundIns = await DeviceService.boundInstitutionId();
+    if (mounted) {
+      setState(() {
+        _isSuperAdminDevice = superDevice;
+        _boundInsId = boundIns;
+        if (!superDevice) _isSuperAdmin = false;
+      });
+    }
     if (_isSuperAdmin) {
       setState(() => _loadingInstitutions = false);
       return;
@@ -50,9 +79,18 @@ class _LoginScreenState extends State<LoginScreen> {
     final institutions = await SupabaseService.getInstitutionNames();
     if (!mounted) return;
     setState(() {
-      _institutions = institutions;
+      // A device activated for one institution shows only that institution —
+      // the rest of the trust is not this machine's business — and it is
+      // pre-selected, since there is nothing to choose between.
+      _institutions = _boundInsId == null
+          ? institutions
+          : institutions.where((i) => i['ins_id'] == _boundInsId).toList();
+      if (_boundInsId != null && _institutions.isNotEmpty) {
+        _selectedInsId = _institutions.first['ins_id'] as int?;
+      }
       _loadingInstitutions = false;
     });
+    _loadYearsForBoundInstitution();
   }
 
   @override
@@ -60,6 +98,15 @@ class _LoginScreenState extends State<LoginScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  /// Years for the institution this PC is bound to. The dropdown's onChanged
+  /// is what normally loads them, and a bound device never fires it — so
+  /// without this the year picker would simply never appear.
+  void _loadYearsForBoundInstitution() {
+    final id = _selectedInsId;
+    if (_boundInsId == null || id == null) return;
+    _loadYears(id);
   }
 
   Future<void> _loadYears(int insId) async {
@@ -70,7 +117,7 @@ class _LoginScreenState extends State<LoginScreen> {
           .select('yrlabel, iyrstadate, iyrenddate')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
-          .order('iyr_id', ascending: false);
+          .order('yrlabel', ascending: false);
       final rawYears = List<Map<String, dynamic>>.from(result);
       // Deduplicate by yrlabel - the Material DropdownButton crashes if two
       // items share the same value. Defensive against duplicate rows in
@@ -112,36 +159,18 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  // Standard decoration: grey border idle, navy (primary) border on focus.
-  // Keeps any prefix/suffix icon supplied by the caller. The [filled] param
-  // is retained but no longer affects the border.
+  // The kit field: grey edge idle, accent edge when it holds a value, 2px
+  // focus ring. Keeps any prefix/suffix icon supplied by the caller.
   InputDecoration _dec(String hint, {bool filled = false, Widget? prefixIcon, Widget? suffixIcon}) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6)),
+    return AppUI.field(context, hint, filled: filled).copyWith(
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
-      prefixIconConstraints: const BoxConstraints(minWidth: 52, minHeight: 0),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
-      ),
+      prefixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 0),
     );
   }
 
-  // Normal value text — standard dark colour at the normal weight.
-  TextStyle _fieldStyle(bool filled) => const TextStyle(
-        fontWeight: FontWeight.w400,
-        color: AppColors.textPrimary,
-      );
+  // Value text inside a field.
+  TextStyle _fieldStyle(bool filled) => AppUI.fieldText(context);
 
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
@@ -374,7 +403,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           backgroundColor: Colors.white,
                           side: const BorderSide(color: AppColors.border),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppUI.controlRadius),
                           ),
                         ),
                       ),
@@ -387,9 +416,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     delay: const Duration(milliseconds: 100),
                     child: Text(
                       _isSuperAdmin ? 'Super Admin' : 'Sign In',
-                      style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                            fontSize: compact ? 22 : 28,
-                          ),
+                      style: AppUI.pageTitle,
                     ),
                   ),
                   SizedBox(height: compact ? 6 : 8),
@@ -399,11 +426,34 @@ class _LoginScreenState extends State<LoginScreen> {
                       _isSuperAdmin
                           ? 'Enter your super admin credentials'
                           : 'Enter your credentials to access the dashboard',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            fontSize: compact ? 12 : 16,
-                          ),
+                      style: AppUI.muted.copyWith(fontSize: compact ? 13 : 14),
                     ),
                   ),
+
+                  // Super-admin devices can sign in either way, so they get a
+                  // switch. An institution device never sees it: that machine is
+                  // bound to one institution and has no super-admin access.
+                  if (_isSuperAdminDevice) ...[
+                    SizedBox(height: compact ? 14 : 20),
+                    FadeInDown(
+                      delay: const Duration(milliseconds: 150),
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(value: false, label: Text('Institution')),
+                          ButtonSegment(value: true, label: Text('Super Admin')),
+                        ],
+                        selected: {_isSuperAdmin},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (v) {
+                          setState(() {
+                            _isSuperAdmin = v.first;
+                            _selectedInsId = null;
+                          });
+                          if (!_isSuperAdmin) _loadInstitutions();
+                        },
+                      ),
+                    ),
+                  ],
 
                   SizedBox(height: compact ? 22 : 36),
 
@@ -416,8 +466,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             padding: EdgeInsets.all(14),
                             margin: EdgeInsets.only(bottom: 20),
                             decoration: BoxDecoration(
-                              color: AppColors.error.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(12),
+                              color: AppColors.errorBg,
+                              borderRadius: BorderRadius.circular(AppUI.controlRadius),
                               border: Border.all(
                                 color: AppColors.error.withValues(alpha: 0.3),
                               ),
@@ -430,10 +480,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 Expanded(
                                   child: Text(
                                     auth.errorMessage!,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(color: AppColors.error),
+                                    style: AppUI.body.copyWith(color: AppColors.error),
                                   ),
                                 ),
                               ],
@@ -452,14 +499,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Institution',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelLarge
-                                ?.copyWith(fontSize: 13),
-                          ),
-                          SizedBox(height: 8),
+                          AppUI.fieldLabel('Institution'),
                           _loadingInstitutions
                               ? const LinearProgressIndicator()
                               : Builder(builder: (_) {
@@ -476,7 +516,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     dropdownColor: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
                                     elevation: 6,
-                                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
                                     decoration: _dec(
                                       'Select your institution',
                                       filled: _selectedInsId != null,
@@ -501,7 +541,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                           ins['insname'] ?? '',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.textPrimary),
+                                          style: AppUI.fieldText(context),
                                         ),
                                       );
                                     }).toList(),
@@ -518,7 +558,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                               decoration: BoxDecoration(
                                                 color: AppColors.surface,
                                                 borderRadius: BorderRadius.circular(6),
-                                                border: Border.all(color: AppColors.border),
+                                                border: Border.all(color: AppColors.cardBorder),
                                               ),
                                               alignment: Alignment.center,
                                               child: logo.isNotEmpty
@@ -541,21 +581,27 @@ class _LoginScreenState extends State<LoginScreen> {
                                                 ins['insname'] ?? '',
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary),
+                                                style: AppUI.body,
                                               ),
                                             ),
                                           ],
                                         ),
                                       );
                                     }).toList(),
-                                    onChanged: (value) {
-                                      setState(() {
-                                        _selectedInsId = value;
-                                        _selectedYear = null;
-                                        _availableYears = [];
-                                      });
-                                      if (value != null) _loadYears(value);
-                                    },
+                                    // null disables the field: on a device bound
+                                    // to one institution there is nothing to
+                                    // choose, and it must not be switched away
+                                    // from the institution it was activated for.
+                                    onChanged: _boundInsId != null
+                                        ? null
+                                        : (value) {
+                                            setState(() {
+                                              _selectedInsId = value;
+                                              _selectedYear = null;
+                                              _availableYears = [];
+                                            });
+                                            if (value != null) _loadYears(value);
+                                          },
                                     validator: (value) {
                                       if (value == null) {
                                         return 'Please select an institution';
@@ -575,8 +621,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Academic Year', style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13)),
-                            SizedBox(height: 8),
+                            AppUI.fieldLabel('Academic Year'),
                             _loadingYears
                                 ? const LinearProgressIndicator()
                                 : DropdownButtonFormField<String>(
@@ -585,7 +630,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     dropdownColor: Colors.white,
                                     borderRadius: BorderRadius.circular(12),
                                     elevation: 6,
-                                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.textLight),
                                     decoration: _dec(
                                       'Select academic year',
                                       filled: _selectedYear != null,
@@ -598,7 +643,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                         child: Text(
                                           label,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.textPrimary),
+                                          style: AppUI.fieldText(context),
                                         ),
                                       );
                                     }).toList(),
@@ -620,14 +665,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          _isSuperAdmin ? 'Username' : 'Email Address',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelLarge
-                              ?.copyWith(fontSize: 13),
-                        ),
-                        SizedBox(height: 8),
+                        AppUI.fieldLabel(_isSuperAdmin ? 'Username' : 'Email Address'),
                         TextFormField(
                           controller: _emailController,
                           keyboardType: _isSuperAdmin ? TextInputType.text : TextInputType.emailAddress,
@@ -662,14 +700,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Password',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelLarge
-                              ?.copyWith(fontSize: 13),
-                        ),
-                        SizedBox(height: 8),
+                        AppUI.fieldLabel('Password'),
                         TextFormField(
                           controller: _passwordController,
                           obscureText: _obscurePassword,
@@ -726,36 +757,19 @@ class _LoginScreenState extends State<LoginScreen> {
                                 value: _rememberMe,
                                 onChanged: (v) =>
                                     setState(() => _rememberMe = v ?? false),
-                                activeColor: AppColors.accent,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
                               ),
                             ),
                             SizedBox(width: 8),
                             Text(
                               'Remember me',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(fontSize: 13),
+                              style: AppUI.body.copyWith(fontSize: 13),
                             ),
                           ],
                         ),
                         TextButton(
                           onPressed: () => Navigator.pushNamed(
                               context, AppRoutes.forgotPassword),
-                          child: Text(
-                            'Forgot Password?',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: AppColors.accent,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                          ),
+                          child: const Text('Forgot Password?'),
                         ),
                       ],
                     ),
@@ -769,16 +783,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Consumer<AuthProvider>(
                       builder: (context, auth, _) {
                         return SizedBox(
-                          height: compact ? 44 : 54,
+                          height: AppUI.controlHeight(context),
                           child: ElevatedButton(
                             onPressed: auth.isLoading ? null : _handleLogin,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.accent,
-                              padding: EdgeInsets.symmetric(horizontal: compact ? 20 : 28, vertical: compact ? 12 : 20),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
                             child: auth.isLoading
                                 ? SizedBox(
                                     width: compact ? 18 : 22,
@@ -788,13 +795,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       color: Colors.white,
                                     ),
                                   )
-                                : Text(
-                                    'Sign In',
-                                    style: TextStyle(
-                                      fontSize: compact ? 14 : 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
+                                : const Text('Sign In'),
                           ),
                         );
                       },
@@ -810,8 +811,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Container(
                       padding: EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: AppColors.info.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(12),
+                        color: AppColors.infoBg,
+                        borderRadius: BorderRadius.circular(AppUI.controlRadius),
                         border: Border.all(
                           color: AppColors.info.withValues(alpha: 0.15),
                         ),
@@ -819,7 +820,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Row(
                         children: [
                           AppIcon.linear('info-circle',
-                              color: AppColors.info.withValues(alpha: 0.7),
+                              color: AppColors.info,
                               size: 18),
                           SizedBox(width: 10),
                           Expanded(
@@ -827,13 +828,10 @@ class _LoginScreenState extends State<LoginScreen> {
                               _isSuperAdmin
                                   ? 'Demo: superadmin / admin123'
                                   : 'Demo: admin@edudesk.com / admin123',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: AppColors.info,
-                                    fontSize: 13,
-                                  ),
+                              style: AppUI.body.copyWith(
+                                color: AppColors.info,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         ],

@@ -6,6 +6,16 @@
 /// prevents the permission tick-list from drifting out of sync with the menu.
 library;
 
+import 'school_terms.dart';
+
+/// Routing + permission key for Setup -> Sequence Master.
+///
+/// A NEW permission key: a role that already has explicit menu permissions
+/// will not see this menu until it is granted in Roles & Access, even if that
+/// role has Fee Master. The sequences it holds moved OUT of Fee Master and
+/// Admission Master, so granting it is what restores them.
+const String kSequenceMenu = 'Sequence Master';
+
 class AppNavSubItem {
   final String icon;
   final String label;
@@ -16,6 +26,10 @@ class AppNavItem {
   final String icon;
   final String? unselectedIcon;
   final String label;
+  /// Optional display-only override for the sidebar/title. `label` stays the
+  /// stable routing + Roles&Access permission key (stored per-role in the DB),
+  /// so renaming what the user sees never revokes a menu from a configured role.
+  final String? title;
   final String section;
 
   /// Default visibility, used only until an Admin configures Roles & Access.
@@ -28,6 +42,7 @@ class AppNavItem {
   const AppNavItem(
     this.icon,
     this.label, {
+    this.title,
     this.section = 'MAIN',
     this.adminOnly = false,
     this.accountantOnly = false,
@@ -35,6 +50,16 @@ class AppNavItem {
     this.unselectedIcon,
     this.subItems = const [],
   });
+
+  /// What the sidebar/top bar shows. Falls back to [label] when no override.
+  /// In school wording on the school database (Course -> Standard ...).
+  String get navTitle => schoolTerm(title ?? label);
+
+  /// Sub-items to show: on a school, the ones that do not exist there
+  /// (Admission Type, Quota) are left out. [subItems] keeps every key.
+  List<AppNavSubItem> get visibleSubItems => isSchool
+      ? subItems.where((s) => !kSchoolHiddenSubItems.contains(s.label)).toList()
+      : subItems.where((s) => !kCollegeHiddenSubItems.contains(s.label)).toList();
 }
 
 /// Icon + display label for each collapsible section header in the sidebar.
@@ -42,11 +67,12 @@ class AppNavItem {
 const Map<String, List<String>> kSectionMeta = {
   'ADMISSION': ['profile-add', 'Admission'],
   'STUDENTS': ['people', 'Students'],
+  'TC': ['document-text', 'TC'],
   'FEES': ['wallet-money', 'Fees'],
   'BANKING': ['bank', 'Banking'],
   'REPORTS': ['chart-1', 'Reports'],
-  'GENERAL': ['notification', 'General'],
   'SETUP': ['setting-2', 'Setup'],
+  'GENERAL': ['notification', 'General'],
 };
 
 /// Every menu item in the app, in sidebar order.
@@ -54,52 +80,139 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('element-3', 'Dashboard', section: 'MAIN MENU'),
 
   // ADMISSION — enrolling and placing students.
-  AppNavItem('profile-add', 'Admission', section: 'ADMISSION', adminOnly: true),
-  AppNavItem('flash', 'Fast Admission', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('profile-add', 'Admission', title: 'Admission Entry', section: 'ADMISSION', adminOnly: true),
+  // Places admissions saved without a class (Fast Admission) and moves them
+  // into students. School: "Section Allocation" via navTitle.
   AppNavItem('task-square', 'Class Allocation', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('flash', 'Fast Admission', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('ranking', 'Course Transfer', title: 'Student Transfer', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('tag', 'New Roll Number', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('note-1', 'EMIS / UMIS', section: 'ADMISSION', adminOnly: true),
 
   // STUDENTS
-  AppNavItem('people', 'Students', section: 'STUDENTS', adminOnly: true),
+  AppNavItem('people', 'Students', title: 'Student Details', section: 'STUDENTS', adminOnly: true),
+
+  // TC -- its own module, as the old product (PsTc.dll): issue the TC,
+  // fill the certificate, approve it, print it on the school's own Word
+  // format. 'Transfer Certificate' keeps its label (role grants are by label).
+  AppNavItem('document-text', 'Transfer Certificate', title: 'TC Entry', section: 'TC', adminOnly: true),
+  AppNavItem('edit-2', 'TC Certificate', section: 'TC', adminOnly: true),
+  AppNavItem('tick-square', 'TC Approval', section: 'TC', adminOnly: true),
+  AppNavItem('printer', 'TC Print', section: 'TC', adminOnly: true),
+  AppNavItem('document-upload', 'TC Format', section: 'TC', adminOnly: true),
 
   // FEES — ordered to follow the money lifecycle:
   // raise demand → approve → concede → collect → refund → statement.
   AppNavItem('receipt-edit', 'Fee Demand', section: 'FEES'),
+  // Wide Excel (student x fee type) in and out; stages into the same
+  // approval flow as Fee Demand. Label is the permission key -- never rename.
+  AppNavItem('document-upload', 'Fee Demand Import', section: 'FEES'),
   AppNavItem('tick-square', 'Fee Demand Approval', section: 'FEES', adminOnly: true),
   AppNavItem('discount-shape', 'Fee Concession', section: 'FEES', accountantOnly: true),
   AppNavItem('indianrupeesign.circle.fill', 'Fee Collection', section: 'FEES', accountantOnly: true, unselectedIcon: 'indianrupeesign.circle'),
+  AppNavItem('receipt-2', 'Misc Collection', section: 'FEES', accountantOnly: true),
+  // Money taken before any fee is due. Spent on Fee Collection, which
+  // highlights a student who still has an unused advance.
+  AppNavItem('empty-wallet-add', 'Advance Collection', section: 'FEES', accountantOnly: true),
+  // School only: next year's fees (stuadvdemand) from the Advance Fee
+  // Definition, collected as admission-advance receipts.
+  AppNavItem('wallet-add', 'Advance Fee Collection', section: 'FEES', accountantOnly: true),
+  // Bulk-applies ADMISSION advances against one fee type. A student advance is
+  // applied at the counter instead — it settles a balance, not a fee.
+  AppNavItem('empty-wallet-change', 'Advance Adjustment', section: 'FEES', accountantOnly: true),
   AppNavItem('document-upload', 'Fee Collection Import', section: 'FEES', accountantOnly: true),
   AppNavItem('money-recive', 'Fee Refund', section: 'FEES', accountantOnly: true),
+  AppNavItem('receipt-discount', 'Fee Cancel Receipt', section: 'FEES', accountantOnly: true),
+
+  // REPORTS — each report is its own submenu (opens the Reports screen at that
+  // tab with the in-screen tab bar hidden). NOTE: no 'Collection Summary' entry
+  // — the Dashboard menu opens that screen (fee_collection_screen.dart).
+  AppNavItem('calendar-1', 'Daily Collection', section: 'REPORTS'),
+  AppNavItem('book-1', 'Student Ledger', section: 'REPORTS'),
+  AppNavItem('clock', 'Pending Payment', section: 'REPORTS'),
+  AppNavItem('receipt-item', 'Pending Details', section: 'REPORTS'),
+  AppNavItem('chart-2', 'Consolidated Status', section: 'REPORTS'),
+  // School: the old product's Consolidated Summary Statement (per student).
+  AppNavItem('document-text', 'Consolidated Summary', section: 'REPORTS'),
+  AppNavItem('grid-1', 'DCB Register', section: 'REPORTS'),
+  AppNavItem('wallet-money', 'Advance Register', section: 'REPORTS'),
+  AppNavItem('book-1', 'Admission Register', section: 'REPORTS'),
+  AppNavItem('document-text', 'TC Report', section: 'REPORTS'),
 
   // BANKING — money that has left the counter.
   AppNavItem('receipt-2', 'Transactions', section: 'BANKING'),
   AppNavItem('bank', 'Bank Reconciliation', section: 'BANKING', adminOnly: true),
 
-  // REPORTS
-  // NOTE: no 'Collection Summary' entry — the Dashboard menu opens that screen
-  // (fee_collection_screen.dart), so a separate item would be a duplicate.
-  AppNavItem('chart-1', 'Reports', section: 'REPORTS', unselectedIcon: 'chart'),
-
-  // GENERAL
-  AppNavItem('notification', 'Notices', section: 'GENERAL'),
-  AppNavItem('notification-bing', 'Notifications', section: 'GENERAL'),
-
-  // SETUP — configure-once masters, kept last so daily work stays on top.
-  AppNavItem('document-upload', 'Master Data', section: 'SETUP', adminOnly: true),
-  AppNavItem('category-2', 'Admission Master', section: 'SETUP', adminOnly: true),
-  AppNavItem('receipt-discount', 'Fee Master', section: 'SETUP', accountantOnly: true),
+  // SETUP — configure-once masters. Sits above GENERAL so the two
+  // notification items stay at the very bottom of the sidebar.
+  // The three master screens carry their tabs as sub-items: picking one opens
+  // that tab directly, and the in-screen tab bar is hidden. Sub-items are NOT
+  // separate permission keys — the parent's Roles & Access entry still governs.
+  AppNavItem('document-upload', 'Master Data', section: 'SETUP', adminOnly: true,
+      subItems: [
+        AppNavSubItem('teacher', 'Course'),
+        AppNavSubItem('book-1', 'Class'),
+      ]),
+  AppNavItem('category-2', 'Admission Master', section: 'SETUP', adminOnly: true,
+      subItems: [
+        AppNavSubItem('user-tick', 'Admission Type'),
+        AppNavSubItem('ticket', 'Quota'),
+        AppNavSubItem('people', 'Community'),
+        AppNavSubItem('discount-shape', 'Concession'),
+        AppNavSubItem('diagram', 'Division'),
+      ]),
+  AppNavItem('receipt-discount', 'Fee Master', section: 'SETUP', accountantOnly: true,
+      subItems: [
+        AppNavSubItem('receipt-discount', 'Fee Group'),
+        AppNavSubItem('tag', 'Fee Type'),
+        AppNavSubItem('calendar-1', 'Semester'),
+        // School only (<year schema>.classmatch): section -> next section.
+        AppNavSubItem('arrow-swap-horizontal', 'Class Matching'),
+        AppNavSubItem('sort', 'Class Fee Demand'),
+        // School only (<year schema>.advfeedemand): next year's fees, defined
+        // but never raised on students.
+        AppNavSubItem('empty-wallet-add', 'Advance Fee Definition'),
+        AppNavSubItem('warning-2', 'Fine Rules'),
+      ]),
+  // Every number series the institution issues, gathered from Admission Master
+  // and Fee Master. The tabs still live on those screens -- this is a view over
+  // them, not a second copy.
+  AppNavItem('hashtag', kSequenceMenu, section: 'SETUP', adminOnly: true,
+      subItems: [
+        AppNavSubItem('tag', 'Reg No'),
+        AppNavSubItem('document-text', 'TC Sequence'),
+        AppNavSubItem('category', 'Demand No'),
+        AppNavSubItem('discount-shape', 'Concession No'),
+        AppNavSubItem('money-recive', 'Refund No'),
+        // No ADVNO series any more: a student or mess advance is numbered from
+        // the RECEIPT sequence of the fee group it is banked under, like every
+        // other receipt. See save_advance_collection.
+        AppNavSubItem('receipt-1', 'Receipt Sequence'),
+        // School only: Advance Fee Collection's own receipt series (ADVFEENO).
+        AppNavSubItem('receipt-2', 'Advance Fee Receipt No'),
+      ]),
   AppNavItem('bank', 'Bank Accounts', section: 'SETUP', adminOnly: true),
   // Roles first, then Users — you define a role before assigning it to a user.
   AppNavItem('lock-1', 'Roles & Access', section: 'SETUP', adminOnly: true),
   AppNavItem('security-user', 'Users', section: 'SETUP', adminOnly: true),
   // Institution-wide behaviour toggles (admission numbering, arrear-first collection).
   AppNavItem('setting-2', 'Utilities', section: 'SETUP', adminOnly: true),
+  // School only: close the year into the next one (promotion, fees, arrears,
+  // receipt series, advances) -- the old product's Year End Processing.
+  AppNavItem('calendar-tick', 'Year End Process', section: 'SETUP', adminOnly: true),
+
+
+  // GENERAL
+  AppNavItem('notification', 'Notices', section: 'GENERAL'),
+  AppNavItem('notification-bing', 'Notifications', section: 'GENERAL'),
 ];
 
 /// Menus an Admin can never lose — granting/revoking these would let an Admin
-/// lock themselves (or every Admin) out of the app.
-const Set<String> kAlwaysAllowedForAdmin = {'Dashboard', 'Users', 'Roles & Access'};
+/// lock themselves (or every Admin) out of the app. Dashboard is NOT one of
+/// them: it is a landing page, not a way back in, so it can be hidden from any
+/// role. Users + Roles & Access are what an Admin needs to undo a change.
+const Set<String> kAlwaysAllowedForAdmin = {'Users', 'Roles & Access'};
 
-/// Menus that can be assigned to a role in the Roles & Access screen.
-/// Dashboard is excluded — everyone gets it.
-List<AppNavItem> get kAssignableNavItems =>
-    kAppNavItems.where((i) => i.label != 'Dashboard').toList();
+/// Menus that can be assigned to a role in the Roles & Access screen — all of
+/// them, Dashboard included.
+List<AppNavItem> get kAssignableNavItems => kAppNavItems;

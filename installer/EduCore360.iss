@@ -8,7 +8,7 @@
 ;      (or open in the Inno Setup IDE and press F9)
 
 #define MyAppName       "EduCore360"
-#define MyAppVersion    "1.0.1"
+#define MyAppVersion    "0.0.16"
 #define MyAppPublisher  "TBS Technologies Private Limited"
 #define MyAppExeName    "school_admin.exe"
 ; UUID for this product line — bumping it makes Windows treat upgrades as
@@ -51,7 +51,14 @@ Name: "quicklaunchicon"; Description: "Create a &Quick Launch shortcut"; GroupDe
 
 [Files]
 ; Copy the entire Release folder
-Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; NEVER package a config.json. A leftover one in the build folder points the
+; installed app at whatever project it names -- a TEST config shipped to
+; customers would send live fee collection, and its Paytm routing, at the
+; wrong database. config.example.json is the deliberate opt-in instead.
+Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "config.json"
+; Bundle the config.json template (rename to config.json to point at another
+; Supabase project). Never overwrites a real config.json — different filename.
+Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

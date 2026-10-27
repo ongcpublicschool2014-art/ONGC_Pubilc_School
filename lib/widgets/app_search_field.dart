@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'app_icon.dart';
+import 'app_ui.dart';
 
-/// Pill-shaped search input with leading magnifier icon.
+/// Search input with leading magnifier icon, drawn with the kit field.
 /// Used in place of raw TextField+InputDecoration for a consistent look
 /// across all screens. Compacts at width <= 1366 to match the project's
 /// responsive action-button spec.
@@ -12,7 +12,8 @@ class AppSearchField extends StatelessWidget {
   final double? width;
 
   /// Optional height override. When null (the default), the field uses
-  /// 40 px at 1920+ and 30 px at <= 1366 so it lines up with action buttons.
+  /// the theme control height (44 px, 40 px at <= 1366) so it lines up with
+  /// action buttons.
   final double? height;
 
   final FocusNode? focusNode;
@@ -33,52 +34,25 @@ class AppSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const fieldBg = Color(0xFFF1F2F4);
-    const hintColor = Color(0xFF9CA3AF);
-    const textColor = Color(0xFF1F2937);
-
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final effectiveHeight = height ?? (compact ? 30.0 : 40.0);
-    final hPad = compact ? 10.0 : 14.0;
-    final iconSize = compact ? 12.0 : 16.0;
-    final iconGap = compact ? 6.0 : 10.0;
-    final textSize = compact ? 11.0 : 13.0;
-    final cursorH = compact ? 14.0 : 16.0;
-
-    return Container(
+    // The kit field: white, 1px border, radius 10, 2px focus ring, control
+    // height (44 / 40 on <= 1366) so it lines up with action buttons.
+    return SizedBox(
       width: width,
-      height: effectiveHeight,
-      decoration: BoxDecoration(
-        color: fieldBg,
-        borderRadius: BorderRadius.circular(effectiveHeight / 2),
-      ),
-      padding: EdgeInsets.symmetric(horizontal: hPad),
-      child: Row(
-        children: [
-          AppIcon.linear('search-normal', size: iconSize, color: hintColor),
-          SizedBox(width: iconGap),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              autofocus: autofocus,
-              onChanged: onChanged,
-              style: TextStyle(fontSize: textSize, color: textColor),
-              cursorHeight: cursorH,
-              decoration: InputDecoration(
-                hintText: hintText,
-                hintStyle: TextStyle(fontSize: textSize, color: hintColor),
-                isCollapsed: true,
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          if (suffixIcon != null) suffixIcon!,
-        ],
+      height: height ?? AppUI.controlHeight(context),
+      child: TextField(
+        controller: controller,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        onChanged: onChanged,
+        style: AppUI.fieldText(context),
+        decoration: AppUI.field(
+          context,
+          hintText ?? '',
+          leadingIcon: 'search-normal',
+          suffix: suffixIcon,
+        ).copyWith(
+          suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+        ),
       ),
     );
   }

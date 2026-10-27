@@ -5,9 +5,12 @@ import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
+import '../../utils/master_usage.dart';
+import '../../utils/friendly_error.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
+import '../../widgets/app_ui.dart';
 
 /// Bank account master for the active institution. Each row represents a
 /// beneficiary account a fee group can route to (school's main account,
@@ -77,7 +80,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       _fetchFeeGroups();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to assign bank account'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Failed to assign bank account'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -126,8 +129,13 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _accNoController.clear();
     _accHolderController.clear();
     _paytmMidController.clear();
-    _formKey.currentState?.reset();
     setState(() => _editingBanId = null);
+    // reset() restores each field to the value it was last BUILT with, so it
+    // must run after the rebuild with the cleared controllers -- calling it
+    // straight away put the typed text back and Clear appeared to do nothing.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _formKey.currentState?.reset();
+    });
   }
 
   void _loadIntoForm(Map<String, dynamic> b) {
@@ -147,6 +155,35 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // ONE ACCOUNT NUMBER, ONE ROW.
+    //
+    // Two rows for the same account is not a harmless duplicate here: a fee
+    // group routes to a ban_id, so the two halves of one real account can be
+    // mapped to different groups, carry different paytm_mid values, and
+    // settle money two ways while the bank statement shows one account.
+    // Reconciliation then cannot tell which row a credit belongs to.
+    //
+    // The database enforces it too (BANK_ACCOUNT_UNIQUE.sql); this is the
+    // readable version, and it names the row already using the number.
+    final accNo = _accNoController.text.trim();
+    final clash = _banks.firstWhere(
+      (b) =>
+          (b['banaccno']?.toString().trim() ?? '') == accNo &&
+          b['ban_id'] != _editingBanId,
+      orElse: () => const <String, dynamic>{},
+    );
+    if (clash.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Account number $accNo already belongs to "${clash['banname']}" — '
+            '${clash['banbranch']}. Edit that account instead of adding it twice.'),
+        backgroundColor: AppColors.error,
+        duration: const Duration(seconds: 5),
+      ));
+      return;
+    }
+
     setState(() => _isSaving = true);
 
     final data = <String, dynamic>{
@@ -185,12 +222,93 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       _fetchBanks();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to save bank account'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Failed to save bank account'), backgroundColor: AppColors.error),
       );
     }
   }
 
   Future<void> _confirmDelete(Map<String, dynamic> b) async {
+    final banId = b['ban_id'] as int?;
+    if (banId == null) return;
+
+    // ── An account that signs Paytm orders may not be removed ─────────────
+    // paytm_mid is the merchant online payments for this account are signed
+    // with. Every order ever raised against it is matched back to Paytm THROUGH
+    // this row: the recovery sweep takes the ban_id the order carries, looks up
+    // the merchant here, and asks that merchant whether the money was captured.
+    //
+    // Delete is a SOFT delete, so the row survives -- but the account stops
+    // being offered anywhere, and nobody can see that payments still depend on
+    // it. A capture that arrives late for an order signed here then has nothing
+    // obvious holding it together.
+    //
+    // Note there is deliberately NO "clear the MID and try again" instruction.
+    // Clearing it breaks exactly the same lookup; it would turn a refusal into
+    // a quiet failure, which is worse.
+    final mid = b['paytm_mid']?.toString().trim() ?? '';
+    if (mid.isNotEmpty) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Cannot remove this bank account'),
+          content: Text(
+              '"${b['banname']}" (${b['banaccno']}) carries a Paytm merchant id, '
+              'so online payments are collected through it.\n\n'
+              'Every online payment ever made to this account is matched back to '
+              'Paytm using this record. Removing it would leave any payment still '
+              'being confirmed with no way to be traced, and the money would not '
+              'reach a receipt.\n\n'
+              'An account that has collected online payments stays on the list.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // A fee group settles into a bank through feegroup.ban_id. Deleting the
+    // bank here is a SOFT delete (activestatus = 0), so that mapping is not
+    // cleared -- the group keeps pointing at an account that no longer appears
+    // in any dropdown. Nothing errors; the fee group simply routes to a bank
+    // nobody can see or re-select, and putting it right means finding the
+    // mapping in a screen that no longer offers the account.
+    //
+    // So: refuse while any ACTIVE fee group still points here. A fee group that
+    // was itself deleted does not count -- it holds a stale mapping that will
+    // never be used, and blocking on it would leave the bank undeletable for a
+    // reason the admin cannot see.
+    try {
+      final inUse = await SupabaseService.fromSchema('feegroup')
+          .count()
+          .eq('ban_id', banId)
+          .eq('activestatus', 1);
+      if (inUse > 0) {
+        if (!mounted) return;
+        await showMasterInUseDialog(
+          context,
+          name: b['banname']?.toString() ?? 'This bank account',
+          count: inUse,
+          noun: 'fee group',
+          fix: 'Point those fee groups at another bank account first, in '
+              'Setup > Fee Master > Fee Group.',
+        );
+        return;
+      }
+    } catch (e) {
+      // The check itself failed -- the safe answer is to stop, not to delete
+      // on the assumption that nothing references it.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Could not check whether this bank is in use. ${friendlyError(e)}'),
+        backgroundColor: AppColors.error,
+      ));
+      return;
+    }
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -200,15 +318,13 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            style: AppUI.danger(context),
             child: const Text('Delete'),
           ),
         ],
       ),
     );
     if (ok != true) return;
-    final banId = b['ban_id'] as int?;
-    if (banId == null) return;
     if (await SupabaseService.deleteBank(banId)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -228,30 +344,16 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Page header - matches the User Creation screen.
-          Row(
-            children: [
-              AppIcon('bank', color: AppColors.accent, size: 18),
-              SizedBox(width: 10.w),
-              Text(
-                'Bank Accounts',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          SizedBox(height: 20.h),
+          AppUI.cardHeader(icon: 'bank', title: 'Bank Accounts'),
+          SizedBox(height: AppUI.gap),
           // Form + right column side by side (flex 3/7 like User Creation).
           LayoutBuilder(builder: (context, constraints) {
-            final screenWidth = MediaQuery.of(context).size.width;
-            final isCompact = screenWidth <= 1366;
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Left: Add/Edit form
                 Expanded(flex: 4, child: _buildForm()),
-                SizedBox(width: isCompact ? 12.w : 24.w),
+                SizedBox(width: AppUI.gap),
                 // Right: drilldown when a bank is selected, otherwise
                 // Fee Group Assignments stacked above the Bank Accounts list.
                 Expanded(
@@ -262,7 +364,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _buildAssignmentsPanel(),
-                            SizedBox(height: 16.h),
+                            SizedBox(height: AppUI.gap),
                             _buildList(),
                           ],
                         ),
@@ -277,30 +379,22 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
 
   Widget _buildForm() {
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Form(
         key: _formKey,
         child: FocusTraversalGroup(
           child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                AppIcon(_editingBanId != null ? 'edit-2' : 'add-circle',
-                    size: 18, color: AppColors.accent),
-                SizedBox(width: 8.w),
-                Text(_editingBanId != null ? 'Edit Bank Account' : 'Add Bank Account',
-                    style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
-                const Spacer(),
+            AppUI.cardHeader(
+              icon: _editingBanId != null ? 'edit-2' : 'add-circle',
+              title: _editingBanId != null ? 'Edit Bank Account' : 'Add Bank Account',
+              trailing: [
                 if (_editingBanId != null)
                   TextButton.icon(
                     onPressed: _resetForm,
-                    icon: const AppIcon('add', size: 14, color: AppColors.textSecondary),
+                    icon: const AppIcon('add', size: 14, color: AppColors.primary),
                     label: const Text('New'),
                   ),
               ],
@@ -369,42 +463,28 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             Row(
               children: [
                 Expanded(
-                  child: SizedBox(
-                    height: AppBtn.height(context),
-                    child: OutlinedButton.icon(
-                      onPressed: _isSaving ? null : _resetForm,
-                      icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.textPrimary),
-                      label: const Text('Clear'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textPrimary,
-                        side: const BorderSide(color: AppColors.border),
-                      ),
-                    ),
+                  child: OutlinedButton.icon(
+                    onPressed: _isSaving ? null : _resetForm,
+                    icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.primary),
+                    label: const Text('Clear'),
                   ),
                 ),
                 SizedBox(width: AppBtn.gap(context)),
                 Expanded(
-                  child: SizedBox(
-                    height: AppBtn.height(context),
-                    child: ElevatedButton.icon(
-                      onPressed: _isSaving ? null : _save,
-                      icon: _isSaving
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : AppIcon(
-                              _editingBanId != null ? 'tick-circle' : 'add',
-                              size: AppBtn.iconSize(context),
-                              color: Colors.white,
-                            ),
-                      label: Text(_editingBanId != null ? 'Update' : 'Add Bank'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
+                  child: ElevatedButton.icon(
+                    onPressed: _isSaving ? null : _save,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : AppIcon(
+                            _editingBanId != null ? 'tick-circle' : 'add',
+                            size: AppBtn.iconSize(context),
+                            color: Colors.white,
+                          ),
+                    label: Text(_editingBanId != null ? 'Update' : 'Add Bank'),
                   ),
                 ),
               ],
@@ -428,11 +508,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          required ? '$label *' : label,
-          style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black),
-        ),
-        SizedBox(height: 6.h),
+        AppUI.fieldLabel(label, required: required),
         TextFormField(
           controller: controller,
           keyboardType: keyboardType,
@@ -505,12 +581,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
 
   Widget _buildAssignmentsPanel() {
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -520,17 +592,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               children: [
                 const CardTitleBlock(icon: 'category-2', title: 'Fee Group Assignments', subtitle: 'map fee groups to their collection bank'),
                 const Spacer(),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text(
-                    '${_feeGroups.length} groups',
-                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent),
-                  ),
-                ),
+                AppUI.chip('${_feeGroups.length} groups', AppStatus.info),
               ],
             ),
           ),
@@ -538,10 +600,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()))
           else if (_feeGroups.isEmpty)
             Padding(
-              padding: EdgeInsets.symmetric(vertical: 24.h),
-              child: Center(
-                child: Text('No fee groups yet. Import fee groups in Master Data first.',
-                    style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+              padding: EdgeInsets.symmetric(vertical: 8.h),
+              child: AppUI.empty(
+                title: 'No fee groups yet. Import fee groups in Master Data first.',
+                icon: 'category-2',
               ),
             )
           else
@@ -549,18 +611,18 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             Container(
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Column(
                 children: [
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                    color: AppColors.tableHeadBg,
+                    decoration: AppUI.tableHeadBar,
                     child: Row(
                       children: [
-                        Expanded(flex: 3, child: Text('FEE GROUP', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                        Expanded(flex: 4, child: Text('ROUTED TO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                        AppUI.th('FEE GROUP', flex: 3),
+                        AppUI.th('ROUTED TO', flex: 4),
                       ],
                     ),
                   ),
@@ -576,7 +638,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                         : null;
                     return Container(
                       padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 10.h),
-                      color: i.isEven ? Colors.white : AppColors.surface,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: i == 0 ? null : const Border(top: BorderSide(color: AppColors.divider)),
+                      ),
                       child: Row(
                         children: [
                           Expanded(
@@ -585,10 +650,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(fg['fgdesc']?.toString() ?? '',
-                                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                    style: AppUI.cell.copyWith(fontWeight: FontWeight.w700)),
                                 if (fg['yrlabel'] != null)
                                   Text(fg['yrlabel'].toString(),
-                                      style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
+                                      style: AppUI.muted),
                               ],
                             ),
                           ),
@@ -620,9 +685,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                                   ),
                               ],
                               selectedItemBuilder: (context) => [
-                                Align(alignment: Alignment.centerLeft, child: Text('- No account -', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                                Align(alignment: Alignment.centerLeft, child: Text('- No account -', overflow: TextOverflow.ellipsis, style: _inputTextStyle(context, filled: true))),
                                 for (final b in _banks)
-                                  Align(alignment: Alignment.centerLeft, child: Text('${b['banname']} • ${b['banaccno']}', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+                                  Align(alignment: Alignment.centerLeft, child: Text('${b['banname']} • ${b['banaccno']}', overflow: TextOverflow.ellipsis, style: _inputTextStyle(context, filled: true))),
                               ],
                               onChanged: fgId == null ? null : (v) => _assignBank(fgId, v),
                             ),
@@ -641,12 +706,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
 
   Widget _buildList() {
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
@@ -655,28 +716,12 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               children: [
                 const CardTitleBlock(icon: 'bank', title: 'Bank Accounts', subtitle: 'all bank accounts in this institution'),
                 const Spacer(),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8.r),
-                  ),
-                  child: Text('${_banks.length} accounts',
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-                ),
+                AppUI.chip('${_banks.length} accounts', AppStatus.info),
                 SizedBox(width: 8.w),
-                SizedBox(
-                  height: AppBtn.height(context),
-                  child: ElevatedButton.icon(
-                    onPressed: _fetchBanks,
-                    icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-                    label: const Text('Refresh'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                    ),
-                  ),
+                ElevatedButton.icon(
+                  onPressed: _fetchBanks,
+                  icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
+                  label: const Text('Refresh'),
                 ),
               ],
             ),
@@ -686,21 +731,21 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           Container(
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8.r),
-              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              border: Border.all(color: AppColors.cardBorder),
             ),
             child: Column(
               children: [
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                  color: AppColors.tableHeadBg,
+                  decoration: AppUI.tableHeadBar,
                   child: Row(
                     children: [
-                      SizedBox(width: 50.w, child: Text('S NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      SizedBox(width: 50.w, child: Text('S NO.', style: AppUI.tableHead)),
                       SizedBox(width: 16.w),
-                      Expanded(flex: 3, child: Text('BANK', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                      Expanded(flex: 2, child: Text('BRANCH', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                      Expanded(flex: 3, child: Text('A/C NO.', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                      AppUI.th('BANK', flex: 3),
+                      AppUI.th('BRANCH', flex: 2),
+                      AppUI.th('A/C NO.', flex: 3),
                       SizedBox(width: 30.w),
                     ],
                   ),
@@ -710,10 +755,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                   Padding(padding: EdgeInsets.all(32.w), child: const Center(child: CircularProgressIndicator()))
                 else if (_banks.isEmpty)
                   Padding(
-                    padding: EdgeInsets.all(32.w),
-                    child: Center(
-                      child: Text('No bank accounts yet. Add one on the left.',
-                          style: TextStyle(color: AppColors.textPrimary)),
+                    padding: EdgeInsets.all(8.w),
+                    child: AppUI.empty(
+                      title: 'No bank accounts yet. Add one on the left.',
+                      icon: 'bank',
                     ),
                   )
                 else
@@ -723,20 +768,23 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                       onTap: () => setState(() => _selectedBank = b),
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-                        color: i.isEven ? Colors.white : AppColors.surface,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: i == 0 ? null : const Border(top: BorderSide(color: AppColors.divider)),
+                        ),
                         child: Row(
                           children: [
                             SizedBox(
                               width: 50.w,
                               child: Text('${i + 1}',
-                                  style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                                  style: AppUI.cell.copyWith(color: AppColors.textSecondary)),
                             ),
                             SizedBox(width: 16.w),
                             Expanded(
                               flex: 3,
                               child: Text(
                                 b['banname']?.toString() ?? '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                                style: AppUI.cell.copyWith(fontWeight: FontWeight.w700),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -744,7 +792,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               flex: 2,
                               child: Text(
                                 b['banbranch']?.toString() ?? '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                                style: AppUI.cell.copyWith(color: AppColors.textSecondary),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -752,7 +800,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               flex: 3,
                               child: Text(
                                 b['banaccno']?.toString() ?? '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent),
+                                style: AppUI.cell.copyWith(fontWeight: FontWeight.w600, color: AppColors.accent),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -788,10 +836,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             ],
             SizedBox(
               width: 140.w,
-              child: Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              child: Text(label, style: AppUI.label.copyWith(color: AppColors.textSecondary)),
             ),
             Expanded(
-              child: Text(value, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: valueColor ?? AppColors.textPrimary)),
+              child: Text(value, style: AppUI.body.copyWith(color: valueColor ?? AppColors.textPrimary)),
             ),
           ],
         ),
@@ -806,11 +854,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     final address = addressLines.isEmpty ? '-' : addressLines.join(', ');
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -822,16 +866,16 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               children: [
                 InkWell(
                   onTap: () => setState(() => _selectedBank = null),
-                  borderRadius: BorderRadius.circular(8.r),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                   child: Container(
                     padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                    decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(8.r)),
+                    decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
                         SizedBox(width: 6.w),
-                        Text('Back', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: Colors.white)),
+                        Text('Back', style: AppUI.label.copyWith(color: Colors.white)),
                       ],
                     ),
                   ),
@@ -839,14 +883,14 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                 SizedBox(width: 12.w),
                 Container(width: 1, height: 18, color: AppColors.border),
                 SizedBox(width: 12.w),
-                Text('Bank Accounts', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                Text('Bank Accounts', style: AppUI.muted),
                 SizedBox(width: 6.w),
                 AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                 SizedBox(width: 6.w),
                 Expanded(
                   child: Text(
                     b['banname']?.toString() ?? '-',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                    style: AppUI.label,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -856,7 +900,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           const Divider(height: 1),
           // Bank avatar + name header
           Padding(
-            padding: EdgeInsets.all(20.w),
+            padding: EdgeInsets.all(AppUI.cardPad),
             child: Row(
               children: [
                 CircleAvatar(
@@ -871,13 +915,13 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                     children: [
                       Text(
                         b['banname']?.toString() ?? '-',
-                        style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700),
+                        style: AppUI.cardTitle,
                         overflow: TextOverflow.ellipsis,
                       ),
                       SizedBox(height: 2.h),
                       Text(
                         '${b['banbranch']?.toString() ?? '-'}  •  ${b['ifsccode']?.toString() ?? '-'}',
-                        style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+                        style: AppUI.muted,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
@@ -890,15 +934,15 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           // Detail rows
           SizedBox(height: 8.h),
           detailRow('Account Holder', b['banaccholder']?.toString() ?? '-', icon: 'profile-circle'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Account Number', b['banaccno']?.toString() ?? '-', icon: 'card', valueColor: AppColors.accent),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('IFSC Code', b['ifsccode']?.toString() ?? '-', icon: 'code'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Mobile', (b['banmobile']?.toString().trim().isEmpty ?? true) ? '-' : b['banmobile'].toString(), icon: 'call'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Email', (b['banemail']?.toString().trim().isEmpty ?? true) ? '-' : b['banemail'].toString(), icon: 'sms'),
-          Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.border.withValues(alpha: 0.5)),
+          const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Address', address, icon: 'location'),
           SizedBox(height: 16.h),
           // Edit + Delete actions
@@ -907,35 +951,22 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: SizedBox(
-                    height: AppBtn.height(context),
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        _loadIntoForm(b);
-                        setState(() => _selectedBank = null);
-                      },
-                      icon: AppIcon('edit-2', size: AppBtn.iconSize(context), color: AppColors.accent),
-                      label: const Text('Edit'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.accent,
-                        side: const BorderSide(color: AppColors.accent),
-                      ),
-                    ),
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      _loadIntoForm(b);
+                      setState(() => _selectedBank = null);
+                    },
+                    icon: AppIcon('edit-2', size: AppBtn.iconSize(context), color: AppColors.accent),
+                    label: const Text('Edit'),
                   ),
                 ),
                 SizedBox(width: AppBtn.gap(context)),
                 Expanded(
-                  child: SizedBox(
-                    height: AppBtn.height(context),
-                    child: ElevatedButton.icon(
-                      onPressed: () => _confirmDelete(b),
-                      icon: AppIcon('trash', size: AppBtn.iconSize(context), color: Colors.white),
-                      label: const Text('Delete'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.error,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
+                  child: ElevatedButton.icon(
+                    onPressed: () => _confirmDelete(b),
+                    icon: AppIcon('trash', size: AppBtn.iconSize(context), color: Colors.white),
+                    label: const Text('Delete'),
+                    style: AppUI.danger(context),
                   ),
                 ),
               ],
@@ -947,39 +978,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   }
 
   InputDecoration _inputDecoration(BuildContext context, String hint, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
-      ),
-      filled: true,
-      fillColor: Colors.white,
-    );
+    return AppUI.field(context, hint, filled: filled);
   }
 
   TextStyle _inputTextStyle(BuildContext context, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    return TextStyle(
-      fontWeight: filled ? FontWeight.w600 : FontWeight.w500,
-      fontSize: compact ? 11 : 14,
-      color: filled ? AppColors.accent : const Color(0xFF555555),
-    );
+    return AppUI.fieldText(context, filled: filled);
   }
 }

@@ -77,3 +77,11 @@ Thumbs.db
 
 # Supabase CLI temp
 supabase/.temp/
+
+# A TEST config copied next to the installer so the two travel together.
+# It carries an anon key, and on this project that key has broad access --
+# it must never be committed.
+installer/dist/config.json
+
+# Integration tests: kept locally, not tracked
+integration_test/

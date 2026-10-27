@@ -6,10 +6,12 @@ import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 import '../../utils/formatters.dart';
 class FeeDemandApprovalScreen extends StatefulWidget {
   const FeeDemandApprovalScreen({super.key});
@@ -28,6 +30,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
   final Set<String> _selected = {};
 
   bool _approving = false;
+  int _approveProgress = 0; // rows approved so far, for the button label
 
   final _searchController = TextEditingController();
   String _searchQuery = '';
@@ -185,12 +188,9 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-        title: Text('Confirm Approval',
-            style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
+        title: const Text('Confirm Approval'),
         content: Text(
           'Approve ${_selected.length} fee demand${_selected.length == 1 ? '' : 's'}?',
-          style: TextStyle(fontSize: 14.sp),
         ),
         actions: [
           TextButton(
@@ -199,13 +199,6 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.accent,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10.r)),
-            ),
             child: const Text('Approve'),
           ),
         ],
@@ -214,7 +207,10 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
 
     if (confirm != true) return;
 
-    setState(() => _approving = true);
+    setState(() {
+      _approving = true;
+      _approveProgress = 0;
+    });
 
     try {
       final tempIds = _selected
@@ -224,10 +220,22 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
 
       if (tempIds.isNotEmpty) {
         final auth = context.read<AuthProvider>();
-        await SupabaseService.fromSchema('tempfeedemand')
-            .update({'isapproved': true})
-            .eq('ins_id', auth.insId!)
-            .inFilter('temp_id', tempIds);
+        // Approve in chunks: a single inFilter with thousands of ids overruns
+        // PostgREST's URL limit, and one UPDATE firing thousands of
+        // fn_approve_tempfeedemand triggers exceeds the statement timeout.
+        const chunkSize = 400;
+        for (var i = 0; i < tempIds.length; i += chunkSize) {
+          final chunk =
+              tempIds.sublist(i, (i + chunkSize).clamp(0, tempIds.length));
+          await SupabaseService.fromSchema('tempfeedemand')
+              .update({'isapproved': true})
+              .eq('ins_id', auth.insId!)
+              .inFilter('temp_id', chunk);
+          if (mounted && tempIds.length > chunkSize) {
+            setState(() => _approveProgress =
+                (i + chunk.length).clamp(0, tempIds.length));
+          }
+        }
       }
 
       if (mounted) {
@@ -264,11 +272,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         // Card container — matches Bank Reconciliation layout
         Expanded(
           child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(),
             child: Column(
               children: [
                 // Title bar with selected count + Approve + Refresh
@@ -312,10 +316,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
             ),
             Text(
               'Select All',
-              style: TextStyle(
-                  fontSize: 13.sp,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary),
+              style: AppUI.label,
             ),
           ],
         ),
@@ -329,46 +330,28 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                   width: 14.w,
                   height: 14.h,
                   child: const CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
+                      strokeWidth: 2, color: AppColors.textLight),
                 )
               : AppIcon.linear('tick-circle', size: 18),
           label: Text(_approving
-              ? 'Approving...'
+              ? (_approveProgress > 0
+                  ? 'Approving $_approveProgress/${_selected.length}...'
+                  : 'Approving...')
               : 'Approve (${_selected.length})'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.accent,
-            foregroundColor: Colors.white,
-            disabledBackgroundColor: const Color(0xFFE0E0E0),
-            disabledForegroundColor: const Color(0xFF9E9E9E),
-            padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-            textStyle:
-                TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-          ),
         ),
         SizedBox(width: 16.w),
 
         // Refresh
-        SizedBox(
-          height: AppBtn.height(context),
-          child: ElevatedButton.icon(
-            onPressed: _loading ? null : _loadDemands,
-            icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
-            label: const Text('Refresh'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981),
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: const Color(0xFF10B981),
-              disabledForegroundColor: Colors.white,
-              elevation: 0,
-            ),
-          ),
+        OutlinedButton.icon(
+          onPressed: _loading ? null : _loadDemands,
+          icon: AppIcon('refresh', size: AppBtn.iconSize(context),
+              color: _loading ? AppColors.textLight : AppColors.primary),
+          label: const Text('Refresh'),
         ),
-        SizedBox(width: 4.w),
+        SizedBox(width: 10.w),
         Text(
           '${_filteredDemands.length} record${_filteredDemands.length == 1 ? '' : 's'}',
-          style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary),
+          style: AppUI.muted,
         ),
 
         const Spacer(),
@@ -404,23 +387,26 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
 
         // Class filter dropdown
         Container(
-          height: 36.h,
+          height: AppUI.controlHeight(context),
           padding: EdgeInsets.symmetric(horizontal: 12.w),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: AppColors.border),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+            border: Border.all(
+                color: _selectedClass != null
+                    ? AppColors.primary.withValues(alpha: 0.55)
+                    : AppColors.border),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String?>(
               value: _selectedClass,
-              hint: Text('All Classes',
-                  style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+              hint: Text(schoolTerm('All Classes'),
+                  style: AppUI.fieldText(context).copyWith(color: AppColors.textLight)),
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
               elevation: 6,
-              style: TextStyle(
-                  fontSize: 13.sp, color: AppColors.textPrimary),
+              style: AppUI.fieldText(context, filled: _selectedClass != null),
               icon: AppIcon.linear('Chevron Down',
                   size: 18, color: AppColors.textSecondary),
               isDense: true,
@@ -432,12 +418,12 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               items: [
                 DropdownMenuItem<String?>(
                   value: null,
-                  child: Text('All Classes',
+                  child: Text(schoolTerm('All Classes'),
                       style: TextStyle(fontSize: 13.sp)),
                 ),
                 ..._classList.map((cls) => DropdownMenuItem<String?>(
                       value: cls,
-                      child: Text('Class $cls',
+                      child: Text(schoolTerm('Class $cls'),
                           style: TextStyle(fontSize: 13.sp)),
                     )),
               ],
@@ -456,8 +442,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
           AppIcon.linear('info-circle',
               size: 48.sp, color: AppColors.error),
           SizedBox(height: 8.h),
-          Text(_errorMsg!,
-              style: const TextStyle(color: AppColors.textSecondary)),
+          Text(_errorMsg!, style: AppUI.muted),
           SizedBox(height: 12.h),
           OutlinedButton(onPressed: _loadDemands, child: const Text('Retry')),
         ],
@@ -501,24 +486,25 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
     final demands = _pagedDemands;
 
     if (_filteredDemands.isEmpty) {
-      // Match the Bank Reconciliation empty-state look: a bordered white
-      // card with a single centered line of text — no icon stack.
+      // The shared empty state, inside the same bordered frame the table
+      // uses, saying why it is empty.
       return Padding(
         padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(8.r),
-            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+            border: Border.all(color: AppColors.cardBorder),
           ),
-          child: Center(
-            child: Text(
-              _searchQuery.isNotEmpty
-                  ? 'No matching records'
-                  : 'No fee demands found',
-              style: const TextStyle(color: AppColors.textSecondary),
-            ),
+          child: AppUI.empty(
+            icon: 'tick-circle',
+            title: _searchQuery.isNotEmpty
+                ? 'No matching records'
+                : 'No fee demands found',
+            why: _searchQuery.isNotEmpty
+                ? 'Nothing matches this search. Clear it to see every demand.'
+                : 'There are no fee demands waiting for approval.',
           ),
         ),
       );
@@ -530,8 +516,8 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
         child: LayoutBuilder(
         builder: (context, constraints) {
@@ -578,10 +564,10 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
                           child: Row(
                             children: [
                               SizedBox(width: 40.w),
-                              _headerCell('Roll No', 3),
+                              _headerCell(schoolTerm('Roll No'), 3),
                               _headerCell('Student Name', 5),
-                              _headerCell('Class', 3),
-                              _headerCell('Semester', 3, center: true),
+                              _headerCell(schoolTerm('Class'), 3),
+                              _headerCell(schoolTerm('Semester'), 3, center: true),
                               _headerCell('Fee Type', 3),
                               _headerCell('Fee Amount', 3, right: true),
                               SizedBox(width: 16.w),
@@ -785,11 +771,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
       flex: flex,
       child: Text(
         label.toUpperCase(),
-        style: TextStyle(
-            fontSize: 12.sp,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textPrimary,
-            letterSpacing: 0.3),
+        style: AppUI.tableHead,
         textAlign: right
             ? TextAlign.right
             : center
@@ -828,9 +810,9 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
       onTap: (key.isNotEmpty && !isApproved) ? () => _toggleOne(key, !isSelected) : null,
       child: Container(
         color: isApproved
-            ? Colors.grey.shade50
+            ? AppColors.tableHeadBg
             : isSelected
-                ? AppColors.accent.withValues(alpha: 0.06)
+                ? AppColors.primaryLight
                 : index.isOdd
                     ? AppColors.surface
                     : Colors.white,
@@ -849,24 +831,21 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(admNo,
-                    style: TextStyle(
-                        fontSize: 13.sp,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.accent)),
+                    style: AppUI.cell.copyWith(
+                        fontWeight: FontWeight.w600, color: AppColors.primary)),
               ),
               // Student Name
               Expanded(
                 flex: 5,
                 child: Text(name.isNotEmpty ? name : '-',
-                    style: TextStyle(
-                        fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell.copyWith(fontWeight: FontWeight.w600),
                     overflow: TextOverflow.ellipsis),
               ),
               // Class
               Expanded(
                 flex: 3,
                 child: Text(cls,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell,
                     textAlign: TextAlign.left,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -874,7 +853,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(term,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell,
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -882,14 +861,14 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(type,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell,
                     overflow: TextOverflow.ellipsis),
               ),
               // Fee Amount
               Expanded(
                 flex: 3,
                 child: Text('${_fmt(feeAmt)}',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.money,
                     textAlign: TextAlign.right),
               ),
               SizedBox(width: 16.w),
@@ -897,7 +876,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(concessionName,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell,
                     textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -906,7 +885,7 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
               Expanded(
                 flex: 3,
                 child: Text(createdBy,
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    style: AppUI.cell,
                     overflow: TextOverflow.ellipsis),
               ),
               // Status
@@ -947,9 +926,8 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
       child: Row(
         children: [
           Text(
-            'Showing $start–$end of $total records',
-            style: TextStyle(
-                fontSize: 13.sp, color: AppColors.textSecondary),
+            AppUI.showing(start, end, total),
+            style: AppUI.muted,
           ),
           const Spacer(),
           // Prev button
@@ -1024,22 +1002,12 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
   }
 
   Widget _statusBadge(String status) {
-    final (label, bg, fg) = switch (status.toUpperCase()) {
-      'A' => ('Approved', const Color(0xFFE6F4EA), AppColors.success),
-      'R' => ('Rejected', const Color(0xFFFCE8E6), AppColors.error),
-      'P' || _ => ('Pending', const Color(0xFFFFF8E1), const Color(0xFFE65100)),
+    final (label, kind) = switch (status.toUpperCase()) {
+      'A' => ('Approved', AppStatus.success),
+      'R' => ('Rejected', AppStatus.danger),
+      'P' || _ => ('Pending', AppStatus.warning),
     };
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(6.r),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 10.sp, fontWeight: FontWeight.w600, color: fg),
-          textAlign: TextAlign.center),
-    );
+    return Center(child: AppUI.chip(label, kind));
   }
 
   String _fmt(double v) => formatIndianNumber(v);

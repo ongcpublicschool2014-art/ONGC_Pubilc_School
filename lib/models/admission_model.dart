@@ -12,6 +12,10 @@ class AdmissionModel {
   final String admno;
   final DateTime admdate;
   final String? admsource;
+
+  /// 1 = seat booked now, studies from next year. See the Pre-admission
+  /// tick on the Admission Entry screen.
+  final int? preadmission;
   final String admstatus; // PENDING | ALLOCATED | CANCELLED
   final String? allocatedclass;
   final int? stuId;
@@ -33,6 +37,15 @@ class AdmissionModel {
   final String? stubloodgrp;
   final String? stuphoto;
   final String? aadharno;
+  /// Government student identifiers entered alongside Aadhar. EMIS comes from
+  /// the school record; UMIS is issued on university enrolment, so a fresher
+  /// often has one and not the other.
+  final String? emisno;
+  final String? umisno;
+  /// Government scholarship. 'Y' / 'N' / null (not yet asked). The type is only
+  /// meaningful when eligible is 'Y' — the form clears it when set back to No.
+  final String? scholarship;
+  final String? scholarshiptype;
   final String? courname;
   final String? stuclass;
   final String? admname; // admission type
@@ -46,6 +59,8 @@ class AdmissionModel {
 
   // demographics / facilities
   final String? community;
+  /// Admission -> Division (name from the Division master).
+  final String? division;
   final String? caste;
   final String? religion;
   final String? nationality;
@@ -84,6 +99,7 @@ class AdmissionModel {
     required this.admno,
     required this.admdate,
     this.admsource,
+    this.preadmission,
     this.admstatus = 'PENDING',
     this.allocatedclass,
     this.stuId,
@@ -103,6 +119,10 @@ class AdmissionModel {
     this.stubloodgrp,
     this.stuphoto,
     this.aadharno,
+    this.emisno,
+    this.umisno,
+    this.scholarship,
+    this.scholarshiptype,
     this.courname,
     this.stuclass,
     this.admname,
@@ -114,6 +134,7 @@ class AdmissionModel {
     this.medium,
     this.paremail,
     this.community,
+    this.division,
     this.caste,
     this.religion,
     this.nationality,
@@ -155,6 +176,7 @@ class AdmissionModel {
       admno: j['admno']?.toString() ?? '',
       admdate: _date(j['admdate']) ?? DateTime.now(),
       admsource: j['admsource']?.toString(),
+      preadmission: (j['preadmission'] as num?)?.toInt(),
       admstatus: j['admstatus']?.toString() ?? 'PENDING',
       allocatedclass: j['allocatedclass']?.toString(),
       stuId: _int(j['stu_id']),
@@ -174,6 +196,10 @@ class AdmissionModel {
       stubloodgrp: j['stubloodgrp']?.toString(),
       stuphoto: j['stuphoto']?.toString(),
       aadharno: j['aadharno']?.toString(),
+      emisno: j['emisno']?.toString(),
+      umisno: j['umisno']?.toString(),
+      scholarship: j['scholarship']?.toString(),
+      scholarshiptype: j['scholarshiptype']?.toString(),
       courname: j['courname']?.toString(),
       stuclass: j['stuclass']?.toString(),
       admname: j['admname']?.toString(),
@@ -185,6 +211,7 @@ class AdmissionModel {
       medium: j['medium']?.toString(),
       paremail: j['paremail']?.toString(),
       community: j['community']?.toString(),
+      division: j['division']?.toString(),
       caste: j['caste']?.toString(),
       religion: j['religion']?.toString(),
       nationality: j['nationality']?.toString(),
@@ -215,6 +242,8 @@ class AdmissionModel {
       stugender == 'M' ? 'Male' : stugender == 'F' ? 'Female' : 'Other';
   bool get isAllocated => admstatus == 'ALLOCATED' || stuId != null;
   bool get isPending => admstatus == 'PENDING';
+  /// A TC has been issued (leaving status 2/3/4/5/9) → the record is view-only.
+  bool get isTcLocked => activestatus != 1;
 }
 
 /// Admission workflow statuses for the public.admission staging table.

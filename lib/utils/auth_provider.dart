@@ -138,6 +138,10 @@ class AuthProvider extends ChangeNotifier {
             final shortName = (insRow['inshortname'] as String).toLowerCase();
             _schema = '$shortName${selectedYear.replaceAll('-', '')}';
             SupabaseService.setSchema(_schema);
+            _yearLabel = selectedYear;
+            // server-side RPCs follow the year picked at login
+            await SupabaseService.setSessionYear(selectedYear);
+            await SupabaseService.masterTablesReady;
             // Schema exposure used to run here on every login — moved to the
             // registration flow only, so we don't hit the RPC thousands of
             // times/day for schemas that are already exposed. If a schema
@@ -192,30 +196,37 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Auto-login using saved credentials — returns true if successful
-  Future<bool> tryAutoLogin() async {
+  /// Closing the app ends the session: the password is required again on the
+  /// next launch. This wipes any password left on disk by an older build that
+  /// did auto-login — both the secure-storage copy and the legacy plaintext one
+  /// in SharedPreferences — so upgrading actually removes it rather than
+  /// leaving it sitting there unused.
+  ///
+  /// The email is deliberately kept, only to pre-fill the login field.
+  Future<void> forgetSavedPassword() async {
     final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString(_kEmail);
-    // One-time migration: old builds stored the password in SharedPreferences.
-    // Move it to secure storage and wipe the plaintext copy.
-    final legacyPassword = prefs.getString(_kPassword);
-    if (legacyPassword != null) {
-      await _secureStorage.write(key: _kPassword, value: legacyPassword);
-      await prefs.remove(_kPassword);
+    await prefs.remove(_kPassword);
+    try {
+      await _secureStorage.delete(key: _kPassword);
+    } catch (_) {
+      // Secure storage can be unavailable on a locked profile; the plaintext
+      // copy is gone either way, which is the part that matters.
     }
-    final password = await _secureStorage.read(key: _kPassword);
-    final insId = prefs.getInt(_kInsId);
-    final isSuperAdmin = prefs.getBool(_kIsSuperAdmin) ?? false;
-    final yearLabel = prefs.getString(_kYearLabel);
-    if (email == null || password == null) return false;
-    return login(email, password, insId: insId, isSuperAdmin: isSuperAdmin, yearLabel: yearLabel);
+  }
+
+  /// The last email that signed in on this machine, for pre-filling the login
+  /// form. Never a password.
+  Future<String?> savedEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_kEmail);
+    return (v == null || v.isEmpty) ? null : v;
   }
 
   /// Save credentials for auto-login on next launch
   Future<void> saveCredentials(String email, String password, {int? insId, bool isSuperAdmin = false, String? yearLabel}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kEmail, email);
-    await _secureStorage.write(key: _kPassword, value: password);
+    // The password is NOT stored. Every launch asks for it again.
     await prefs.setBool(_kIsSuperAdmin, isSuperAdmin);
     if (insId != null) {
       await prefs.setInt(_kInsId, insId);
@@ -243,6 +254,18 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove(_kSchema);
     await prefs.remove(_kYearLabel);
     await _secureStorage.delete(key: _kPassword);
+  }
+
+  /// The dashboard's year switch: screens that re-apply [schema] on open
+  /// (Misc / Advance Collection, reports ...) and the server session must all
+  /// follow the year now on screen, not the one picked at login.
+  Future<void> switchYear(String schema, String yearLabel) async {
+    _schema = schema;
+    _yearLabel = yearLabel;
+    SupabaseService.setSchema(schema);
+    await SupabaseService.masterTablesReady;
+    await SupabaseService.setSessionYear(yearLabel);
+    notifyListeners();
   }
 
   Future<void> logout() async {
@@ -273,7 +296,7 @@ class AuthProvider extends ChangeNotifier {
           .select('yrlabel')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
-          .order('iyr_id', ascending: false)
+          .order('yrlabel', ascending: false)
           .limit(1)
           .maybeSingle();
       if (result != null && result['yrlabel'] != null) {

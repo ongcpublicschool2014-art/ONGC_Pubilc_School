@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../utils/app_theme.dart';
 import '../services/supabase_service.dart';
 import 'app_icon.dart';
+import 'app_ui.dart';
 
 /// Day-wise and month-wise collection charts.
 ///
@@ -181,13 +182,12 @@ class _CollectionChartsState extends State<CollectionCharts> {
     }
     if (_error != null) {
       return SizedBox(
-        height: 160.h,
-        child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('Could not load charts', style: TextStyle(fontSize: 14.sp, color: AppColors.error, fontWeight: FontWeight.w600)),
-            SizedBox(height: 8.h),
-            OutlinedButton(onPressed: _load, child: const Text('Retry')),
-          ]),
+        height: 240.h,
+        child: AppUI.empty(
+          title: 'Could not load charts',
+          why: 'The collection figures did not load. Check the connection and retry.',
+          icon: 'info-circle',
+          action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
         ),
       );
     }
@@ -220,9 +220,9 @@ class _CollectionChartsState extends State<CollectionCharts> {
       if (c.maxWidth <= 1000) {
         return Column(children: [
           trend,
-          SizedBox(height: 16.h),
+          SizedBox(height: AppUI.gap),
           month,
-          SizedBox(height: 16.h),
+          SizedBox(height: AppUI.gap),
           methods,
         ]);
       }
@@ -231,9 +231,9 @@ class _CollectionChartsState extends State<CollectionCharts> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(flex: 3, child: trend),
-            SizedBox(width: 16.w),
+            SizedBox(width: AppUI.gap),
             Expanded(flex: 2, child: month),
-            SizedBox(width: 16.w),
+            SizedBox(width: AppUI.gap),
             Expanded(flex: 2, child: methods),
           ],
         ),
@@ -249,27 +249,12 @@ class _CollectionChartsState extends State<CollectionCharts> {
     Widget? action,
   }) {
     return Container(
-      padding: EdgeInsets.all(18.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14.r),
-        border: Border.all(color: AppColors.border),
-        boxShadow: const [
-          BoxShadow(color: Color.fromRGBO(16, 24, 40, 0.04), offset: Offset(0, 1), blurRadius: 2),
-          BoxShadow(color: Color.fromRGBO(16, 24, 40, 0.05), offset: Offset(0, 8), blurRadius: 20, spreadRadius: -6),
-        ],
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            AppIcon(icon, size: 18, color: AppColors.primary),
-            SizedBox(width: 8.w),
-            Text(title, style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-            SizedBox(width: 8.w),
-            Expanded(child: Text(subtitle, style: TextStyle(fontSize: 11.sp, color: AppColors.textLight))),
-            if (action != null) action,
-          ]),
+          AppUI.cardHeader(icon: icon, title: title, subtitle: subtitle, trailing: [if (action != null) action]),
           SizedBox(height: 18.h),
           child,
         ],
@@ -461,8 +446,12 @@ class _CollectionChartsState extends State<CollectionCharts> {
   }
 
   Widget _emptyChart(String msg) => SizedBox(
-        height: 120.h,
-        child: Center(child: Text(msg, style: TextStyle(fontSize: 13.sp, color: AppColors.textLight))),
+        height: 220.h,
+        child: AppUI.empty(
+          title: msg,
+          why: 'Reconciled receipts will chart here once fees are collected.',
+          icon: 'chart-1',
+        ),
       );
 }
 
@@ -484,7 +473,7 @@ class _DonutPainter extends CustomPainter {
     );
     // Track ring.
     canvas.drawArc(rect, 0, 2 * math.pi, false,
-        Paint()..style = PaintingStyle.stroke..strokeWidth = stroke..color = const Color(0xFFEEF2F8));
+        Paint()..style = PaintingStyle.stroke..strokeWidth = stroke..color = AppColors.divider);
 
     const gap = 0.04; // radians between slices
     var start = -math.pi / 2;

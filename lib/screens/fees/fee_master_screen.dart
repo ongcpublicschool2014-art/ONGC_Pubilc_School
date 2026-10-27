@@ -3,10 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/fee_kind.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/master_usage.dart';
+import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../widgets/pill_tab.dart';
@@ -20,7 +25,34 @@ import '../admin/settings_screen.dart' show PaymentSequenceTab, FineRulesTab;
 /// entry; they live here now so all fee configuration is in one place.
 /// Fee Master — pill-tab page shell per fee-master-design.md § 1.
 class FeeMasterScreen extends StatefulWidget {
-  const FeeMasterScreen({super.key});
+  /// Which tab to open at. Each tab is its own sidebar submenu, so the sidebar
+  /// is normally the tab selector and [showTabBar] is false.
+  final int initialTab;
+
+  /// When false the in-screen pill tab bar is hidden.
+  final bool showTabBar;
+
+  const FeeMasterScreen({super.key, this.initialTab = 0, this.showTabBar = true});
+
+  /// The tab order, and the sidebar's link to it.
+  ///
+  /// On the widget rather than the State because the sidebar resolves a
+  /// sub-item to a tab by LABEL, not by position, and reads this from
+  /// outside the file -- see _subTab in dashboard_screen.dart.
+  static const tabLabels = [
+    'Fee Group',
+    'Fee Type',
+    'Semester',
+    'Demand No',
+    'Concession No',
+    'Refund No',
+    'Class Fee Demand',
+    'Receipt Sequence',
+    'Fine Rules',
+    'Class Matching',
+    'Advance Fee Definition',
+    'Advance Fee Receipt No',
+  ];
 
   @override
   State<FeeMasterScreen> createState() => _FeeMasterScreenState();
@@ -29,17 +61,30 @@ class FeeMasterScreen extends StatefulWidget {
 class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
-  static const _tabLabels = [
-    'Fee Group', 'Fee Type', 'Semester', 'Class Fee Demand', 'Payment Sequence', 'Demand No', 'Fine Rules',
-  ];
   static const _tabIcons = [
-    'receipt-discount', 'tag', 'calendar-1', 'category', 'sort', 'hashtag', 'warning-2',
+    'receipt-discount',
+    'tag',
+    'calendar-1',
+    'category',
+    'discount-shape',
+    'money-recive',
+    'empty-wallet-add',
+    'sort',
+    'hashtag',
+    'warning-2',
+    'arrow-swap-horizontal',
+    'empty-wallet-add',
   ];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: _tabLabels.length, vsync: this);
+    _tabController = TabController(
+        length: FeeMasterScreen.tabLabels.length,
+        vsync: this,
+        // clamp: a sub-index carried over from a screen with more tabs
+        // would otherwise be out of range here.
+        initialIndex: widget.initialTab.clamp(0, FeeMasterScreen.tabLabels.length - 1));
   }
 
   @override
@@ -53,32 +98,35 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ListenableBuilder(
-          listenable: _tabController,
-          builder: (context, _) {
-            final selected = _tabController.index;
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
+        if (widget.showTabBar)
+          ListenableBuilder(
+            listenable: _tabController,
+            builder: (context, _) {
+              final selected = _tabController.index;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                // Wrap, not a horizontal scroll view: with nine tabs the row runs
+                // past the window on a laptop screen, and a horizontal
+                // SingleChildScrollView has no scrollbar and ignores the mouse
+                // wheel on desktop — the last tabs were simply unreachable.
+                // Wrapping keeps one line when it fits and flows to a second when
+                // it doesn't, so every tab stays clickable at any width.
+                child: Wrap(
+                  spacing: PillTab.gap(context),
+                  runSpacing: 8,
                   children: [
-                    for (var i = 0; i < _tabLabels.length; i++) ...[
+                    for (var i = 0; i < FeeMasterScreen.tabLabels.length; i++)
                       PillTab(
                         icon: _tabIcons[i],
-                        label: _tabLabels[i],
+                        label: schoolTerm(FeeMasterScreen.tabLabels[i]),
                         selected: selected == i,
                         onTap: () => _tabController.animateTo(i),
                       ),
-                      if (i < _tabLabels.length - 1)
-                        SizedBox(width: PillTab.gap(context)),
-                    ],
                   ],
                 ),
-              ),
-            );
-          },
-        ),
+              );
+            },
+          ),
         SizedBox(height: 6.h),
         Expanded(
           child: TabBarView(
@@ -87,10 +135,17 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
               _FeeGroupPanel(),
               _FeeTypePanel(),
               _SemesterPanel(),
+              _DemandSequencePanel(),
+              // Concession No + (school) Arrear Concession No in one frame.
+              _DemandSequencePanel(actname: 'CONNO', defaultPrefix: 'CN', title: 'Concession No', withArrear: true),
+              _DemandSequencePanel(actname: 'REFNO', defaultPrefix: 'RF', title: 'Refund No'),
               _ClassFeeDemandPanel(),
               PaymentSequenceTab(),
-              _DemandSequencePanel(),
               FineRulesTab(),
+              _ClassMatchPanel(),
+              _AdvanceFeePanel(),
+              // Advance Fee Collection's own receipt series (school).
+              _DemandSequencePanel(actname: 'ADVFEENO', defaultPrefix: 'AF', title: 'Advance Receipt No'),
             ],
           ),
         ),
@@ -100,15 +155,19 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
 }
 
 // ── shared bits ───────────────────────────────────────────────────────────
+/// Context-free twin of [AppUI.field]: radius, fill, padding, height and the
+/// 2px focus ring all come from the global input theme; only the "filled"
+/// accent edge is set here (same colour AppUI.field uses).
 InputDecoration _dec(String label, {bool filled = false}) {
-  final idle = filled ? AppColors.accent : AppColors.border;
+  final rest = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(AppUI.controlRadius),
+    borderSide: BorderSide(color: filled ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
+  );
   return InputDecoration(
-    labelText: label,
+    labelText: label.isEmpty ? null : label,
     isDense: true,
-    contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: idle, width: 1.5)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: BorderSide(color: idle, width: 1.5)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
+    border: rest,
+    enabledBorder: rest,
   );
 }
 
@@ -125,57 +184,44 @@ Future<Map<String, dynamic>?> _currentYear(int insId) async {
 /// sequence-backed triggers, but explicit-id imports leave the sequence
 /// behind, so supplying an explicit id avoids primary-key collisions.
 Future<int> _nextId(String table, String idCol) async {
-  final res = await SupabaseService.fromSchema(table)
-      .select(idCol).order(idCol, ascending: false).limit(1).maybeSingle();
+  final res = await SupabaseService.fromSchema(table).select(idCol).order(idCol, ascending: false).limit(1).maybeSingle();
   final cur = res?[idCol];
   final n = cur is int ? cur : int.tryParse(cur?.toString() ?? '0') ?? 0;
   return n + 1;
 }
 
-TextStyle _h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-TextStyle _c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+TextStyle _h() => AppUI.tableHead;
+TextStyle _c() => AppUI.cell;
 
-// ── design helpers (mirrors master_data_screen / admission-master-design.md) ──
+// ── design helpers (all from the AppUI kit) ──
 
-Widget _lbl(String text) =>
-    Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
+/// Field label; a trailing " *" is drawn as the kit's red required mark.
+Widget _lbl(String text) {
+  final req = text.endsWith(' *');
+  final t = req ? text.substring(0, text.length - 2) : text;
+  return Text.rich(TextSpan(children: [
+    TextSpan(text: t, style: AppUI.label),
+    if (req) const TextSpan(text: ' *', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800)),
+  ]));
+}
 
 // [filled] = the field has a value. Filled fields get an amber (accent)
 // border; empty fields stay grey; the focused border is always amber.
-InputDecoration _filledFieldDec(BuildContext context, String hint, {bool filled = false}) {
-  final compact = MediaQuery.of(context).size.width <= 1366;
-  final textSize = compact ? 11.0 : 14.0;
-  final hPad = compact ? 8.0 : 14.0;
-  final vPad = compact ? 5.0 : 14.0;
-  final radius = compact ? 5.0 : 8.0;
-  final idle = filled ? AppColors.accent : AppColors.border;
-  return InputDecoration(
-    hintText: hint,
-    hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-    contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-    filled: true,
-    fillColor: Colors.white,
-  );
-}
+/// [leadingIcon] puts an AppIcon in the field's prefix, so a toolbar of
+/// dropdowns can be read at a glance rather than by its placeholder text. It
+/// keeps the accent colour of the filled state, so the icon reinforces
+/// "chosen" instead of competing with it.
+InputDecoration _filledFieldDec(BuildContext context, String hint, {bool filled = false, String? leadingIcon}) =>
+    AppUI.field(context, hint, filled: filled, leadingIcon: leadingIcon);
 
-TextStyle _fieldTextStyle(BuildContext context) {
-  final compact = MediaQuery.of(context).size.width <= 1366;
-  return TextStyle(fontWeight: FontWeight.w500, fontSize: compact ? 11 : 14, color: const Color(0xFF555555));
-}
+TextStyle _fieldTextStyle(BuildContext context) => AppUI.fieldText(context);
 
-/// Outer Add card — white, 10r, full border, 20w padding. Header uses the
-/// shared [CardTitleBlock] with optional subtitle.
+/// Outer Add card — the kit card (white, 16r, 1px border, 20 padding).
+/// Header uses the shared [CardTitleBlock] with optional subtitle.
 Widget _addCard({required String icon, required String title, String? subtitle, required Widget child}) {
   return Container(
-    padding: EdgeInsets.all(20.w),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(10.r),
-      border: Border.all(color: AppColors.border),
-    ),
+    padding: EdgeInsets.all(AppUI.cardPad),
+    decoration: AppUI.card(),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -201,28 +247,16 @@ Widget _listCard({
   Widget? action,
 }) {
   return Container(
-    padding: EdgeInsets.all(16.w),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(10.r),
-      border: Border.all(color: AppColors.border),
-    ),
+    padding: EdgeInsets.all(AppUI.cardPad),
+    decoration: AppUI.card(),
     child: Column(
       children: [
         Padding(
-          padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+          padding: EdgeInsets.only(bottom: 12.h),
           child: Row(children: [
             CardTitleBlock(icon: icon, title: title, subtitle: subtitle),
             SizedBox(width: 10.w),
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-              decoration: BoxDecoration(
-                color: AppColors.accent.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8.r),
-              ),
-              child: Text('$count $countLabel',
-                  style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-            ),
+            AppUI.chip('$count $countLabel', AppStatus.info),
             const Spacer(),
             if (action != null) action,
           ]),
@@ -231,8 +265,8 @@ Widget _listCard({
           child: Container(
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8.r),
-              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              border: Border.all(color: AppColors.cardBorder),
             ),
             child: Column(
               children: [
@@ -254,20 +288,15 @@ Widget _listCard({
 /// Compact-or-expanded amber Import CSV/Excel button — sits in the
 /// `action` slot of `_listCard`. Opens [MasterImportScreen] at [tabIndex],
 /// then runs [onReturn].
-Widget _importButton(BuildContext context, {
+Widget _importButton(
+  BuildContext context, {
   required String title,
   required int tabIndex,
   required bool disabled,
   required Future<void> Function() onReturn,
 }) {
-  final compact = MediaQuery.of(context).size.width <= 1366;
-  final btnHeight = compact ? 30.0 : 40.0;
-  final iconSize = compact ? 12.0 : 16.0;
-  final hPad = compact ? 10.0 : 18.0;
-  final radius = compact ? 6.0 : 10.0;
-  final textSize = compact ? 11.0 : 13.0;
+  final iconSize = AppBtn.iconSize(context);
   return SizedBox(
-    height: btnHeight,
     child: ElevatedButton.icon(
       onPressed: disabled
           ? null
@@ -284,8 +313,7 @@ Widget _importButton(BuildContext context, {
                       title: Row(children: [
                         const AppIcon('document-upload', size: 20, color: AppColors.primary),
                         SizedBox(width: 10.w),
-                        Text('Import $title',
-                            style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                        Text('Import $title', style: AppUI.cardTitle),
                       ]),
                     ),
                     body: Padding(
@@ -299,14 +327,6 @@ Widget _importButton(BuildContext context, {
             },
       icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
       label: const Text('Import CSV/Excel'),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        padding: EdgeInsets.symmetric(horizontal: hPad),
-        textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-      ),
     ),
   );
 }
@@ -361,8 +381,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final res = await SupabaseService.fromSchema('feegroup')
-          .select('*').eq('ins_id', _insId).eq('activestatus', 1).order('fg_id', ascending: true);
+      final res = await SupabaseService.fromSchema('feegroup').select('*').eq('ins_id', _insId).eq('activestatus', 1).order('fg_id', ascending: true);
       if (!mounted) return;
       setState(() {
         _rows = List<Map<String, dynamic>>.from(res as List);
@@ -373,10 +392,19 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
     }
   }
 
+  /// feegroup.hostellers_only. Fees in a ticked group are offered only to a
+  /// student whose students.hostel is 'Y' -- Student Fee Definition was
+  /// offering MESS FEE to day scholars because nothing narrowed the list by
+  /// group. Stated here rather than guessed from the group's name: a name
+  /// test misses "MA" (mess advance), and renaming a group would silently
+  /// change who gets billed.
+  bool _hostelOnly = false;
+
   void _edit(Map<String, dynamic> r) {
     setState(() {
       _editId = r['fg_id'] is int ? r['fg_id'] as int : int.tryParse(r['fg_id'].toString());
       _name.text = r['fgdesc']?.toString() ?? '';
+      _hostelOnly = !isSchool && r['hostellers_only'] == true;
     });
   }
 
@@ -384,35 +412,38 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
     setState(() {
       _editId = null;
       _name.clear();
+      _hostelOnly = false;
     });
   }
 
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return _snack(context, 'Enter a group name.', AppColors.warning);
-    if (_rows.any((r) => (r['fgdesc']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() &&
-        (r['fg_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
+    if (_rows.any((r) => (r['fgdesc']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() && (r['fg_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
       return _snack(context, '"$name" already exists.', AppColors.warning);
     }
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.saveSchemaRow('feegroup', {'fgdesc': name}, pkCol: 'fg_id', pkVal: _editId!);
+        await SupabaseService.saveSchemaRow('feegroup', {'fgdesc': name, 'hostellers_only': _hostelOnly}, pkCol: 'fg_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Fee group updated.', AppColors.success);
       } else {
         final yr = await _currentYear(_insId);
         await SupabaseService.saveSchemaRow('feegroup', {
           'fg_id': await _nextId('feegroup', 'fg_id'),
           'fgdesc': name,
+          'hostellers_only': _hostelOnly,
           'ins_id': _insId,
-          'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
-          'yrlabel': yr?['yrlabel']?.toString() ?? '',
+          // School: fee groups / fee types are shared by every year (no year columns).
+          if (!isSchool) 'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
+          if (!isSchool) 'yrlabel': yr?['yrlabel']?.toString() ?? '',
           'activestatus': 1,
         });
         if (mounted) _snack(context, 'Fee group added.', AppColors.success);
       }
       _name.clear();
       _editId = null;
+      _hostelOnly = false;
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
@@ -422,6 +453,16 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
   }
 
   Future<void> _delete(int id) async {
+    // Refused before the confirmation dialog -- see master_usage.dart.
+    final _name = _rows.firstWhere((r) => r['fg_id'].toString() == id.toString(), orElse: () => const {})['fgdesc']?.toString() ?? 'this fee group';
+    final _used = await countReferencing('feetype', [('fg_id', id)]);
+    if (_used > 0) {
+      if (mounted) {
+        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee type', fix: 'Move or delete those fee types first.');
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!await _confirmDelete(context, 'fee group')) return;
     try {
       await SupabaseService.deleteSchemaRow('feegroup', 'fg_id', id);
@@ -443,7 +484,8 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
             icon: 'receipt-discount',
             title: _editId != null ? 'Edit Fee Group' : 'Add Fee Group',
             subtitle: 'group fees by category',
-            child: FocusTraversalGroup(child: Column(
+            child: FocusTraversalGroup(
+                child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -451,11 +493,44 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                 SizedBox(height: 6.h),
                 TextField(
                   controller: _name,
-                  style: _fieldTextStyle(context).copyWith(color: _name.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+                  style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
                   decoration: _filledFieldDec(context, 'Enter group name', filled: _name.text.trim().isNotEmpty),
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) => _add(),
                 ),
+                SizedBox(height: 10.h),
+                // Narrows who the group's fees are offered to. Only Student Fee
+                // Definition reads it today; Misc Collection and Advance can
+                // use the same flag rather than each inventing a rule.
+                // Not on a school: a fee line's own Dayscholar / Hostler
+                // (Applicable To) decides that there.
+                if (!isSchool) ...[
+                InkWell(
+                  onTap: _saving ? null : () => setState(() => _hostelOnly = !_hostelOnly),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4.h),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 24.w,
+                        child: Checkbox(
+                          value: _hostelOnly,
+                          activeColor: AppColors.accent,
+                          visualDensity: VisualDensity.compact,
+                          onChanged: _saving ? null : (v) => setState(() => _hostelOnly = v ?? false),
+                        ),
+                      ),
+                      SizedBox(width: 4.w),
+                      Expanded(
+                        child: Text('Hostellers only', style: AppUI.label),
+                      ),
+                    ]),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.only(left: 28.w),
+                  child: Text('These fees are offered only to students marked as hostellers.', style: AppUI.muted),
+                ),
+                ],
                 SizedBox(height: 18.h),
                 Row(children: [
                   Expanded(
@@ -463,7 +538,6 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                       onPressed: _saving ? null : _add,
                       icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
                       label: Text(_editId != null ? 'Update' : 'Add'),
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
                     ),
                   ),
                   if (_editId != null) ...[
@@ -487,15 +561,16 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
             headerCells: [
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
               Expanded(child: Text('GROUP NAME', style: _h())),
+              if (!isSchool) SizedBox(width: 120.w, child: Text('HOSTELLERS ONLY', textAlign: TextAlign.center, style: _h())),
               SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                    ? Center(child: Text('No fee groups', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                    ? AppUI.empty(title: 'No fee groups', why: 'Add one with the form on the left, or use Import CSV/Excel.')
                     : ListView.separated(
                         itemCount: _rows.length,
-                        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                         itemBuilder: (_, i) {
                           final r = _rows[i];
                           final id = r['fg_id'] is int ? r['fg_id'] as int : int.tryParse(r['fg_id'].toString()) ?? 0;
@@ -505,11 +580,22 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                             child: Row(children: [
                               SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
                               Expanded(child: Text(r['fgdesc']?.toString() ?? '', style: _c())),
-                              SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
-                                SizedBox(width: 8.w),
-                                InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
-                              ])),
+                              if (!isSchool)
+                              SizedBox(
+                                width: 120.w,
+                                child: Center(
+                                  child: r['hostellers_only'] == true
+                                      ? AppUI.chip('Yes', AppStatus.success)
+                                      : Text('-', style: AppUI.cell.copyWith(color: AppColors.textLight)),
+                                ),
+                              ),
+                              SizedBox(
+                                  width: 90.w,
+                                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                    InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
+                                    SizedBox(width: 8.w),
+                                    InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
+                                  ])),
                             ]),
                           );
                         },
@@ -536,6 +622,14 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   final _type = TextEditingController();
   String? _fgId;
   String? _fine;
+
+  /// Clearance order. Lower clears first; 100 is the neutral middle, so a fee
+  /// type is only ordered against another when it is deliberately given a
+  /// different number. Bus 10 clears before everything, Exam 900 after.
+  final _payseq = TextEditingController();
+
+  /// 'Yes' = a part payment is accepted; 'No' = the whole balance or nothing.
+  String? _partial;
   List<Map<String, dynamic>> _feeGroups = [];
   List<Map<String, dynamic>> _rows = [];
   Map<int, String> _fgName = {};
@@ -556,6 +650,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
     _name.dispose();
     _short.dispose();
     _type.dispose();
+    _payseq.dispose();
     super.dispose();
   }
 
@@ -567,6 +662,14 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _type.text = r['type']?.toString() ?? '';
       _fgId = r['fg_id']?.toString();
       _fine = '${r['feefineapplicable'] ?? 0}' == '1' ? 'Yes' : 'No';
+      // Absent on a database where fee_payment_priority.sql has not run: show
+      // the same neutral defaults the migration would apply.
+      // Blank when the column is NULL -- not '100'. NULL means "never
+      // configured", and the check function reads it as 100 anyway, so printing
+      // 100 here made every untouched fee type look deliberately set. The hint
+      // text carries the effective default instead.
+      _payseq.text = r['payseq']?.toString() ?? '';
+      _partial = (r['partialallowed']?.toString() ?? 'Y') == 'N' ? 'No' : 'Yes';
     });
   }
 
@@ -577,6 +680,8 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _short.clear();
       _type.clear();
       _fine = null;
+      _payseq.clear();
+      _partial = null;
     });
   }
 
@@ -588,9 +693,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       final groups = await SupabaseService.getFeeGroups(_insId);
       final fgList = List<Map<String, dynamic>>.from(groups);
       final fgIds = fgList.map((g) => g['fg_id'] as int).toList();
-      final types = fgIds.isEmpty
-          ? <dynamic>[]
-          : await SupabaseService.fromSchema('feetype').select('*').inFilter('fg_id', fgIds).eq('activestatus', 1).order('fee_id', ascending: true);
+      final types = fgIds.isEmpty ? <dynamic>[] : await SupabaseService.fromSchema('feetype').select('*').inFilter('fg_id', fgIds).eq('activestatus', 1).order('fee_id', ascending: true);
       if (!mounted) return;
       setState(() {
         _feeGroups = fgList;
@@ -612,13 +715,23 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.saveSchemaRow('feetype', {
-          'feedesc': name,
-          'feeshort': _short.text.trim(),
-          'fg_id': int.tryParse(_fgId!),
-          'feefineapplicable': _fine == 'Yes' ? 1 : 0,
-          'type': _type.text.trim().isEmpty ? null : _type.text.trim(),
-        }, pkCol: 'fee_id', pkVal: _editId!);
+        await SupabaseService.saveSchemaRow(
+            'feetype',
+            {
+              'feedesc': name,
+              'feeshort': _short.text.trim(),
+              'fg_id': int.tryParse(_fgId!),
+              'feefineapplicable': _fine == 'Yes' ? 1 : 0,
+              'type': _type.text.trim().isEmpty ? null : _type.text.trim(),
+              // Blank saves as NULL, so it stays blank on the next edit. Writing
+              // 100 would mean the same to the rule engine but would quietly turn
+              // "not configured" into "configured" the first time anything else on
+              // the form was saved.
+              'payseq': _payseq.text.trim().isEmpty ? null : int.tryParse(_payseq.text.trim()),
+              'partialallowed': _partial == 'No' ? 'N' : 'Y',
+            },
+            pkCol: 'fee_id',
+            pkVal: _editId!);
         if (mounted) _snack(context, 'Fee type updated.', AppColors.success);
       } else {
         final yr = await _currentYear(_insId);
@@ -629,8 +742,17 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
           'fg_id': int.tryParse(_fgId!),
           'feefineapplicable': _fine == 'Yes' ? 1 : 0,
           'type': _type.text.trim().isEmpty ? null : _type.text.trim(),
-          'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
-          'yrlabel': yr?['yrlabel']?.toString() ?? '',
+          // Blank saves as NULL, so it stays blank on the next edit. Writing
+          // 100 would mean the same to the rule engine but would quietly turn
+          // "not configured" into "configured" the first time anything else on
+          // the form was saved.
+          'payseq': _payseq.text.trim().isEmpty ? null : int.tryParse(_payseq.text.trim()),
+          'partialallowed': _partial == 'No' ? 'N' : 'Y',
+          // Display order: next after the highest already in the list.
+          'ordid': _rows.fold<int>(0, (m, r) { final o = (r['ordid'] as num?)?.toInt() ?? 0; return o > m ? o : m; }) + 1,
+          // School: fee groups / fee types are shared by every year (no year columns).
+          if (!isSchool) 'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
+          if (!isSchool) 'yrlabel': yr?['yrlabel']?.toString() ?? '',
           'ins_id': _insId,
           'activestatus': 1,
         });
@@ -639,6 +761,8 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _name.clear();
       _short.clear();
       _type.clear();
+      _payseq.clear();
+      _partial = null;
       _editId = null;
       await _load();
     } catch (e) {
@@ -649,6 +773,16 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   }
 
   Future<void> _delete(int id) async {
+    // Refused before the confirmation dialog -- see master_usage.dart.
+    final _name = _rows.firstWhere((r) => r['fee_id'].toString() == id.toString(), orElse: () => const {})['feedesc']?.toString() ?? 'this fee type';
+    final _used = await countReferencing('feedemand', [('fee_id', id), ('demfeetype', _name)]);
+    if (_used > 0) {
+      if (mounted) {
+        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: 'A demand has already been raised for it.');
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!await _confirmDelete(context, 'fee type')) return;
     try {
       await SupabaseService.deleteSchemaRow('feetype', 'fee_id', id);
@@ -666,80 +800,192 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       children: [
         SizedBox(
           width: 320.w,
-          child: _addCard(
-            icon: 'tag',
-            title: _editId != null ? 'Edit Fee Type' : 'Add Fee Type',
-            subtitle: 'individual fees inside a group',
-            child: FocusTraversalGroup(child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _lbl('Fee Name *'),
-                SizedBox(height: 6.h),
-                TextField(controller: _name, style: _fieldTextStyle(context).copyWith(color: _name.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter fee name', filled: _name.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
-                SizedBox(height: 16.h),
-                _lbl('Short Name'),
-                SizedBox(height: 6.h),
-                TextField(controller: _short, style: _fieldTextStyle(context).copyWith(color: _short.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
-                SizedBox(height: 16.h),
-                _lbl('Fee Group *'),
-                SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
-                  initialValue: _fgId,
-                  isExpanded: true,
-                  dropdownColor: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  elevation: 6,
-                  style: _fieldTextStyle(context),
-                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, 'Select fee group', filled: _fgId != null),
-                  items: _feeGroups.map((g) => DropdownMenuItem(value: g['fg_id'].toString(), child: Text(g['fgdesc']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
-                  selectedItemBuilder: (context) => _feeGroups.map((g) => Align(alignment: Alignment.centerLeft, child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
-                  onChanged: (v) => setState(() => _fgId = v),
-                ),
-                SizedBox(height: 16.h),
-                _lbl('Fine Applicable'),
-                SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
-                  initialValue: _fine,
-                  isExpanded: true,
-                  dropdownColor: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  elevation: 6,
-                  style: _fieldTextStyle(context),
-                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, 'Select option', filled: _fine != null),
-                  items: [
-                    DropdownMenuItem(value: 'No', child: Text('No', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
-                    DropdownMenuItem(value: 'Yes', child: Text('Yes', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
-                  ],
-                  selectedItemBuilder: (context) => [
-                    Align(alignment: Alignment.centerLeft, child: Text('No', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                    Align(alignment: Alignment.centerLeft, child: Text('Yes', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                  ],
-                  onChanged: (v) => setState(() => _fine = v),
-                ),
-                SizedBox(height: 16.h),
-                _lbl('Type'),
-                SizedBox(height: 6.h),
-                TextField(controller: _type, style: _fieldTextStyle(context).copyWith(color: _type.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter type (e.g. COL)', filled: _type.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
-                SizedBox(height: 18.h),
-                Row(children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _saving ? null : _add,
-                      icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
-                      label: Text(_editId != null ? 'Update' : 'Add'),
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
-                    ),
+          // Scrollable: this Row hands the card the window's full height as a
+          // hard limit, and the form is a min-height Column, so on a laptop
+          // screen the last fields (Priority, its help text, Part Payment
+          // Allowed) and the Save button fell 167px past the bottom and were
+          // unreachable. Scrolling keeps every field usable at any height;
+          // the card still sizes to its content when there is room.
+          child: SingleChildScrollView(
+            child: _addCard(
+              icon: 'tag',
+              title: _editId != null ? 'Edit Fee Type' : 'Add Fee Type',
+              subtitle: 'individual fees inside a group',
+              child: FocusTraversalGroup(
+                  child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _lbl('Fee Name *'),
+                  SizedBox(height: 6.h),
+                  TextField(
+                      controller: _name,
+                      style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
+                      decoration: _filledFieldDec(context, 'Enter fee name', filled: _name.text.trim().isNotEmpty),
+                      onChanged: (_) => setState(() {})),
+                  SizedBox(height: 16.h),
+                  _lbl('Short Name'),
+                  SizedBox(height: 6.h),
+                  TextField(
+                      controller: _short,
+                      style: AppUI.fieldText(context, filled: _short.text.trim().isNotEmpty),
+                      decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty),
+                      onChanged: (_) => setState(() {})),
+                  SizedBox(height: 16.h),
+                  _lbl('Fee Group *'),
+                  SizedBox(height: 6.h),
+                  DropdownButtonFormField<String>(
+                    initialValue: _fgId,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                    decoration: _filledFieldDec(context, 'Select fee group', filled: _fgId != null),
+                    items: _feeGroups
+                        .map((g) => DropdownMenuItem(
+                            value: g['fg_id'].toString(),
+                            child: Text(g['fgdesc']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)))
+                        .toList(),
+                    selectedItemBuilder: (context) => _feeGroups
+                        .map((g) => Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
+                        .toList(),
+                    onChanged: (v) => setState(() => _fgId = v),
                   ),
-                  if (_editId != null) ...[
-                    SizedBox(width: 8.w),
-                    OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text('Cancel')),
-                  ],
-                ]),
-              ],
-            )),
+                  SizedBox(height: 16.h),
+                  _lbl('Fine Applicable'),
+                  SizedBox(height: 6.h),
+                  DropdownButtonFormField<String>(
+                    initialValue: _fine,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                    decoration: _filledFieldDec(context, 'Select option', filled: _fine != null),
+                    items: [
+                      DropdownMenuItem(value: 'No', child: Text('No', style: AppUI.fieldText(context))),
+                      DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
+                    ],
+                    selectedItemBuilder: (context) => [
+                      Align(
+                          alignment: Alignment.centerLeft, child: Text('No', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Yes', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                    ],
+                    onChanged: (v) => setState(() => _fine = v),
+                  ),
+                  SizedBox(height: 16.h),
+                  _lbl('Type'),
+                  SizedBox(height: 6.h),
+                  // A LIST, not free text. The stored value is a three-letter
+                  // code and reports key off it exactly -- the DCB Register
+                  // splits its COLLEGE and TRANSPORT columns on type = 'TRA'.
+                  // Typed by hand, 'Transport', 'TRANS' or a trailing space
+                  // all read as College and the money lands in the wrong
+                  // column with nothing to show it went wrong.
+                  //
+                  // The codes are what the database already holds: COL on 92
+                  // fee types, HOS on 2, TRA on 1.
+                  DropdownButtonFormField<String>(
+                    initialValue: kFeeKinds
+                            .any((k) => k.code == _type.text.trim().toUpperCase())
+                        ? _type.text.trim().toUpperCase()
+                        : null,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                    decoration: _filledFieldDec(context, 'Select type',
+                        filled: _type.text.trim().isNotEmpty),
+                    items: [
+                      for (final k in kFeeKinds)
+                        DropdownMenuItem(
+                          value: k.code,
+                          child: Text(k.label,
+                              style: AppUI.fieldText(context)),
+                        ),
+                    ],
+                    selectedItemBuilder: (context) => [
+                      for (final k in kFeeKinds)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(k.label,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppUI.fieldText(context, filled: true)),
+                        ),
+                    ],
+                    onChanged: (v) => setState(() => _type.text = v ?? ''),
+                  ),
+                  SizedBox(height: 16.h),
+                  _lbl('Priority'),
+                  SizedBox(height: 6.h),
+                  TextField(
+                    controller: _payseq,
+                    keyboardType: TextInputType.number,
+                    style: AppUI.fieldText(context, filled: _payseq.text.trim().isNotEmpty),
+                    decoration: _filledFieldDec(context, 'Blank = 100 (normal) · lower is paid first', filled: _payseq.text.trim().isNotEmpty),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  SizedBox(height: 4.h),
+                  Text(
+                    'A fee can only be paid once every fee with a LOWER priority '
+                    'is cleared. 10 = paid first (e.g. Bus), 100 = normal (the '
+                    'default when left blank), '
+                    '900 = paid last (e.g. Exam). Arrears always clear before the '
+                    'same student\'s current-year fees.',
+                    style: AppUI.muted.copyWith(height: 1.35),
+                  ),
+                  SizedBox(height: 16.h),
+                  _lbl('Part Payment Allowed'),
+                  SizedBox(height: 6.h),
+                  DropdownButtonFormField<String>(
+                    initialValue: _partial,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    elevation: 6,
+                    style: _fieldTextStyle(context),
+                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                    decoration: _filledFieldDec(context, 'Select option', filled: _partial != null),
+                    items: [
+                      DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
+                      DropdownMenuItem(value: 'No', child: Text('No — full amount only', style: AppUI.fieldText(context))),
+                    ],
+                    selectedItemBuilder: (context) => [
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Yes', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('No — full amount only', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                    ],
+                    onChanged: (v) => setState(() => _partial = v),
+                  ),
+                  SizedBox(height: 18.h),
+                  Row(children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _saving ? null : _add,
+                        icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
+                        label: Text(_editId != null ? 'Update' : 'Add'),
+                      ),
+                    ),
+                    if (_editId != null) ...[
+                      SizedBox(width: 8.w),
+                      OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text('Cancel')),
+                    ],
+                  ]),
+                ],
+              )),
+            ),
           ),
         ),
         SizedBox(width: 16.w),
@@ -762,10 +1008,10 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                    ? Center(child: Text('No fee types', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                    ? AppUI.empty(title: 'No fee types', why: 'Add one with the form on the left, or use Import CSV/Excel.')
                     : ListView.separated(
                         itemCount: _rows.length,
-                        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                         itemBuilder: (_, i) {
                           final r = _rows[i];
                           final id = r['fee_id'] is int ? r['fee_id'] as int : int.tryParse(r['fee_id'].toString()) ?? 0;
@@ -779,11 +1025,13 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                               SizedBox(width: 80.w, child: Text(r['feeshort']?.toString() ?? '', style: _c())),
                               Expanded(flex: 2, child: Text(_fgName[r['fg_id']] ?? '', style: _c())),
                               SizedBox(width: 60.w, child: Text(fine, style: _c())),
-                              SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
-                                SizedBox(width: 8.w),
-                                InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
-                              ])),
+                              SizedBox(
+                                  width: 90.w,
+                                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                    InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
+                                    SizedBox(width: 8.w),
+                                    InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
+                                  ])),
                             ]),
                           );
                         },
@@ -807,15 +1055,18 @@ class _SemesterPanel extends StatefulWidget {
 class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveClientMixin {
   final _name = TextEditingController();
   final _short = TextEditingController();
-  String? _type; // S = Semester, M = Monthly, Y = Yearly (null = not chosen)
+  String? _type; // S = Semester (school: T = Term), M = Monthly, Y = Yearly (null = not chosen)
   DateTime? _startDate;
   DateTime? _endDate;
   List<Map<String, dynamic>> _rows = [];
   int? _editId; // non-null while editing an existing row
   bool _loading = true, _saving = false;
 
-  // Type flag ↔ label, shared by the Add dropdown and the table.
-  static const _typeLabels = {'S': 'Semester', 'M': 'Monthly', 'Y': 'Yearly'};
+  // Type flag ↔ label, shared by the Add dropdown and the table. A school's
+  // semesters are TERMS, flagged T.
+  static const _collegeTypeLabels = {'S': 'Semester', 'M': 'Monthly', 'Y': 'Yearly'};
+  static const _schoolTypeLabels = {'T': 'Term', 'M': 'Monthly', 'Y': 'Yearly'};
+  Map<String, String> get _typeLabels => isSchool ? _schoolTypeLabels : _collegeTypeLabels;
 
   @override
   bool get wantKeepAlive => true;
@@ -838,16 +1089,13 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final res = await SupabaseService.fromSchema('semester')
-          .select('*').eq('ins_id', _insId).eq('activestatus', 1);
+      final res = await SupabaseService.fromSchema('semester').select('*').eq('ins_id', _insId).eq('activestatus', 1);
       if (!mounted) return;
       // Order by the master-defined ordid, falling back to sem_id (also handles
       // schemas where the ordid column hasn't been added yet).
       final list = List<Map<String, dynamic>>.from(res as List)
         ..sort((a, b) {
-          int key(Map<String, dynamic> r) => r['ordid'] is num
-              ? (r['ordid'] as num).toInt()
-              : (r['sem_id'] is num ? (r['sem_id'] as num).toInt() : 1 << 30);
+          int key(Map<String, dynamic> r) => r['ordid'] is num ? (r['ordid'] as num).toInt() : (r['sem_id'] is num ? (r['sem_id'] as num).toInt() : 1 << 30);
           return key(a).compareTo(key(b));
         });
       setState(() {
@@ -865,7 +1113,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       _name.text = r['semname']?.toString() ?? '';
       _short.text = r['semshort']?.toString() ?? '';
       final t = r['semtype']?.toString().trim() ?? '';
-      _type = _typeLabels.containsKey(t) ? t : 'S';
+      _type = _typeLabels.containsKey(t) ? t : (isSchool ? 'T' : 'S');
       _startDate = DateTime.tryParse(r['semstart']?.toString() ?? '');
       _endDate = DateTime.tryParse(r['semend']?.toString() ?? '');
     });
@@ -884,10 +1132,9 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
 
   Future<void> _add() async {
     final name = _name.text.trim();
-    if (name.isEmpty) return _snack(context, 'Enter a semester name.', AppColors.warning);
+    if (name.isEmpty) return _snack(context, schoolTerm('Enter a semester name.'), AppColors.warning);
     if (_type == null) return _snack(context, 'Select a type.', AppColors.warning);
-    if (_rows.any((r) => (r['semname']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() &&
-        (r['sem_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
+    if (_rows.any((r) => (r['semname']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() && (r['sem_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
       return _snack(context, '"$name" already exists.', AppColors.warning);
     }
     if (_startDate != null && _endDate != null && _endDate!.isBefore(_startDate!)) {
@@ -898,14 +1145,18 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       final short = _short.text.trim();
       String? d(DateTime? v) => v?.toIso8601String().split('T').first;
       if (_editId != null) {
-        await SupabaseService.saveSchemaRow('semester', {
-          'semname': name,
-          'semshort': short.isEmpty ? null : short,
-          'semtype': _type,
-          'semstart': d(_startDate),
-          'semend': d(_endDate),
-        }, pkCol: 'sem_id', pkVal: _editId!);
-        if (mounted) _snack(context, 'Semester updated.', AppColors.success);
+        await SupabaseService.saveSchemaRow(
+            'semester',
+            {
+              'semname': name,
+              'semshort': short.isEmpty ? null : short,
+              'semtype': _type,
+              'semstart': d(_startDate),
+              'semend': d(_endDate),
+            },
+            pkCol: 'sem_id',
+            pkVal: _editId!);
+        if (mounted) _snack(context, schoolTerm('Semester updated.'), AppColors.success);
       } else {
         await SupabaseService.saveSchemaRow('semester', {
           'sem_id': await _nextId('semester', 'sem_id'),
@@ -914,10 +1165,12 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
           'semtype': _type,
           'semstart': d(_startDate),
           'semend': d(_endDate),
+          // Display order: next after the highest already in the list.
+          'ordid': _rows.fold<int>(0, (m, r) { final o = (r['ordid'] as num?)?.toInt() ?? 0; return o > m ? o : m; }) + 1,
           'ins_id': _insId,
           'activestatus': 1,
         });
-        if (mounted) _snack(context, 'Semester added.', AppColors.success);
+        if (mounted) _snack(context, schoolTerm('Semester added.'), AppColors.success);
       }
       _name.clear();
       _short.clear();
@@ -934,7 +1187,17 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   }
 
   Future<void> _delete(int id) async {
-    if (!await _confirmDelete(context, 'semester')) return;
+    // Refused before the confirmation dialog -- see master_usage.dart.
+    final _name = _rows.firstWhere((r) => r['sem_id'].toString() == id.toString(), orElse: () => const {})['semname']?.toString() ?? 'this semester';
+    final _used = await countReferencing('feedemand', [('sem_id', id), ('demfeeterm', _name)]);
+    if (_used > 0) {
+      if (mounted) {
+        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: 'A demand has already been raised for that term.');
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (!await _confirmDelete(context, schoolTerm('semester'))) return;
     try {
       await SupabaseService.deleteSchemaRow('semester', 'sem_id', id);
       await _load();
@@ -943,13 +1206,12 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
     }
   }
 
-  static String _fmtDate(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
+  static String _fmtDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
   Widget _semDateField(DateTime? value, String hint, ValueChanged<DateTime> onPick) {
     final filled = value != null;
     return InkWell(
-      borderRadius: BorderRadius.circular(8.r),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
       onTap: () async {
         final now = DateTime.now();
         final picked = await showDatePicker(
@@ -967,10 +1229,9 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
           children: [
             Text(
               filled ? _fmtDate(value) : hint,
-              style: _fieldTextStyle(context).copyWith(
-                color: filled ? AppColors.accent : AppColors.textLight,
-                fontWeight: filled ? FontWeight.w600 : null,
-              ),
+              style: filled
+                  ? AppUI.fieldText(context, filled: true)
+                  : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
             ),
             Icon(Icons.calendar_today_outlined, size: 14.sp, color: AppColors.textSecondary),
           ],
@@ -989,19 +1250,29 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
           width: 320.w,
           child: _addCard(
             icon: 'calendar-1',
-            title: _editId != null ? 'Edit Semester' : 'Add Semester',
+            title: schoolTerm(_editId != null ? 'Edit Semester' : 'Add Semester'),
             subtitle: 'collection cycles for the academic year',
-            child: FocusTraversalGroup(child: Column(
+            child: FocusTraversalGroup(
+                child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _lbl('Semester Name *'),
+                _lbl(schoolTerm('Semester Name *')),
                 SizedBox(height: 6.h),
-                TextField(controller: _name, style: _fieldTextStyle(context).copyWith(color: _name.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter semester name', filled: _name.text.trim().isNotEmpty), onChanged: (_) => setState(() {}), onSubmitted: (_) => _add()),
+                TextField(
+                    controller: _name,
+                    style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
+                    decoration: _filledFieldDec(context, schoolTerm('Enter semester name'), filled: _name.text.trim().isNotEmpty),
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _add()),
                 SizedBox(height: 16.h),
                 _lbl('Short Name'),
                 SizedBox(height: 6.h),
-                TextField(controller: _short, style: _fieldTextStyle(context).copyWith(color: _short.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                TextField(
+                    controller: _short,
+                    style: AppUI.fieldText(context, filled: _short.text.trim().isNotEmpty),
+                    decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty),
+                    onChanged: (_) => setState(() {})),
                 SizedBox(height: 16.h),
                 _lbl('Type *'),
                 SizedBox(height: 6.h),
@@ -1014,8 +1285,14 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                   style: _fieldTextStyle(context),
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   decoration: _filledFieldDec(context, 'Select type', filled: _type != null),
-                  items: _typeLabels.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)))).toList(),
-                  selectedItemBuilder: (context) => _typeLabels.entries.map((e) => Align(alignment: Alignment.centerLeft, child: Text(e.value, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
+                  items: _typeLabels.entries
+                      .map((e) => DropdownMenuItem(value: e.key, child: Text(schoolTerm(e.value), style: AppUI.fieldText(context))))
+                      .toList(),
+                  selectedItemBuilder: (context) => _typeLabels.entries
+                      .map((e) => Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(schoolTerm(e.value), overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
+                      .toList(),
                   onChanged: (v) => setState(() => _type = v),
                 ),
                 SizedBox(height: 16.h),
@@ -1033,7 +1310,6 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                       onPressed: _saving ? null : _add,
                       icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
                       label: Text(_editId != null ? 'Update' : 'Add'),
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
                     ),
                   ),
                   if (_editId != null) ...[
@@ -1049,14 +1325,14 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
         Expanded(
           child: _listCard(
             icon: 'calendar-1',
-            title: 'Semesters',
+            title: schoolTerm('Semesters'),
             subtitle: 'all collection cycles in this institution',
             count: _rows.length,
             countLabel: 'terms',
-            action: _importButton(context, title: 'Semester', tabIndex: 8, disabled: _saving, onReturn: _load),
+            action: _importButton(context, title: schoolTerm('Semester'), tabIndex: 8, disabled: _saving, onReturn: _load),
             headerCells: [
               Expanded(child: Text('S NO.', style: _h())),
-              Expanded(child: Text('SEMESTER NAME', style: _h())),
+              Expanded(child: Text(schoolTerm('SEMESTER NAME'), style: _h())),
               Expanded(child: Text('SHORT', style: _h())),
               Expanded(child: Text('TYPE', style: _h())),
               Expanded(child: Text('START DATE', style: _h())),
@@ -1066,14 +1342,14 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                    ? Center(child: Text('No semesters', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                    ? AppUI.empty(title: schoolTerm('No semesters'), why: 'Add one with the form on the left.')
                     : ListView.separated(
                         itemCount: _rows.length,
-                        separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+                        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
                         itemBuilder: (_, i) {
                           final r = _rows[i];
                           final id = r['sem_id'] is int ? r['sem_id'] as int : int.tryParse(r['sem_id'].toString()) ?? 0;
-                          final type = _typeLabels[r['semtype']?.toString().trim()] ?? 'Semester';
+                          final type = schoolTerm(_typeLabels[r['semtype']?.toString().trim()] ?? 'Semester');
                           final sd = DateTime.tryParse(r['semstart']?.toString() ?? '');
                           final ed = DateTime.tryParse(r['semend']?.toString() ?? '');
                           return Container(
@@ -1086,7 +1362,8 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                               Expanded(child: Text(type, style: _c())),
                               Expanded(child: Text(sd != null ? _fmtDate(sd) : '-', style: _c())),
                               Expanded(child: Text(ed != null ? _fmtDate(ed) : '-', style: _c())),
-                              Expanded(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                              Expanded(
+                                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                 InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
                                 SizedBox(width: 8.w),
                                 InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error))),
@@ -1102,17 +1379,1257 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   }
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// ADVANCE FEE DEFINITION — <year schema>.advfeedemand
+// Next year's fees, defined now: per section (type 0) or for a whole standard
+// (type 1), per term, with the same Applicable To flags as the section fee.
+// A DEFINITION ONLY -- saving never raises student demands (unlike Section
+// Fee Demand, whose lines are generated onto students).
+// ══════════════════════════════════════════════════════════════════════════
+
+class _AdvLine {
+  static int _seq = 0;
+  final int uid = ++_seq;
+  String? feeType;
+  final amount = TextEditingController();
+  int nob = 3, bgb = 3, dhb = 3;
+  void dispose() => amount.dispose();
+}
+
+class _AdvanceFeePanel extends StatefulWidget {
+  const _AdvanceFeePanel();
+  @override
+  State<_AdvanceFeePanel> createState() => _AdvanceFeePanelState();
+}
+
+class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAliveClientMixin {
+  List<Map<String, dynamic>> _courses = [], _classes = [], _terms = [], _fees = [], _saved = [];
+  String _nextYear = '';
+  /// 0 = section-wise, 1 = standard-wise. Not chosen here: it follows the
+  /// standard's Fee Demand By (Setup > Master Data > Standard).
+  int _type = 0;
+
+  /// The standard's Fee Demand By is STANDARD.
+  bool _stdLevel(int? cour) =>
+      '${_courses.firstWhere((c) => _id(c['cour_id']) == cour, orElse: () => const {})['feelevel'] ?? ''}' == 'STANDARD';
+  int? _cour, _cla;
+  String? _term;
+  DateTime? _due;
+  final List<_AdvLine> _lines = [];
+  bool _loading = true, _saving = false;
+  bool _editMode = false; // New = blank grid, Edit = the saved lines
+
+  /// Fee groups for the group filter, as on Section Fee Demand: it narrows the
+  /// fee-type picker and the rows shown -- Save still writes every row.
+  List<Map<String, dynamic>> _feeGroups = [];
+  final Map<String, Set<int>> _groupsOf = {}; // feedesc -> its fg_ids
+  /// OPTIONAL fee types (feetype.type 'OPT', e.g. bus). They are never raised
+  /// as advance demands -- like Section Fee Demand, an optional fee is added
+  /// per student in Fee Definition -- so a line using one is flagged.
+  final Set<String> _optional = {};
+  /// Next-year sections / standards that Section Matching (or a pre-admission)
+  /// leads into -- the only ones offered in the dropdowns.
+  final Set<int> _targetCla = {}, _targetCour = {};
+  List<Map<String, dynamic>> get _matchedCourses => [
+        for (final c in _courses)
+          if (_targetCour.contains(_id(c['cour_id'])) || _classes.any((k) => _id(k['cour_id']) == _id(c['cour_id']) && _targetCla.contains(_id(k['cla_id'])))) c,
+      ];
+  List<Map<String, dynamic>> get _matchedSections => [
+        for (final c in _classes)
+          if (_targetCla.contains(_id(c['cla_id'])) && (_cour == null || _id(c['cour_id']) == _cour) && !_stdLevel(_id(c['cour_id']))) c,
+      ];
+  int? _fg;
+
+  List<_AdvLine> get _visibleLines =>
+      _fg == null ? _lines : _lines.where((l) => l.feeType == null || (_groupsOf[l.feeType]?.contains(_fg) ?? false)).toList();
+  List<String> get _pickable => [
+        for (final f in _fees)
+          if (_fg == null || (_groupsOf['${f['feedesc']}']?.contains(_fg) ?? false)) '${f['feedesc']}',
+      ];
+
+  @override
+  bool get wantKeepAlive => true;
+
+  int get _insId => context.read<AuthProvider>().insId ?? 1;
+  static int? _id(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
+
+  @override
+  void initState() {
+    super.initState();
+    _blank();
+    if (isSchool) {
+      _load();
+    } else {
+      _loading = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final l in _lines) {
+      l.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final r = await Future.wait<dynamic>([
+        SupabaseService.fromSchema('course').select('cour_id, courname, ordid, feelevel').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('class').select('cla_id, claname, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('semester').select('sem_id, semname').eq('ins_id', _insId).eq('activestatus', 1).order('sem_id'),
+        SupabaseService.fromSchema('feetype').select('fee_id, feedesc, fg_id, type').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('advfeedemand').select('*').eq('activestatus', 1).order('af_id')),
+        SupabaseService.getYears(_insId),
+        SupabaseService.fromSchema('feegroup').select('fg_id, fgdesc').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('classmatch').select('nextclassid, nextcourseid').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+            .select('cla_id, cour_id').eq('ins_id', _insId).eq('activestatus', 1).eq('preadmission', 1)),
+      ]);
+      if (!mounted) return;
+      List<Map<String, dynamic>> m(dynamic x) => List<Map<String, dynamic>>.from((x as List).cast<Map<String, dynamic>>());
+      setState(() {
+        _courses = m(r[0])..sort((a, b) => (_id(a['ordid']) ?? 9999).compareTo(_id(b['ordid']) ?? 9999));
+        if (_cour != null) {
+          _type = _stdLevel(_cour) ? 1 : 0; // the flag may have changed
+          if (_type == 1) _cla = null;
+        }
+        _classes = m(r[1])..sort((a, b) => classCompare('${a['claname']}', '${b['claname']}'));
+        _terms = m(r[2]);
+        // one name per fee type (it may sit in several groups)
+        final fees = m(r[3]);
+        _optional
+          ..clear()
+          ..addAll([for (final f in fees) if ('${f['type'] ?? ''}'.trim().toUpperCase() == 'OPT') '${f['feedesc']}']);
+        _groupsOf.clear();
+        for (final f in fees) {
+          final fg = _id(f['fg_id']);
+          if (fg != null) (_groupsOf['${f['feedesc']}'] ??= <int>{}).add(fg);
+        }
+        final seen = <String>{};
+        _fees = [for (final f in fees) if (seen.add('${f['feedesc']}')) f]..sort((a, b) => '${a['feedesc']}'.compareTo('${b['feedesc']}'));
+        _feeGroups = m(r[6])..sort((a, b) => '${a['fgdesc']}'.compareTo('${b['fgdesc']}'));
+        // Next-year sections offered: the targets of Section Matching, plus the
+        // sections pre-admission students are already admitted into (they stay
+        // where they are, no matching involved).
+        _targetCla
+          ..clear()
+          ..addAll([for (final x in [...m(r[7]).map((e) => e['nextclassid']), ...m(r[8]).map((e) => e['cla_id'])]) if (_id(x) != null) _id(x)!]);
+        _targetCour
+          ..clear()
+          ..addAll([for (final x in [...m(r[7]).map((e) => e['nextcourseid']), ...m(r[8]).map((e) => e['cour_id'])]) if (_id(x) != null) _id(x)!]);
+        _fg ??= _feeGroups.isEmpty ? null : _id(_feeGroups.first['fg_id']);
+        if (_fg != null && !_feeGroups.any((g) => _id(g['fg_id']) == _fg)) _fg = null;
+        _saved = m(r[4]);
+        final years = r[5] as List;
+        final cur = years.isNotEmpty ? '${(years.first as Map)['yrlabel'] ?? ''}' : '';
+        final p = cur.split('-').map(int.tryParse).toList();
+        _nextYear = p.length == 2 && p[0] != null && p[1] != null ? '${p[0]! + 1}-${p[1]! + 1}' : '';
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        _snack(context, 'Failed to load. ${friendlyError(e)}', AppColors.error);
+      }
+    }
+  }
+
+
+  bool get _scopeReady => _cour != null && (_type == 1 || _cla != null) && _term != null;
+
+  bool _inScope(Map<String, dynamic> r) =>
+      _id(r['aftype']) == _type &&
+      _id(r['cour_id']) == _cour &&
+      (_type == 1 ? r['cla_id'] == null : _id(r['cla_id']) == _cla) &&
+      '${r['afterm']}' == _term;
+
+  /// Five blank rows, as the Section Fee Demand grid starts.
+  void _blank() {
+    for (final l in _lines) {
+      l.dispose();
+    }
+    _lines
+      ..clear()
+      ..addAll(List.generate(5, (_) => _AdvLine()));
+  }
+
+  /// New: blank rows. Edit: the lines saved for the chosen scope + term.
+  void _reload() {
+    _blank();
+    if (!_editMode || !_scopeReady) return;
+    final rows = _saved.where(_inScope).toList();
+    if (rows.isEmpty) return;
+    for (final l in _lines) {
+      l.dispose();
+    }
+    _lines.clear();
+    for (final r in rows) {
+      final l = _AdvLine()
+        ..feeType = '${r['affeetype']}'
+        ..nob = _id(r['afnob']) ?? 3
+        ..bgb = _id(r['afbgb']) ?? 3
+        ..dhb = _id(r['afdhb']) ?? 3;
+      final a = r['afamount'];
+      final n = a is num ? a : double.tryParse('${a ?? ''}');
+      if (n != null) l.amount.text = n == n.roundToDouble() ? n.toInt().toString() : n.toString();
+      _lines.add(l);
+    }
+    final d = DateTime.tryParse('${rows.first['afduedate'] ?? ''}');
+    if (d != null) _due = d;
+  }
+
+  double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amount.text.trim()) ?? 0));
+
+  Future<void> _save() async {
+    if (!_scopeReady || _due == null) {
+      return _snack(context, schoolTerm(_type == 0
+          ? 'Select the course, class, term and Pay On or Before date.'
+          : 'Select the course, term and Pay On or Before date.'), AppColors.warning);
+    }
+    final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
+    if (lines.isEmpty) return _snack(context, 'Add at least one fee line.', AppColors.warning);
+    final seen = <String>{};
+    for (final l in lines) {
+      if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
+        return _snack(context, '${l.feeType} is entered twice with the same Applicable To.', AppColors.warning);
+      }
+    }
+    setState(() => _saving = true);
+    try {
+      // Replace this scope + term as a whole.
+      await SupabaseService.deleteSchemaRowsWhere('advfeedemand', {
+        'aftype': _type,
+        'cour_id': _cour,
+        'cla_id': _type == 1 ? null : _cla,
+        'afterm': _term,
+      });
+      final semId = _id(_terms.firstWhere((t) => '${t['semname']}' == _term, orElse: () => const {})['sem_id']);
+      for (final l in lines) {
+        await SupabaseService.saveSchemaRow('advfeedemand', {
+          'aftype': _type,
+          'cour_id': _cour,
+          'cla_id': _type == 1 ? null : _cla,
+          'afterm': _term,
+          'sem_id': semId,
+          'affeetype': l.feeType,
+          'fee_id': _id(_fees.firstWhere((f) => '${f['feedesc']}' == l.feeType, orElse: () => const {})['fee_id']),
+          'afamount': double.tryParse(l.amount.text.trim()) ?? 0,
+          'afduedate': _due!.toIso8601String().split('T').first,
+          'afnob': l.nob,
+          'afbgb': l.bgb,
+          'afdhb': l.dhb,
+          'activestatus': 1,
+        });
+      }
+      final raised = await _raise(_cour!, _type == 1 ? null : _cla);
+      if (!mounted) return;
+      final opt = lines.where((l) => _optional.contains(l.feeType)).length;
+      _snack(
+          context,
+          'Saved ${lines.length} advance fee line(s) -- $raised advance demand(s) raised for the students.'
+          '${opt > 0 ? ' $opt optional fee line(s) are not raised -- add them per student in Fee Definition.' : ''}',
+          opt > 0 ? AppColors.warning : AppColors.success);
+      await _load();
+      if (mounted) setState(_reload);
+    } catch (e) {
+      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// The grid's lines, checked the way Save checks them. null = not ready
+  /// (the reason has been shown).
+  List<_AdvLine>? _readyLines() {
+    if (_term == null || _due == null) {
+      _snack(context, schoolTerm('Select the semester and Pay On or Before first.'), AppColors.warning);
+      return null;
+    }
+    final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
+    if (lines.isEmpty) {
+      _snack(context, 'Enter fee amounts to copy.', AppColors.warning);
+      return null;
+    }
+    final seen = <String>{};
+    for (final l in lines) {
+      if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
+        _snack(context, '${l.feeType} is entered twice with the same Applicable To.', AppColors.warning);
+        return null;
+      }
+    }
+    return lines;
+  }
+
+  /// Replace the lines of one scope (type + standard [+ section]) for the
+  /// current term with [lines].
+  /// Raise the advance demands after a definition is saved -- as Section Fee
+  /// Demand raises its demands on Save: unpaid demands of this scope + term
+  /// are rebuilt from the definition, then every student it applies to gets
+  /// the demands they lack (refresh_advance_demands). Paid ones, hand-added
+  /// ones and a student's opt-outs are left alone. Returns how many were raised.
+  Future<int> _raise(int cour, int? cla) async {
+    final res = await SupabaseService.client.rpc('refresh_advance_demands', params: {
+      'p_token': SupabaseService.sessionToken,
+      'p_aftype': _type,
+      'p_cour_id': cour,
+      'p_cla_id': cla,
+      'p_term': _term,
+    });
+    return res is Map ? (_id(res['raised']) ?? 0) : 0;
+  }
+
+  Future<int> _writeScope(int cour, int? cla, List<_AdvLine> lines) async {
+    await SupabaseService.deleteSchemaRowsWhere('advfeedemand', {
+      'aftype': _type,
+      'cour_id': cour,
+      'cla_id': _type == 1 ? null : cla,
+      'afterm': _term,
+    });
+    final semId = _id(_terms.firstWhere((t) => '${t['semname']}' == _term, orElse: () => const {})['sem_id']);
+    for (final l in lines) {
+      await SupabaseService.saveSchemaRow('advfeedemand', {
+        'aftype': _type,
+        'cour_id': cour,
+        'cla_id': _type == 1 ? null : cla,
+        'afterm': _term,
+        'sem_id': semId,
+        'affeetype': l.feeType,
+        'fee_id': _id(_fees.firstWhere((f) => '${f['feedesc']}' == l.feeType, orElse: () => const {})['fee_id']),
+        'afamount': double.tryParse(l.amount.text.trim()) ?? 0,
+        'afduedate': _due!.toIso8601String().split('T').first,
+        'afnob': l.nob,
+        'afbgb': l.bgb,
+        'afdhb': l.dhb,
+        'activestatus': 1,
+      });
+    }
+    return _raise(cour, _type == 1 ? null : cla);
+  }
+
+  /// Copy the grid (amounts, Applicable To, term, due date) to other sections
+  /// -- or, standard-wise, to other standards. Each target's lines for this
+  /// term are replaced, and their advance demands raised.
+  Future<void> _copyFee() async {
+    final lines = _readyLines();
+    if (lines == null) return;
+    // (id, label, standard) of every possible target except the current one.
+    // Same level only: sections of section-wise standards, or other
+    // standard-wise standards.
+    final targets = _type == 0
+        ? [
+            for (final c in _classes)
+              if (_id(c['cla_id']) != _cla && _targetCla.contains(_id(c['cla_id'])) && !_stdLevel(_id(c['cour_id'])))
+                (_id(c['cla_id'])!, '${c['claname']}', _id(c['cour_id'])!),
+          ]
+        : [
+            for (final c in _matchedCourses)
+              if (_id(c['cour_id']) != _cour && _stdLevel(_id(c['cour_id']))) (_id(c['cour_id'])!, '${c['courname']}', _id(c['cour_id'])!),
+          ];
+    final picked = await _pickTargets(targets);
+    if (picked == null || picked.isEmpty) return;
+    setState(() => _saving = true);
+    var done = 0, raised = 0;
+    final fails = <String>[];
+    for (final t in targets.where((t) => picked.contains(t.$1))) {
+      try {
+        raised += await _writeScope(t.$3, _type == 0 ? t.$1 : null, lines);
+        done++;
+      } catch (e) {
+        fails.add('${t.$2}: ${friendlyError(e)}');
+      }
+    }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    _snack(
+      context,
+      fails.isEmpty
+          ? schoolTerm('Copied ${lines.length} advance fee line(s) to $done ${_type == 0 ? 'class(es)' : 'course(s)'} -- $raised advance demand(s) raised.')
+          : 'Copied to $done, ${fails.length} failed. ${fails.first}',
+      fails.isEmpty ? AppColors.success : AppColors.error,
+    );
+    await _load();
+  }
+
+  /// Multi-select of copy targets with a search box; ticks survive searching.
+  Future<Set<int>?> _pickTargets(List<(int, String, int)> targets) {
+    final picked = <int>{};
+    var query = '';
+    final from = _type == 0
+        ? '${_classes.firstWhere((c) => _id(c['cla_id']) == _cla, orElse: () => const {})['claname'] ?? ''}'
+        : '${_courses.firstWhere((c) => _id(c['cour_id']) == _cour, orElse: () => const {})['courname'] ?? ''}';
+    return showDialog<Set<int>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final q = query.trim().toLowerCase();
+          final options = targets.where((t) => q.isEmpty || t.$2.toLowerCase().contains(q)).toList();
+          return AlertDialog(
+            title: Text(schoolTerm(_type == 0 ? 'Copy fees to classes' : 'Copy fees to courses'),
+                style: AppUI.cardTitle),
+            content: SizedBox(
+              width: 360.w,
+              height: 360.h,
+              child: ListView(children: [
+                Padding(
+                  padding: EdgeInsets.only(bottom: 4.h),
+                  child: Text('From $from • ${_term ?? ''}', style: AppUI.muted),
+                ),
+                Padding(
+                  padding: EdgeInsets.only(bottom: 6.h),
+                  child: TextField(
+                    autofocus: true,
+                    style: AppUI.fieldText(context),
+                    decoration: AppUI.field(context, schoolTerm(_type == 0 ? 'Search class' : 'Search course'), leadingIcon: 'search-normal'),
+                    onChanged: (v) => setLocal(() => query = v),
+                  ),
+                ),
+                Row(children: [
+                  if (picked.isNotEmpty)
+                    Text('${picked.length} selected', style: AppUI.label.copyWith(color: AppColors.primary)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: options.isEmpty
+                        ? null
+                        : () => setLocal(() {
+                              final all = options.every((t) => picked.contains(t.$1));
+                              for (final t in options) {
+                                all ? picked.remove(t.$1) : picked.add(t.$1);
+                              }
+                            }),
+                    child: Text(options.isNotEmpty && options.every((t) => picked.contains(t.$1)) ? 'Clear all' : 'Select all'),
+                  ),
+                ]),
+                if (options.isEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: 24.h),
+                    child: AppUI.empty(title: 'Nothing to copy to'),
+                  ),
+                for (final t in options)
+                  CheckboxListTile(
+                    dense: true,
+                    value: picked.contains(t.$1),
+                    title: Text(t.$2, style: AppUI.body),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    onChanged: (v) => setLocal(() => v == true ? picked.add(t.$1) : picked.remove(t.$1)),
+                  ),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: picked.isEmpty ? null : () => Navigator.pop(ctx, picked),
+                child: Text('Copy to ${picked.length}'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?>? onChanged, {String? icon}) {
+    return DropdownButtonFormField<T>(
+      key: ValueKey('$hint-$value-${items.length}'),
+      initialValue: items.any((e) => e.$1 == value) ? value : null,
+      isExpanded: true,
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      style: _fieldTextStyle(context),
+      decoration: _filledFieldDec(context, hint, filled: value != null, leadingIcon: icon),
+      items: [
+        for (final e in items)
+          DropdownMenuItem<T>(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
+      ],
+      onChanged: _saving ? null : onChanged,
+    );
+  }
+
+  Widget _flag(int value, Map<int, String> labels, ValueChanged<int> onChanged) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 4.w),
+      child: DropdownButtonFormField<int>(
+        initialValue: labels.containsKey(value) ? value : 3,
+        isExpanded: true,
+        isDense: true,
+        dropdownColor: Colors.white,
+        decoration: _dec('', filled: value != 3),
+        items: [
+          for (final e in labels.entries)
+            DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: e.key != 3))),
+        ],
+        onChanged: _saving ? null : (v) => onChanged(v ?? 3),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (!isSchool) {
+      return AppUI.empty(title: 'Advance Fee Demand is used on the school database only.');
+    }
+    if (_loading) return const Center(child: CircularProgressIndicator());
+
+    return Container(
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header -- icon tile, title + subtitle, year chip, breadcrumb.
+        Padding(
+          padding: EdgeInsets.only(bottom: 16.h),
+          child: Row(children: [
+            AppUI.iconTile('empty-wallet-add'),
+            SizedBox(width: 12.w),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text('Advance Fee Demand', style: AppUI.cardTitle),
+                SizedBox(height: 2.h),
+                Text(schoolTerm('Next year\'s fees for each class -- Save raises the advance demands for its students'),
+                    style: AppUI.muted),
+              ]),
+            ),
+            if (_nextYear.isNotEmpty) ...[
+              AppUI.chip('Year $_nextYear', AppStatus.info),
+              SizedBox(width: 14.w),
+            ],
+            if (MediaQuery.of(context).size.width > 1100)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.home_outlined, size: 14.sp, color: AppColors.textLight),
+                for (final crumb in const ['Setup', 'Fee Master']) ...[
+                  _crumb(),
+                  Text(crumb, style: AppUI.muted),
+                ],
+                _crumb(),
+                Text('Advance Fee Demand', style: AppUI.label),
+              ]),
+          ]),
+        ),
+        // Filters -- the full width, one Expanded slot each.
+        Padding(
+          padding: EdgeInsets.only(bottom: 10.h),
+          child: FocusTraversalGroup(
+            child: Row(children: [
+              // Only the standards / sections already set in Section Matching
+              // (or holding pre-admission students) are offered.
+              Expanded(
+                child: _drop<int>(
+                    _matchedCourses.isEmpty ? 'Match sections first' : schoolTerm('Next Year Course'),
+                    _cour,
+                    [
+                      for (final c in _matchedCourses)
+                        (_id(c['cour_id'])!, '${c['courname']}${_stdLevel(_id(c['cour_id'])) ? ' - all sections' : ''}'),
+                    ],
+                    (v) => setState(() {
+                          _cour = v;
+                          _cla = null;
+                          _type = _stdLevel(v) ? 1 : 0; // Fee Demand By of the standard
+                          _reload();
+                        }),
+                    icon: 'teacher'),
+              ),
+              SizedBox(width: 8.w),
+              if (_type == 0) ...[
+                Expanded(
+                  child: _drop<int>(
+                      schoolTerm('Next Year Class'),
+                      _cla,
+                      [for (final c in _matchedSections) (_id(c['cla_id'])!, '${c['claname']}')],
+                      (v) => setState(() {
+                            _cla = v;
+                            _reload();
+                          }),
+                      icon: 'book-1'),
+                ),
+                SizedBox(width: 8.w),
+              ],
+              Expanded(
+                child: _drop<String>(schoolTerm('Select Semester'), _term, [for (final t in _terms) ('${t['semname']}', '${t['semname']}')],
+                    (v) => setState(() {
+                          _term = v;
+                          _reload();
+                        }),
+                    icon: 'book'),
+              ),
+              SizedBox(width: 8.w),
+              // FEE GROUP -- narrows the fee-type picker and the rows shown;
+              // it does not reload the grid (typed amounts stay).
+              Expanded(
+                child: _drop<int>('Select Fee Group', _fg, [for (final g in _feeGroups) (_id(g['fg_id'])!, '${g['fgdesc']}')],
+                    (v) => setState(() => _fg = v),
+                    icon: 'receipt-discount'),
+              ),
+              SizedBox(width: 8.w),
+              Expanded(
+                child: FocusableTap(
+                  onTap: () async {
+                    final now = DateTime.now();
+                    final p = await showDatePicker(context: context, initialDate: _due ?? now, firstDate: DateTime(now.year - 1), lastDate: DateTime(now.year + 5));
+                    if (p != null) setState(() => _due = p);
+                  },
+                  child: InputDecorator(
+                    decoration: _filledFieldDec(context, '', filled: _due != null, leadingIcon: 'calendar-1').copyWith(
+                      suffixIcon: Padding(
+                        padding: EdgeInsets.only(right: 10.w),
+                        child: AppIcon('calendar', size: 15, color: _due != null ? AppColors.primary : AppColors.textSecondary),
+                      ),
+                      suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                    ),
+                    child: Text(
+                      _due == null ? 'Pay On or Before' : '${_due!.day.toString().padLeft(2, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.year}',
+                      overflow: TextOverflow.ellipsis,
+                      style: _due == null
+                          ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)
+                          : AppUI.fieldText(context, filled: true),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+        // Mode buttons on their own line, right-aligned (as Section Fee Demand).
+        Padding(
+          padding: EdgeInsets.only(bottom: 10.h),
+          child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            ExcludeFocus(child: _mode('New', Icons.add, !_editMode, () => setState(() {
+                  _editMode = false;
+                  _reload();
+                }))),
+            SizedBox(width: 8.w),
+            ExcludeFocus(child: _mode('Edit', Icons.edit, _editMode, () => setState(() {
+                  _editMode = true;
+                  _reload();
+                }))),
+            SizedBox(width: 8.w),
+            ExcludeFocus(
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _copyFee,
+                icon: const Icon(Icons.copy_all, size: 15),
+                label: const Text('Copy Fee'),
+              ),
+            ),
+          ]),
+        ),
+        SizedBox(height: 4.h),
+        Expanded(
+          child: Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
+            child: Column(children: [
+              Container(
+                color: AppColors.tableHeadBg,
+                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                child: Row(children: [
+                  Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
+                  SizedBox(width: 140.w, child: Text('AMOUNT', textAlign: TextAlign.right, style: _h())),
+                  SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
+                  SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
+                  SizedBox(width: 150.w, child: Text('DAYSCHOLAR / HOSTLER', textAlign: TextAlign.center, style: _h())),
+                  SizedBox(width: 44.w),
+                ]),
+              ),
+              Expanded(
+                child: FocusTraversalGroup(
+                  child: CustomScrollView(slivers: [
+                    SliverList.separated(
+                      itemCount: _visibleLines.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                      itemBuilder: (_, i) => _lineRow(_visibleLines[i], i),
+                    ),
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24.h),
+                        child: AppUI.empty(
+                          title: _lines.isEmpty ? 'No fee types yet' : 'No more fee types',
+                          why: schoolTerm('Add a new row to define next year\'s fee types for this class.'),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+              const Divider(height: 1, color: AppColors.divider),
+              Padding(
+                padding: EdgeInsets.all(12.w),
+                child: Row(children: [
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => setState(() => _lines.add(_AdvLine())),
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('Add Row'),
+                  ),
+                  SizedBox(width: 12.w),
+                  Flexible(
+                    child: Text('Applicable To: Both means everyone. Save raises the advance demands -- collect them in Advance Fee Collection.',
+                        overflow: TextOverflow.ellipsis, style: AppUI.muted),
+                  ),
+                  const Spacer(),
+                  Text(_fg == null ? 'Total  ' : 'Total, all groups  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+                  Text(_total.toStringAsFixed(2), style: AppUI.money.copyWith(color: AppColors.primary)),
+                  SizedBox(width: 16.w),
+                  ElevatedButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.save, size: 16),
+                    label: const Text('Save'),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _crumb() => Padding(
+        padding: EdgeInsets.symmetric(horizontal: 6.w),
+        child: Icon(Icons.chevron_right, size: 13.sp, color: AppColors.textLight),
+      );
+
+  Widget _mode(String label, IconData icon, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+        decoration: BoxDecoration(
+          color: active ? AppColors.primaryLight : Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: active ? AppColors.primary : AppColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 15.sp, color: active ? AppColors.primary : AppColors.textSecondary),
+          SizedBox(width: 6.w),
+          Text(label, style: AppUI.label.copyWith(color: active ? AppColors.primary : AppColors.textSecondary)),
+        ]),
+      ),
+    );
+  }
+
+  String? _matchFee(String text) {
+    final q = text.trim().toLowerCase();
+    if (q.isEmpty) return null;
+    for (final f in _fees) {
+      final n = '${f['feedesc']}';
+      if (n.toLowerCase() == q) return n;
+    }
+    return null;
+  }
+
+  /// One grid row -- the same anatomy as a Section Fee Demand line: a
+  /// type-to-find fee type, the amount with a rupee mark, the three Applicable
+  /// To pickers and a remove button.
+  Widget _lineRow(_AdvLine l, int i) {
+    final names = _pickable;
+    return Container(
+      color: i.isEven ? Colors.white : AppColors.surface,
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h),
+      child: Row(children: [
+        Expanded(
+          flex: 3,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h),
+            child: Autocomplete<String>(
+              key: ValueKey('adv-ft-${l.uid}-${_fg ?? 'all'}'),
+              initialValue: TextEditingValue(text: l.feeType ?? ''),
+              optionsBuilder: (v) {
+                final q = v.text.trim().toLowerCase();
+                return q.isEmpty ? names : names.where((e) => e.toLowerCase().contains(q));
+              },
+              onSelected: (v) => setState(() => l.feeType = v),
+              fieldViewBuilder: (context, ctrl, focus, onSubmit) => Focus(
+                canRequestFocus: false,
+                skipTraversal: true,
+                // Leaving with text that matches no fee type puts the last
+                // valid pick back -- a row never looks filled but is empty.
+                onFocusChange: (has) {
+                  if (has) return;
+                  final m = _matchFee(ctrl.text);
+                  if (m != null) {
+                    if (l.feeType != m) setState(() => l.feeType = m);
+                  } else {
+                    ctrl.text = l.feeType ?? '';
+                  }
+                },
+                child: TextField(
+                  controller: ctrl,
+                  focusNode: focus,
+                  enabled: !_saving,
+                  style: AppUI.fieldText(context, filled: true),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: 'Search fee type',
+                    hintStyle: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
+                    suffixIcon: Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
+                    suffixIconConstraints: BoxConstraints(minWidth: 22.w, minHeight: 22.h),
+                  ),
+                  onChanged: (v) {
+                    final m = _matchFee(v);
+                    if (m != null) l.feeType = m;
+                  },
+                  onSubmitted: (v) {
+                    final m = _matchFee(v);
+                    if (m != null) setState(() => l.feeType = m);
+                    onSubmit();
+                  },
+                ),
+              ),
+              optionsViewBuilder: (context, onSelected, options) => Align(
+                alignment: Alignment.topLeft,
+                child: Material(
+                  elevation: 6,
+                  borderRadius: BorderRadius.circular(12),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: 320.h, maxWidth: 420.w),
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      shrinkWrap: true,
+                      itemCount: options.length,
+                      itemBuilder: (_, k) {
+                        final e = options.elementAt(k);
+                        return InkWell(
+                          onTap: () => onSelected(e),
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                            child: Text(e, style: AppUI.fieldText(context, filled: true)),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (l.feeType != null && _optional.contains(l.feeType))
+          Tooltip(
+            message: 'Optional fee: not raised as an advance demand for every student. '
+                'Add it per student in Fee Collection -> Fee Definition.',
+            child: AppUI.chip('Optional - not raised', AppStatus.warning),
+          ),
+        SizedBox(width: 8.w),
+        SizedBox(
+          width: 132.w,
+          child: TextField(
+            controller: l.amount,
+            enabled: !_saving,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+            textAlign: TextAlign.right,
+            style: AppUI.money.copyWith(color: l.amount.text.trim().isNotEmpty ? AppColors.primary : AppColors.textPrimary),
+            decoration: _dec('', filled: l.amount.text.trim().isNotEmpty).copyWith(
+              prefixIcon: Padding(
+                padding: EdgeInsets.only(left: 10.w, right: 6.w),
+                child: Text('₹', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        SizedBox(width: 120.w, child: _flag(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
+        SizedBox(width: 120.w, child: _flag(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
+        SizedBox(width: 150.w, child: _flag(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+        SizedBox(
+          width: 44.w,
+          child: IconButton(
+            tooltip: 'Remove row',
+            visualDensity: VisualDensity.compact,
+            onPressed: _saving
+                ? null
+                : () => setState(() {
+                      l.dispose();
+                      _lines.remove(l);
+                    }),
+            icon: const AppIcon('trash', size: 16, color: AppColors.error),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CLASS (SECTION) MATCHING — <year schema>.classmatch
+// Which section of the NEXT standard each section moves into at promotion
+// (UKG A -> I A ...). Pick the current and next standard; every section of
+// the current one gets a next section, matched by its letter to start with.
+// Save replaces the standard's matches.
+// ══════════════════════════════════════════════════════════════════════════
+
+class _ClassMatchPanel extends StatefulWidget {
+  const _ClassMatchPanel();
+  @override
+  State<_ClassMatchPanel> createState() => _ClassMatchPanelState();
+}
+
+class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAliveClientMixin {
+  List<Map<String, dynamic>> _courses = []; // ordered by ordid
+  List<Map<String, dynamic>> _classes = [];
+  List<Map<String, dynamic>> _matches = [];
+  int? _cur; // current standard (cour_id)
+  int? _next; // next standard (cour_id)
+  final Map<int, int?> _pick = {}; // current section cla_id -> next section cla_id
+  bool _loading = true, _saving = false;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  int get _insId => context.read<AuthProvider>().insId ?? 1;
+
+  static int? _id(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
+
+  @override
+  void initState() {
+    super.initState();
+    // College has no classmatch table -- the panel is school-only.
+    if (isSchool) {
+      _load();
+    } else {
+      _loading = false;
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final r = await Future.wait([
+        SupabaseService.fromSchema('course').select('cour_id, courname, ordid').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('class').select('cla_id, claname, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('classmatch').select('*').eq('activestatus', 1),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _courses = List<Map<String, dynamic>>.from((r[0] as List).cast<Map<String, dynamic>>())
+          ..sort((a, b) => (_id(a['ordid']) ?? 9999).compareTo(_id(b['ordid']) ?? 9999));
+        _classes = List<Map<String, dynamic>>.from((r[1] as List).cast<Map<String, dynamic>>())
+          ..sort((a, b) => classCompare('${a['claname']}', '${b['claname']}'));
+        _matches = List<Map<String, dynamic>>.from((r[2] as List).cast<Map<String, dynamic>>());
+        _loading = false;
+        if (_cur != null) _selectCurrent(_cur);
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        _snack(context, 'Failed to load. ${friendlyError(e)}', AppColors.error);
+      }
+    }
+  }
+
+  String _courseName(int? id) => '${_courses.firstWhere((c) => _id(c['cour_id']) == id, orElse: () => const {})['courname'] ?? ''}';
+  String _className(int? id) => '${_classes.firstWhere((c) => _id(c['cla_id']) == id, orElse: () => const {})['claname'] ?? ''}';
+  List<Map<String, dynamic>> _sectionsOf(int? cour) => _classes.where((c) => _id(c['cour_id']) == cour).toList();
+
+  /// The section's own letter: "UKG A" of standard "UKG" -> "A".
+  String _suffix(Map<String, dynamic> cls) {
+    final name = '${cls['claname']}'.trim();
+    final std = _courseName(_id(cls['cour_id'])).trim();
+    return (std.isNotEmpty && name.toUpperCase().startsWith(std.toUpperCase()) ? name.substring(std.length) : name)
+        .trim()
+        .toUpperCase();
+  }
+
+  /// Next section with the same letter (UKG A -> I A), or none.
+  int? _autoMatch(Map<String, dynamic> cur, int? nextCour) {
+    final want = _suffix(cur);
+    for (final n in _sectionsOf(nextCour)) {
+      if (_suffix(n) == want) return _id(n['cla_id']);
+    }
+    return null;
+  }
+
+  /// Choose the current standard: saved matches fill the grid; with none, the
+  /// next standard in order is proposed and sections are matched by letter.
+  void _selectCurrent(int? cour) {
+    _cur = cour;
+    _pick.clear();
+    final saved = _matches.where((m) => _id(m['curcourseid']) == cour).toList();
+    if (saved.isNotEmpty) {
+      _next = _id(saved.first['nextcourseid']);
+    } else {
+      final i = _courses.indexWhere((c) => _id(c['cour_id']) == cour);
+      _next = (i >= 0 && i + 1 < _courses.length) ? _id(_courses[i + 1]['cour_id']) : null;
+    }
+    for (final s in _sectionsOf(cour)) {
+      final id = _id(s['cla_id'])!;
+      final m = saved.firstWhere((x) => _id(x['curclassid']) == id, orElse: () => const {});
+      _pick[id] = m.isNotEmpty ? _id(m['nextclassid']) : _autoMatch(s, _next);
+    }
+  }
+
+  void _selectNext(int? cour) {
+    _next = cour;
+    for (final s in _sectionsOf(_cur)) {
+      _pick[_id(s['cla_id'])!] = _autoMatch(s, cour);
+    }
+  }
+
+  Future<void> _save() async {
+    if (_cur == null || _next == null) {
+      return _snack(context, schoolTerm('Select the current and the next course.'), AppColors.warning);
+    }
+    if (_cur == _next) return _snack(context, schoolTerm('The next course must be a different course.'), AppColors.warning);
+    final rows = _pick.entries.where((e) => e.value != null).toList();
+    if (rows.isEmpty) return _snack(context, schoolTerm('Pick a next class for at least one class.'), AppColors.warning);
+    setState(() => _saving = true);
+    try {
+      // Replace this standard's matches as a whole.
+      await SupabaseService.deleteSchemaRowsWhere('classmatch', {'curcourseid': _cur});
+      for (final e in rows) {
+        await SupabaseService.saveSchemaRow('classmatch', {
+          'curclassid': e.key,
+          'curcourseid': _cur,
+          'nextclassid': e.value,
+          'nextcourseid': _next,
+          'activestatus': 1,
+        });
+      }
+      if (!mounted) return;
+      _snack(context, schoolTerm('Saved ${rows.length} class match(es) for ${_courseName(_cur)} -> ${_courseName(_next)}.'), AppColors.success);
+      await _load();
+    } catch (e) {
+      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _deleteStandard(int cour) async {
+    if (!await _confirmDelete(context, schoolTerm('the matching for ${_courseName(cour)}'))) return;
+    try {
+      await SupabaseService.deleteSchemaRowsWhere('classmatch', {'curcourseid': cour});
+      if (_cur == cour) _cur = null;
+      await _load();
+    } catch (e) {
+      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+    }
+  }
+
+  Widget _courseDrop(String hint, int? value, ValueChanged<int?> onChanged, {int? exclude}) {
+    final opts = _courses.where((c) => _id(c['cour_id']) != exclude).toList();
+    return DropdownButtonFormField<int>(
+      key: ValueKey('$hint-$value-${opts.length}'),
+      initialValue: opts.any((c) => _id(c['cour_id']) == value) ? value : null,
+      isExpanded: true,
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      style: _fieldTextStyle(context),
+      decoration: _filledFieldDec(context, hint, filled: value != null, leadingIcon: 'teacher'),
+      items: [
+        for (final c in opts)
+          DropdownMenuItem(value: _id(c['cour_id']), child: Text('${c['courname']}', style: AppUI.fieldText(context))),
+      ],
+      onChanged: _saving ? null : onChanged,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (!isSchool) {
+      return AppUI.empty(title: 'Class Matching is used on the school database only.');
+    }
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final cur = _sectionsOf(_cur);
+    final nextOpts = _sectionsOf(_next);
+    // Saved matches grouped by current standard, in standard order.
+    final byStd = <int, List<Map<String, dynamic>>>{};
+    for (final m in _matches) {
+      (byStd[_id(m['curcourseid']) ?? 0] ??= []).add(m);
+    }
+    final stdOrder = _courses.map((c) => _id(c['cour_id'])!).where(byStd.containsKey).toList();
+    final listRows = [
+      for (final s in stdOrder)
+        ...(byStd[s]!..sort((a, b) => classCompare(_className(_id(a['curclassid'])), _className(_id(b['curclassid']))))),
+    ];
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(
+        width: 520.w,
+        child: Container(
+          padding: EdgeInsets.all(AppUI.cardPad),
+          decoration: AppUI.card(),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            CardTitleBlock(icon: 'arrow-swap-horizontal', title: schoolTerm('Class Matching'), subtitle: schoolTerm('Which class each class moves into at promotion')),
+            SizedBox(height: 18.h),
+            _lbl(schoolTerm('Current Course')),
+            SizedBox(height: 6.h),
+            _courseDrop(schoolTerm('Select current course'), _cur, (v) => setState(() => _selectCurrent(v))),
+            SizedBox(height: 14.h),
+            _lbl(schoolTerm('Next Course')),
+            SizedBox(height: 6.h),
+            _courseDrop(schoolTerm('Select next course'), _next, (v) => setState(() => _selectNext(v)), exclude: _cur),
+            SizedBox(height: 16.h),
+            Expanded(
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
+                child: Column(children: [
+                  Container(
+                    color: AppColors.tableHeadBg,
+                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                    child: Row(children: [
+                      Expanded(child: Text(schoolTerm('CURRENT CLASS'), style: _h())),
+                      Expanded(child: Text(schoolTerm('NEXT CLASS'), style: _h())),
+                    ]),
+                  ),
+                  Expanded(
+                    child: _cur == null
+                        ? AppUI.empty(title: schoolTerm('Select the current course'))
+                        : cur.isEmpty
+                            ? AppUI.empty(title: schoolTerm('No classes in ${_courseName(_cur)}'))
+                            : ListView.separated(
+                                itemCount: cur.length,
+                                separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                                itemBuilder: (_, i) {
+                                  final s = cur[i];
+                                  final id = _id(s['cla_id'])!;
+                                  final chosen = _pick[id];
+                                  return Container(
+                                    color: i.isEven ? Colors.white : AppColors.surface,
+                                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
+                                    child: Row(children: [
+                                      Expanded(child: Text('${s['claname']}', style: AppUI.fieldText(context))),
+                                      Expanded(
+                                        child: DropdownButtonFormField<int>(
+                                          key: ValueKey('nx-$id-$chosen-$_next'),
+                                          initialValue: nextOpts.any((c) => _id(c['cla_id']) == chosen) ? chosen : null,
+                                          isExpanded: true,
+                                          isDense: true,
+                                          dropdownColor: Colors.white,
+                                          decoration: _dec('', filled: chosen != null),
+                                          hint: Text(schoolTerm('Select class'), style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+                                          items: [
+                                            for (final n in nextOpts)
+                                              DropdownMenuItem(value: _id(n['cla_id']), child: Text('${n['claname']}', style: AppUI.fieldText(context))),
+                                          ],
+                                          onChanged: _saving ? null : (v) => setState(() => _pick[id] = v),
+                                        ),
+                                      ),
+                                    ]),
+                                  );
+                                },
+                              ),
+                  ),
+                ]),
+              ),
+            ),
+            SizedBox(height: 14.h),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              OutlinedButton(
+                onPressed: _saving ? null : () => setState(() => _selectCurrent(_cur)),
+                child: const Text('Cancel'),
+              ),
+              SizedBox(width: 10.w),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save, size: 16),
+                label: const Text('Save'),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+      SizedBox(width: 16.w),
+      Expanded(
+        child: _listCard(
+          icon: 'category',
+          title: schoolTerm('Saved Class Matching'),
+          count: listRows.length,
+          countLabel: 'matches',
+          headerCells: [
+            Expanded(child: Text(schoolTerm('COURSE'), style: _h())),
+            Expanded(child: Text(schoolTerm('CURRENT CLASS'), style: _h())),
+            Expanded(child: Text(schoolTerm('NEXT CLASS'), style: _h())),
+            SizedBox(width: 90.w, child: Text('', style: _h())),
+          ],
+          body: listRows.isEmpty
+              ? AppUI.empty(title: schoolTerm('No class matching saved yet'), why: schoolTerm('Pick the current and next course on the left and save.'))
+              : ListView.separated(
+                  itemCount: listRows.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                  itemBuilder: (_, i) {
+                    final m = listRows[i];
+                    final std = _id(m['curcourseid']);
+                    final firstOfStd = i == 0 || _id(listRows[i - 1]['curcourseid']) != std;
+                    return InkWell(
+                      onTap: () => setState(() => _selectCurrent(std)),
+                      child: Container(
+                        color: i.isEven ? Colors.white : AppColors.surface,
+                        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                        child: Row(children: [
+                          Expanded(child: Text(firstOfStd ? '${_courseName(std)} -> ${_courseName(_id(m['nextcourseid']))}' : '', style: _c())),
+                          Expanded(child: Text(_className(_id(m['curclassid'])), style: _c())),
+                          Expanded(child: Text(_className(_id(m['nextclassid'])), style: _c())),
+                          SizedBox(
+                            width: 90.w,
+                            child: firstOfStd
+                                ? Align(
+                                    alignment: Alignment.centerRight,
+                                    child: IconButton(
+                                      tooltip: schoolTerm('Delete this course\'s matching'),
+                                      onPressed: () => _deleteStandard(std!),
+                                      icon: const AppIcon('trash', size: 16, color: AppColors.error),
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ),
+    ]);
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // CLASS FEE DEMAND
 // ══════════════════════════════════════════════════════════════════════════
 
 class _FeeLine {
+  /// Identity for the fee-type picker's widget key.
+  ///
+  /// Autocomplete seeds its text controller from `initialValue` ONCE, when the
+  /// widget is first built. Keying it on the row INDEX meant that switching to
+  /// Edit — which replaces _lines with freshly loaded rows — reused the same
+  /// State for index 0, so the box kept its old (empty) text while the amount
+  /// beside it showed the saved figure. The amount survived because it owns its
+  /// controller here; the fee type did not because Autocomplete owns that one.
+  /// A per-line id changes whenever the lines are rebuilt and never while the
+  /// user is typing, so the field re-seeds on load without losing focus.
+  static int _seq = 0;
+  final int uid = ++_seq;
+
   String? feeType;
   final amount = TextEditingController();
-  bool applyAll = false; // ALL tick → feedemand.collectible (true/false)
+
+  /// ALL tick. Decides whether the fee is raised against students at all:
+  /// ticked → a demand per student in the class (feedemand.collectible = true);
+  /// unticked → saved on the classfeedemand template only.
+  bool applyAll = false;
   bool isCustom = false; // user-added via "Add Row" — fee type is a dropdown
+
+  /// School "Applicable To" (classfeedemand.cfnob / cfbgb / cfdhb):
+  /// New(1)/Old(2), Boy(1)/Girl(2), Dayscholar(1)/Hostler(2); 3 = Both.
+  int nob = 3, bgb = 3, dhb = 3;
   void dispose() => amount.dispose();
 }
+
+const Map<int, String> _kNobLabels = {3: 'Both', 1: 'New', 2: 'Old'};
+const Map<int, String> _kBgbLabels = {3: 'Both', 1: 'Boy', 2: 'Girl'};
+const Map<int, String> _kDhbLabels = {3: 'Both', 1: 'Dayscholar', 2: 'Hostler'};
 
 class _ClassFeeDemandPanel extends StatefulWidget {
   const _ClassFeeDemandPanel();
@@ -1129,9 +2646,129 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   final List<_FeeLine> _lines = [];
 
   List<String> _classNames = [];
+
+  /// School: a standard whose Fee Demand By is STANDARD shows in the picker
+  /// once, as "<standard> - all sections"; that label -> its sections. Saving
+  /// it writes the same lines to every one of them.
+  final Map<String, List<String>> _stdSections = {};
+
+  /// The sections a picker entry stands for (a section is just itself).
+  List<String> _sectionsOf(String cls) => _stdSections[cls] ?? [cls];
   List<String> _semesters = [];
   // Semester name -> {start, end} dates, used to bound the Pay-On-or-Before picker.
   List<String> _feeTypeNames = [];
+
+  /// feedesc -> every fg_id it appears under. A SET, not one id: the same fee
+  /// name can legitimately exist in more than one group, and collapsing that
+  /// to a single id would hide the name from one of its groups.
+  final Map<String, Set<int>> _feeTypeGroups = {};
+
+  /// Fee groups, for the group filter above the grid.
+  List<Map<String, dynamic>> _feeGroups = [];
+
+  /// Who the demand is raised for: null = everyone, 'Y' = hostellers only,
+  /// 'N' = day scholars only.
+  ///
+  /// Unlike the fee group filter this one CHANGES WHAT IS SAVED, not just
+  /// what is shown -- a mess or hostel fee should reach hostellers and nobody
+  /// else. It narrows the student roster in _generateTempDemands exactly the
+  /// way the Admission Type filter already does.
+  ///
+  /// THE USER'S CHOICE, and nothing else writes to it. Read it through
+  /// [_effHostelFilter], which applies the HOSTELLERS ONLY pin on top without
+  /// overwriting what was picked here.
+  String? _hostelFilter;
+
+  /// fg_id of every group ticked HOSTELLERS ONLY in Setup > Fee Master > Fee
+  /// Group.
+  ///
+  /// This is not a display filter. A fee in one of these groups must reach
+  /// hostellers and nobody else, whatever [_hostelFilter] happens to be set
+  /// to -- MESS FEE was staged against all 71 students of B.TECH AI&DS-I
+  /// because the dropdown was left on "All Students" and nothing else checked.
+  /// The rule belongs to the group, so the group enforces it.
+  final Set<int> _hostelOnlyGroups = <int>{};
+
+  /// Whether the fee group currently chosen in the picker is hostellers-only.
+  bool get _groupIsHostelOnly => _fgFilter != null && _hostelOnlyGroups.contains(_fgFilter);
+
+  /// Why the last generate matched nobody, counted filter by filter. Set only
+  /// on the zero path, so it costs nothing on a normal save.
+  String? _rosterDiag;
+
+  /// The roster the batch actually runs against: the user's own choice, unless
+  /// a HOSTELLERS ONLY group is selected, which pins it to hostellers.
+  ///
+  /// DERIVED, never stored. [_hostelFilter] keeps what the user picked and
+  /// nothing else writes to it, so moving off a ticked group restores that
+  /// choice instead of leaving "Hostellers only" stuck in the box.
+  String? get _effHostelFilter => _groupIsHostelOnly ? 'Y' : _hostelFilter;
+
+  /// Whether this fee line may only be billed to hostellers.
+  ///
+  /// The picker is narrowed to one group, so that is the group the line was
+  /// chosen from and its flag is the one that counts. A line whose fee does
+  /// not belong to the current group (a row saved before the filter moved)
+  /// falls back to its own groups, and is hostel-only only if EVERY group it
+  /// appears under is ticked -- one open group means the fee is legitimately
+  /// billable to everyone and must not be withheld.
+  bool _hostelOnlyLine(_FeeLine l) {
+    final groups = _feeTypeGroups[l.feeType?.trim()] ?? const <int>{};
+    if (groups.isEmpty) return false;
+    if (_fgFilter != null && groups.contains(_fgFilter)) {
+      return _hostelOnlyGroups.contains(_fgFilter);
+    }
+    return groups.every(_hostelOnlyGroups.contains);
+  }
+
+  /// Which group the fee-type picker is narrowed to. null = every group.
+  ///
+  /// A FILTER ON THE PICKER ONLY. It never touches the rows already saved for
+  /// a class -- those are rebuilt from _feeTypeNames unfiltered, so switching
+  /// the filter can never make a saved fee line disappear.
+  int? _fgFilter;
+
+  /// The one entry in [options] whose text matches exactly, or null. Shared
+  /// by the class and fee type pickers so both commit typed text the same way.
+  String? _matchOne(List<String> options, String text) {
+    final q = text.trim().toLowerCase();
+    if (q.isEmpty) return null;
+    for (final e in options) {
+      if (e.toLowerCase() == q) return e;
+    }
+    return null;
+  }
+
+  /// The fee type whose name is EXACTLY this text, or null.
+  ///
+  /// Matched against the UNFILTERED list on purpose: a row that already holds
+  /// a valid fee type must not be invalidated just because the group filter
+  /// was narrowed afterwards.
+  String? _matchFeeType(String text) {
+    final q = text.trim().toLowerCase();
+    if (q.isEmpty) return null;
+    for (final e in _feeTypeNames) {
+      if (e.toLowerCase() == q) return e;
+    }
+    return null;
+  }
+
+  /// The rows the grid shows, after the fee group filter.
+  ///
+  /// A VIEW OVER _lines, not a rebuild. Every row stays in _lines with whatever
+  /// has been typed into it, so changing the filter cannot discard an amount
+  /// that has not been saved yet -- which is exactly what reloading the grid on
+  /// every filter change would do.
+  ///
+  /// A row with no fee type chosen yet always shows: otherwise Add Row under a
+  /// filter would append a row the user cannot see.
+  List<_FeeLine> get _visibleLines {
+    if (_fgFilter == null) return _lines;
+    return _lines.where((l) => l.feeType == null || (_feeTypeGroups[l.feeType]?.contains(_fgFilter) ?? false)).toList();
+  }
+
+  /// The fee types the picker offers, after the group filter.
+  List<String> get _pickableFeeTypes => _fgFilter == null ? _feeTypeNames : _feeTypeNames.where((n) => _feeTypeGroups[n]?.contains(_fgFilter) ?? false).toList();
   List<Map<String, dynamic>> _admTypes = [];
   Map<String, String> _admName = {};
   List<Map<String, dynamic>> _rows = [];
@@ -1143,9 +2780,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   @override
   void initState() {
     super.initState();
-    for (var i = 0; i < 5; i++) {
-      _lines.add(_FeeLine());
-    }
+    _blankLines(); // opens with a few blank rows, like Advance Fee Demand
     _load();
   }
 
@@ -1173,10 +2808,15 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             // needs every row to prefill. Ordered by cf_id for stable paging.
             SupabaseService.fetchAll(() => SupabaseService.fromSchema('classfeedemand').select('*').eq('activestatus', 1).order('cf_id')),
             SupabaseService.fromSchema('class').select('claname, ordid, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
-            SupabaseService.fromSchema('feetype').select('feedesc').eq('activestatus', 1),
-            SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('feetype').select('feedesc, fg_id').eq('activestatus', 1),
+            // No admission type on the school database -- keep the slot, empty.
+            if (isSchool)
+              Future.value(<Map<String, dynamic>>[])
+            else
+              SupabaseService.fromSchema('admissiontype').select('adm_id, admname').eq('ins_id', _insId).eq('activestatus', 1),
             SupabaseService.fromSchema('semester').select('semname, semstart, semend').eq('ins_id', _insId).eq('activestatus', 1),
-            SupabaseService.fromSchema('course').select('cour_id, ordid').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('course').select(isSchool ? 'cour_id, ordid, courname, feelevel' : 'cour_id, ordid').eq('ins_id', _insId).eq('activestatus', 1),
+            SupabaseService.fromSchema('feegroup').select(isSchool ? 'fg_id, fgdesc' : 'fg_id, fgdesc, hostellers_only').eq('ins_id', _insId).eq('activestatus', 1),
           ]);
           break;
         } catch (_) {
@@ -1191,8 +2831,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         // dashboard's class-wise ordering) instead of plain alphabetical.
         final courseOrd = <int, int>{
           for (final c in (results[5] as List))
-            if ((c['cour_id'] as num?) != null)
-              (c['cour_id'] as num).toInt(): (c['ordid'] as num?)?.toInt() ?? 9999,
+            if ((c['cour_id'] as num?) != null) (c['cour_id'] as num).toInt(): (c['ordid'] as num?)?.toInt() ?? 9999,
         };
         final seenClass = <String>{};
         final classRows = (results[1] as List).where((e) {
@@ -1207,10 +2846,56 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             final ob = (b['ordid'] as num?)?.toInt() ?? 9999;
             return oa.compareTo(ob);
           });
-        _classNames = classRows.map((e) => e['claname'].toString().trim()).toList();
+        // Master ordid order within each group, TC batches last
+        // (utils/class_sort.dart).
+        _classNames = classGroupPartition(classRows.map((e) => e['claname'].toString().trim()), (s) => s);
+        // Standards set to Fee Demand By = Standard collapse to one entry.
+        _stdSections.clear();
+        if (isSchool) {
+          final stdLabel = <int, String>{
+            for (final c in (results[5] as List))
+              if ('${c['feelevel'] ?? ''}' == 'STANDARD' && (c['cour_id'] as num?) != null)
+                (c['cour_id'] as num).toInt(): '${'${c['courname'] ?? ''}'.trim()} - all sections',
+          };
+          final courOf = <String, int?>{for (final e in classRows) e['claname'].toString().trim(): (e['cour_id'] as num?)?.toInt()};
+          final merged = <String>[];
+          for (final n in _classNames) {
+            final label = stdLabel[courOf[n]];
+            if (label == null) {
+              merged.add(n);
+            } else {
+              if (!_stdSections.containsKey(label)) merged.add(label);
+              (_stdSections[label] ??= []).add(n);
+            }
+          }
+          _classNames = merged;
+          if (_cls != null && !_classNames.contains(_cls)) _cls = null; // the flag changed
+        }
         _feeTypeNames = (results[2] as List).map((e) => e['feedesc']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
+        _feeTypeGroups.clear();
+        for (final e in (results[2] as List)) {
+          final nm = e['feedesc']?.toString().trim() ?? '';
+          final fg = (e['fg_id'] as num?)?.toInt();
+          if (nm.isEmpty || fg == null) continue;
+          (_feeTypeGroups[nm] ??= <int>{}).add(fg);
+        }
+        _feeGroups = List<Map<String, dynamic>>.from((results[6] as List).cast<Map<String, dynamic>>())..sort((a, b) => (a['fgdesc']?.toString() ?? '').compareTo(b['fgdesc']?.toString() ?? ''));
+        _hostelOnlyGroups
+          ..clear()
+          ..addAll(_feeGroups.where((g) => g['hostellers_only'] == true).map((g) => (g['fg_id'] as num?)?.toInt()).whereType<int>());
+        // A fee group is now always chosen -- there is no "All Fee Groups"
+        // option, because one saved demand belongs to one group and offering
+        // every fee type at once invited mixing them. Default to the first so
+        // the picker is never empty on open.
+        _fgFilter ??= (_feeGroups.isEmpty ? null : (_feeGroups.first['fg_id'] as num?)?.toInt());
+        // A group that has since been removed must not leave the picker stuck
+        // on an id nothing matches -- that would show an empty list with no
+        // way to tell why.
+        if (_fgFilter != null && !_feeGroups.any((g) => (g['fg_id'] as num?)?.toInt() == _fgFilter)) {
+          _fgFilter = null;
+        }
         _admTypes = List<Map<String, dynamic>>.from((results[3] as List).cast<Map<String, dynamic>>());
-        _semesters = (results[4] as List).map((e) => e['semname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
+        _semesters = (results[4] as List).map((e) => e['semname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort(_semesterOrder);
         _admName = {for (final a in _admTypes) a['adm_id'].toString(): a['admname']?.toString() ?? ''};
         // Start with no class selected so the 'Select Class' placeholder shows.
         if (_cls != null) _reloadGrid();
@@ -1222,7 +2907,6 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   }
 
   double get _total => _lines.fold(0.0, (s, l) => s + (double.tryParse(l.amount.text.trim()) ?? 0));
-
 
   String _amtStr(num v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
@@ -1236,18 +2920,63 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       l.dispose();
     }
     _lines.clear();
+    if (isSchool) {
+      int flag(dynamic v) => (v is num ? v.toInt() : int.tryParse('${v ?? ''}')) ?? 3;
+      bool inSel(Map r, String c) => (r['cfclass']?.toString() ?? '') == c && (_sem == null || (r['cfterm']?.toString() ?? '') == _sem);
+      final secs = _sectionsOf(_cls!);
+      final src = secs.firstWhere((c) => _rows.any((r) => inSel(r, c)), orElse: () => secs.first);
+      final saved = _rows
+          .where((r) => inSel(r, src))
+          .toList()
+        ..sort((a, b) => ((a['cf_id'] as num?) ?? 0).compareTo((b['cf_id'] as num?) ?? 0));
+      for (final r in saved) {
+        final d = DateTime.tryParse(r['cfdduedate']?.toString() ?? '');
+        if (d != null) {
+          _due = d;
+          break;
+        }
+      }
+      for (final r in saved) {
+        final line = _FeeLine()
+          ..feeType = r['cffeetype']?.toString()
+          ..applyAll = true
+          ..nob = flag(r['cfnob'])
+          ..bgb = flag(r['cfbgb'])
+          ..dhb = flag(r['cfdhb']);
+        final amt = r['cfamount'];
+        final n = amt is num ? amt : double.tryParse(amt?.toString() ?? '');
+        if (n != null) line.amount.text = _amtStr(n);
+        _lines.add(line);
+      }
+      if (_lines.isEmpty) _lines.add(_FeeLine()..isCustom = true);
+      return;
+    }
     // Existing records matching the current selection (class + sem + adm type).
     final existing = <String, Map<String, dynamic>>{};
     for (final r in _rows) {
       if ((r['cfclass']?.toString() ?? '') != _cls) continue;
       if (_sem != null && (r['cfterm']?.toString() ?? '') != _sem) continue;
-      final admMatch = _admId == null
-          ? r['admissiontype'] == null
-          : r['admissiontype']?.toString() == _admId;
+      final admMatch = _admId == null ? r['admissiontype'] == null : r['admissiontype']?.toString() == _admId;
       if (!admMatch) continue;
       existing[r['cffeetype']?.toString() ?? ''] = r;
     }
-    for (final ft in _feeTypeNames) {
+    // Prefill "Pay On or Before" from the saved records (one due date per
+    // selection) so Edit shows the existing due date instead of a blank field.
+    for (final r in existing.values) {
+      final raw = r['cfdduedate']?.toString();
+      if (raw != null && raw.isNotEmpty) {
+        final d = DateTime.tryParse(raw);
+        if (d != null) {
+          _due = d;
+          break;
+        }
+      }
+    }
+    // Only the fee types this selection actually has saved — same reasoning as
+    // the blank grid: listing every fee type in the institution buried the
+    // handful that carry an amount. Add Row adds one that isn't there yet.
+    final savedTypes = _feeTypeNames.where(existing.containsKey).toList();
+    for (final ft in savedTypes) {
       final line = _FeeLine()..feeType = ft;
       final r = existing[ft];
       if (r != null) {
@@ -1259,26 +2988,62 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       _lines.add(line);
     }
     if (_lines.isEmpty) {
-      for (var i = 0; i < 5; i++) {
-        _lines.add(_FeeLine());
-      }
+      _lines.add(_FeeLine()..isCustom = true);
     }
   }
 
-  /// Blank grid for NEW mode: one row per fee type, no amounts / ticks, nothing
-  /// marked as existing (so nothing is locked).
+  /// cf_id / cla_id / sem_id / fee_id for the current selection, keyed by fee
+  /// type, read back from classfeedemand after the template has been saved.
+  ///
+  /// They cannot be known before the save: the insert supplies only cf_id, and
+  /// cla_id / sem_id / fee_id are filled by the set_classfee_ids trigger. A
+  /// demand staged without them carries four NULLs and loses its link to the
+  /// template row that raised it.
+  Map<String, Map<String, int?>> _templateIds = {};
+
+  /// [forClass] because Copy Fee writes the same lines to several classes and
+  /// each one has its OWN cf_id and cla_id. Loading once for the screen's
+  /// class and reusing it would stamp the source class's ids onto every copy.
+  Future<void> _loadTemplateIds({String? forClass}) async {
+    _templateIds = {};
+    final cls = forClass ?? _cls;
+    if (cls == null || _sem == null) return;
+    try {
+      var q = SupabaseService.fromSchema('classfeedemand').select('cf_id, cla_id, sem_id, fee_id, cffeetype').eq('cfclass', cls).eq('cfterm', _sem!).eq('activestatus', 1);
+      final admId = _admId == null ? null : int.tryParse(_admId!);
+      if (!isSchool) q = admId == null ? q.isFilter('admissiontype', null) : q.eq('admissiontype', admId);
+      for (final r in (await q as List)) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final ft = m['cffeetype']?.toString();
+        if (ft == null || ft.isEmpty) continue;
+        int? id(String k) => (m[k] as num?)?.toInt();
+        _templateIds[ft] = {
+          'cf_id': id('cf_id'),
+          'cla_id': id('cla_id'),
+          'sem_id': id('sem_id'),
+          'fee_id': id('fee_id'),
+        };
+      }
+    } catch (e) {
+      // Not fatal: the demand is still correct money, it just loses the link
+      // back to its template. Say so rather than failing the whole save.
+      debugPrint('_loadTemplateIds failed: $e');
+    }
+  }
+
+  /// Blank grid for NEW mode: ONE empty row whose fee type is picked from a
+  /// dropdown. It used to seed a row per fee type, which meant scrolling a list
+  /// of every fee in the institution to reach the two or three actually being
+  /// set (and saving skips empty rows anyway). Add Row grows it on demand.
   void _blankLines() {
     for (final l in _lines) {
       l.dispose();
     }
     _lines.clear();
-    for (final ft in _feeTypeNames) {
-      _lines.add(_FeeLine()..feeType = ft);
-    }
-    if (_lines.isEmpty) {
-      for (var i = 0; i < 5; i++) {
-        _lines.add(_FeeLine());
-      }
+    // Five, not one. Defining a class's fees means entering several, and a
+    // single row made Add Row a step before every one of them.
+    for (var i = 0; i < 5; i++) {
+      _lines.add(_FeeLine()..isCustom = true);
     }
   }
 
@@ -1288,10 +3053,15 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 
   Future<void> _save() async {
     if (_cls == null || _sem == null || _due == null) {
-      return _snack(context, 'Select Class, Semester and Pay-On-or-Before date.', AppColors.warning);
+      return _snack(context, schoolTerm('Select Class, Semester and Pay-On-or-Before date.'), AppColors.warning);
     }
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Add at least one fee line.', AppColors.warning);
+    if (isSchool) {
+      for (final l in lines) {
+        l.applyAll = true; // no ALL tick: Applicable To decides who is billed
+      }
+    }
     final auth = context.read<AuthProvider>(); // capture before async gaps
     setState(() => _saving = true);
     int done = 0;
@@ -1302,42 +3072,65 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     // Admn Type so unticking/editing persists instead of leaving stale rows
     // (an insert-only save left the old collectible=true row behind, so the
     // ALL tick reappeared on reload).
+    // A standard set to Fee Demand By = Standard: the same lines go to every
+    // one of its sections (a section entry is just itself).
+    final targets = isSchool ? _sectionsOf(_cls!) : [_cls!];
     try {
-      await SupabaseService.deleteSchemaRowsWhere('classfeedemand', {
-        'cfclass': _cls!,
-        'cfterm': _sem!,
-        'admissiontype': _admId != null ? int.tryParse(_admId!) : null,
-      });
+      for (final cls in targets) {
+        await SupabaseService.deleteSchemaRowsWhere('classfeedemand', {
+          'cfclass': cls,
+          'cfterm': _sem!,
+          if (!isSchool) 'admissiontype': _admId != null ? int.tryParse(_admId!) : null,
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _saving = false);
       return _snack(context, 'Save failed clearing old rows. ${friendlyError(e)}', AppColors.error);
     }
 
-    for (final l in lines) {
+    for (final cls in targets) {
+     for (final l in lines) {
       try {
         await SupabaseService.saveSchemaRow('classfeedemand', {
           'cf_id': await _nextId('classfeedemand', 'cf_id'),
-          'cfclass': _cls,
+          'cfclass': cls,
           'cfterm': _sem,
           'cffeetype': l.feeType,
           'cfamount': double.tryParse(l.amount.text.trim()),
           'cfdduedate': _due!.toIso8601String().split('T').first,
-          'admissiontype': _admId != null ? int.tryParse(_admId!) : null,
-          'collectible': l.applyAll,
+          if (!isSchool) 'admissiontype': _admId != null ? int.tryParse(_admId!) : null,
+          'collectible': isSchool || l.applyAll,
+          if (isSchool) ...{'cfnob': l.nob, 'cfbgb': l.bgb, 'cfdhb': l.dhb},
         });
-        done++;
+        if (cls == targets.first) done++;
       } catch (e) {
-        fails.add('${l.feeType}: ${friendlyError(e)}');
+        fails.add('${targets.length > 1 ? '$cls ' : ''}${l.feeType}: ${friendlyError(e)}');
       }
+     }
     }
     // New mode: stage a tempfeedemand per student for EVERY fee line (→ Fee
     // Demand Approval → feedemand). Edit mode: push the edited amounts straight
     // into the students' existing feedemand rows instead of staging new ones.
     if (fails.isEmpty) {
       try {
-        demCount = _editMode
-            ? await _propagateToFeedemand(lines, auth)
-            : await _generateTempDemands(lines, auth);
+        // Read the template rows BACK before staging demands.
+        //
+        // classfeedemand's cla_id / sem_id / fee_id are filled by the
+        // set_classfee_ids trigger, not by the insert above, so the only way
+        // to know what they ended up as is to ask. Staging without them left
+        // every generated demand with cla_id, sem_id, fee_id and cf_id NULL --
+        // a demand that cannot be traced back to the template that raised it,
+        // and that the Fee Demand import then reports as missing ids.
+        await _loadTemplateIds();
+        if (isSchool) {
+          for (final cls in targets) {
+            demCount += await _schoolDemands(lines, auth, cls, propagate: _editMode);
+          }
+        } else {
+          demCount = _editMode
+                ? await _propagateToFeedemand(lines, auth)
+                : await _generateTempDemands(lines, auth);
+        }
       } catch (e) {
         fails.add('Demand ${_editMode ? 'update' : 'generation'}: ${friendlyError(e)}');
       }
@@ -1345,17 +3138,24 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     if (!mounted) return;
     setState(() => _saving = false);
     if (fails.isEmpty) {
-      // When no demands were generated, make it explicit that no students
-      // matched (the most common confusion) instead of a silent "Saved".
-      final noStudents = !_editMode && demCount == 0;
+      // Nothing generated has two very different causes — no line was ticked
+      // ALL, or none of the students matched — and saying which saves a long
+      // hunt for a demand that was never meant to exist.
+      final ticked = lines.where((l) => l.applyAll).length;
+      final noneTicked = !_editMode && ticked == 0;
+      final noStudents = !_editMode && !noneTicked && demCount == 0;
+      final secNote = targets.length > 1 ? ' for ${targets.length} sections' : '';
       _snack(
         context,
         _editMode
-            ? 'Updated $done fee line(s)${demCount > 0 ? ' • $demCount student demand(s) updated' : ''}.'
-            : noStudents
-                ? 'Saved $done fee line(s), but no students match this class${_admId != null ? ' + admission type' : ''} — no demands created.'
-                : 'Saved $done fee line(s) • $demCount demand(s) sent for approval.',
-        noStudents ? AppColors.warning : AppColors.success,
+            ? 'Updated $done fee line(s)$secNote${demCount > 0 ? ' • $demCount student demand(s) updated' : ''}.'
+            : noneTicked
+                ? schoolTerm('Saved $done fee line(s) to the class template. None ticked ALL, so no student demands were created.')
+                : noStudents
+                    ? 'Saved $done fee line(s), but no student matched — no demands created.'
+                        '${_rosterDiag != null ? ' ($_rosterDiag)' : ''}'
+                    : 'Saved $done fee line(s)$secNote • $demCount demand(s) sent for approval.',
+        (noneTicked || noStudents) ? AppColors.warning : AppColors.success,
       );
       setState(() {
         for (final l in _lines) {
@@ -1370,11 +3170,17 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     if (fails.isNotEmpty && mounted) _snack(context, 'Saved $done, ${fails.length} failed. ${fails.first}', AppColors.error);
   }
 
-  /// Stage a tempfeedemand row for every active student in the class × each fee
-  /// line (→ Fee Demand Approval, isapproved=false). collectible = line.applyAll
-  /// and is carried into feedemand by the approval trigger. temp_id/demno are
-  /// filled by the schema's set_temp_id trigger.
+  /// Stage a tempfeedemand row for every active student in the class × each
+  /// ALL-ticked fee line (→ Fee Demand Approval, isapproved=false). temp_id and
+  /// demno are filled by the schema's set_temp_id trigger.
+  ///
+  /// The ALL tick is what decides whether a fee is raised against students at
+  /// all: ticked → a demand per student; unticked → the amount is kept on the
+  /// classfeedemand template only, ready to be applied later per student (Fee
+  /// Demand, Student Fee Definition) without billing the whole class now.
   Future<int> _generateTempDemands(List<_FeeLine> lines, AuthProvider auth, {String? forClass}) async {
+    lines = lines.where((l) => l.applyAll).toList();
+    if (lines.isEmpty) return 0;
     final cls = forClass ?? _cls!;
     final insId = auth.insId ?? 1;
     final years = await SupabaseService.getYears(insId);
@@ -1384,52 +3190,165 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     // Restrict to the chosen admission type (null = All).
     String? admName;
     if (_admId != null) {
-      admName = _admTypes
-          .firstWhere((a) => a['adm_id'].toString() == _admId, orElse: () => const {})['admname']
-          ?.toString();
+      admName = _admTypes.firstWhere((a) => a['adm_id'].toString() == _admId, orElse: () => const {})['admname']?.toString();
     }
     // Paged: a truncated roster here would silently skip students when
     // generating demands, leaving them unbilled with no error.
-    final students = await SupabaseService.fetchAll(() {
-      var q = SupabaseService.fromSchema('students')
-          .select('stu_id, stuadmno, courname')
-          .eq('ins_id', insId)
-          .eq('stuclass', cls)
-          .eq('activestatus', 1);
-      if (admName != null && admName.isNotEmpty) q = q.eq('admname', admName);
-      return q;
-    });
-    if (students.isEmpty) return 0;
+    //
+    // `hostel` decides who the demand reaches: 'Y' hostellers, 'N' day
+    // scholars, null everyone. students.hostel is char(1) and is null on a
+    // few rows -- a null is NOT a hosteller, so 'N' has to match the nulls
+    // too or those students are silently skipped and left unbilled.
+    Future<List<Map<String, dynamic>>> roster(String? hostel, {bool withAdm = true}) =>
+        SupabaseService.fetchAll(() {
+          var q = SupabaseService.fromSchema('students')
+              .select('stu_id, stuadmno, courname')
+              .eq('ins_id', insId)
+              .eq('stuclass', cls)
+              .eq('activestatus', 1)
+              .eq('preadmission', 0); // next year's intake: advance screens only
+          if (withAdm && admName != null && admName.isNotEmpty) q = q.eq('admname', admName);
+          if (hostel == 'Y') {
+            q = q.eq('hostel', 'Y');
+          } else if (hostel == 'N') {
+            q = q.or('hostel.eq.N,hostel.is.null');
+          }
+          return q;
+        });
+
+    // Split the batch by WHO each line may be billed to, and raise each half
+    // against its own roster. One roster for the whole batch cannot be right
+    // when a hostel fee and a college fee are saved together: the wider of
+    // the two always wins, and the hostel fee lands on day scholars.
+    //
+    // A hostel-only line is pinned to 'Y' whatever the dropdown says. The one
+    // case it yields to is "Day scholars only" -- hostel-only AND day scholar
+    // is nobody, so those lines are dropped rather than quietly widened.
+    final eff = _effHostelFilter;  // what the dropdown is actually showing
+    final hostelLines = lines.where(_hostelOnlyLine).toList();
+    final openLines = lines.where((l) => !_hostelOnlyLine(l)).toList();
+    final batches = <(List<_FeeLine>, List<Map<String, dynamic>>)>[];
+    if (openLines.isNotEmpty) {
+      batches.add((openLines, await roster(eff)));
+    }
+    if (hostelLines.isNotEmpty && eff != 'N') {
+      batches.add((
+        hostelLines,
+        eff == 'Y' && openLines.isNotEmpty
+            ? batches.first.$2 // same query, don't ask twice
+            : await roster('Y')
+      ));
+    }
+
+    // Nothing matched. Say WHICH filter emptied the roster instead of naming
+    // all of them and leaving the office to guess -- "no students match this
+    // class + admission type" was reported for a class that did have
+    // students, because the real culprit was the hostel pin and the message
+    // never mentioned it.
+    if (batches.every((b) => b.$2.isEmpty)) {
+      final inClass = (await roster(null, withAdm: false)).length;
+      final afterAdm = admName == null || admName.isEmpty ? inClass : (await roster(null)).length;
+      final parts = <String>['$inClass in $cls'];
+      if (admName != null && admName.isNotEmpty) parts.add('$afterAdm after $admName');
+      if (eff != null) {
+        parts.add('0 after ${eff == 'Y' ? 'Hostellers only' : 'Day scholars only'}'
+            '${_groupIsHostelOnly ? ' (set by the fee group)' : ''}');
+      }
+      _rosterDiag = parts.join(', ');
+      return 0;
+    }
+    _rosterDiag = null;
+
     final rows = <Map<String, dynamic>>[];
     final due = _due!.toIso8601String().split('T').first;
-    for (final s in students) {
-      for (final l in lines) {
-        final amt = double.tryParse(l.amount.text.trim()) ?? 0;
-        rows.add({
-          'ins_id': insId,
-          'inscode': auth.inscode ?? '',
-          'yr_id': yrId,
-          'stu_id': s['stu_id'],
-          'stuadmno': s['stuadmno'],
-          'stuclass': cls,
-          'courname': s['courname'],
-          'demfeeyear': yrLabel,
-          'demfeeterm': _sem,
-          'demfeetype': l.feeType,
-          'feeamount': amt,
-          'balancedue': amt,
-          'duedate': due,
-          'createdby': auth.userName,
-          'isapproved': false,
-          'activestatus': 1,
-          'collectible': l.applyAll,
-        });
+    for (final (batchLines, students) in batches) {
+      for (final s in students) {
+        for (final l in batchLines) {
+          final amt = double.tryParse(l.amount.text.trim()) ?? 0;
+          rows.add({
+            'ins_id': insId,
+            'inscode': auth.inscode ?? '',
+            'yr_id': yrId,
+            'stu_id': s['stu_id'],
+            'stuadmno': s['stuadmno'],
+            'stuclass': cls,
+            'courname': s['courname'],
+            'demfeeyear': yrLabel,
+            'demfeeterm': _sem,
+            'demfeetype': l.feeType,
+            // REGULAR, said explicitly. Left out, feedemand's set_dem_id trigger
+            // defaults demseqtype to 'DEMAND', so a class-generated demand came
+            // out labelled differently from the identical one raised by the
+            // import or by add_student_fee_demand, both of which say REGULAR.
+            // Only an arrear is anything else.
+            'demseqtype': 'REGULAR',
+            'feeamount': amt,
+            'balancedue': amt,
+            'duedate': due,
+            'createdby': auth.userName,
+            'isapproved': false,
+            'activestatus': 1,
+            'collectible': l.applyAll,
+            // The template row this demand came from. Without these four the
+            // demand reaches feedemand with cla_id, sem_id, fee_id and cf_id all
+            // NULL and can no longer be traced back to the fee it was raised
+            // from -- which is also what the Fee Demand import then complains
+            // about. Read back from classfeedemand in _loadTemplateIds, because
+            // three of the four are set by a trigger rather than by the insert.
+            ...?_templateIds[l.feeType],
+          });
+        }
       }
     }
     if (rows.isEmpty) return 0;
-    await SupabaseService.importSchemaRows('tempfeedemand',
-        List<Map<String, dynamic>>.from(rows));
+    await SupabaseService.importSchemaRows('tempfeedemand', List<Map<String, dynamic>>.from(rows));
     return rows.length;
+  }
+
+  /// School: Edit first moves each line's new amount onto the unpaid demands
+  /// of the students that line applies to (Applicable To), then the server's
+  /// generate_feedemand_for_class stages a demand for every matching student
+  /// who has none yet for that term + fee type -- the same rules the Class Fee
+  /// Demand import uses. Returns demands updated + staged.
+  Future<int> _schoolDemands(List<_FeeLine> lines, AuthProvider auth, String cls, {required bool propagate}) async {
+    final insId = auth.insId ?? 1;
+    var n = 0;
+    if (propagate) {
+      final studs = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+          .select('stuadmno, stugender, hostel, admittyear, yrlabel')
+          .eq('ins_id', insId)
+          .eq('stuclass', cls)
+          .eq('activestatus', 1)
+          .eq('preadmission', 0));
+      bool fits(_FeeLine l, Map s) {
+        final yr = s['yrlabel']?.toString() ?? '';
+        final adm = (s['admittyear']?.toString() ?? '').trim();
+        final isNew = adm.isNotEmpty && (adm == yr || adm == yr.split('-').first);
+        final hosteller = (s['hostel']?.toString() ?? '').trim().toUpperCase() == 'Y';
+        final g = s['stugender']?.toString();
+        return (l.nob == 3 || l.nob == (isNew ? 1 : 2)) &&
+            (l.bgb == 3 || (l.bgb == 1 && g == 'M') || (l.bgb == 2 && g == 'F')) &&
+            (l.dhb == 3 || l.dhb == (hosteller ? 2 : 1));
+      }
+      for (final l in lines) {
+        final admnos = [for (final s in (studs as List)) if (fits(l, s as Map)) s['stuadmno'].toString()];
+        if (admnos.isEmpty) continue;
+        final res = await SupabaseService.client.rpc('propagate_class_fee', params: {
+          'p_ins_id': insId,
+          'p_class': cls,
+          'p_term': _sem,
+          'p_lines': [
+            {'feetype': l.feeType, 'amount': double.tryParse(l.amount.text.trim()) ?? 0, 'collectible': true},
+          ],
+          'p_admnos': admnos,
+        });
+        n += (res as num?)?.toInt() ?? 0;
+      }
+    }
+    final g = await SupabaseService.client.rpc('generate_feedemand_for_class', params: {'p_ins_id': insId, 'p_class': cls});
+    n += (g is num) ? g.toInt() : (int.tryParse(g?.toString() ?? '') ?? 0);
+    _rosterDiag = null;
+    return n;
   }
 
   /// Edit mode: push the edited Class Fee Demand amounts into the students'
@@ -1441,16 +3360,41 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     // Resolve the admno set for the chosen admission type (null = all students).
     Set<String>? allowed;
     if (_admId != null) {
-      final admName = _admTypes
-          .firstWhere((a) => a['adm_id'].toString() == _admId, orElse: () => const {})['admname']
-          ?.toString();
+      final admName = _admTypes.firstWhere((a) => a['adm_id'].toString() == _admId, orElse: () => const {})['admname']?.toString();
       final studs = await SupabaseService.fromSchema('students')
           .select('stuadmno')
           .eq('ins_id', insId)
           .eq('stuclass', _cls!)
           .eq('activestatus', 1)
+          .eq('preadmission', 0) // next year's intake: advance screens only
           .eq('admname', admName ?? '');
       allowed = {for (final s in (studs as List)) (s as Map)['stuadmno'].toString()};
+    }
+
+    // Fast path: one set-based RPC updates every matching unpaid demand per fee
+    // line server-side (replaces the old N+1: a SELECT + per-row rebuild for
+    // each of potentially thousands of student demands). Falls back to the
+    // per-row loop on ANY error so it stays correct even before the migration
+    // is run (add_propagate_class_fee.sql) or if the RPC misbehaves.
+    try {
+      final lineMaps = [
+        for (final l in lines)
+          {
+            'feetype': l.feeType,
+            'amount': double.tryParse(l.amount.text.trim()) ?? 0,
+            'collectible': l.applyAll,
+          }
+      ];
+      final res = await SupabaseService.client.rpc('propagate_class_fee', params: {
+        'p_ins_id': insId,
+        'p_class': _cls,
+        'p_term': _sem,
+        'p_lines': lineMaps,
+        'p_admnos': allowed?.toList(),
+      });
+      return (res as num?)?.toInt() ?? 0;
+    } catch (e) {
+      debugPrint('propagate_class_fee RPC unavailable, using per-row fallback: $e');
     }
 
     var updated = 0;
@@ -1485,15 +3429,21 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   /// Copy the current grid's fee lines (amounts + ALL ticks) to one or more
   /// other classes for the same Semester + Admn Type. Replaces each target's
   /// existing template rows (idempotent) and stages tempfeedemand for that
-  /// class's students.
+  /// class's students — for the ALL-ticked lines only, same rule as Save.
   Future<void> _copyFee() async {
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Enter fee amounts to copy.', AppColors.warning);
-    if (_sem == null || _due == null) {
-      return _snack(context, 'Select Semester and Pay-On-or-Before before copying.', AppColors.warning);
+    if (isSchool) {
+      for (final l in lines) {
+        l.applyAll = true;
+      }
     }
-    final targets = await _pickTargetClasses();
-    if (targets == null || targets.isEmpty) return;
+    if (_sem == null || _due == null) {
+      return _snack(context, schoolTerm('Select Semester and Pay-On-or-Before before copying.'), AppColors.warning);
+    }
+    final picked = await _pickTargetClasses();
+    if (picked == null || picked.isEmpty) return;
+    final targets = [for (final t in picked) ...(isSchool ? _sectionsOf(t) : [t])];
 
     final auth = context.read<AuthProvider>();
     setState(() => _saving = true);
@@ -1507,7 +3457,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         await SupabaseService.deleteSchemaRowsWhere('classfeedemand', {
           'cfclass': cls,
           'cfterm': _sem!,
-          'admissiontype': admType,
+          if (!isSchool) 'admissiontype': admType,
         });
         for (final l in lines) {
           await SupabaseService.saveSchemaRow('classfeedemand', {
@@ -1517,11 +3467,15 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             'cffeetype': l.feeType,
             'cfamount': double.tryParse(l.amount.text.trim()),
             'cfdduedate': due,
-            'admissiontype': admType,
-            'collectible': l.applyAll,
+            if (!isSchool) 'admissiontype': admType,
+            'collectible': isSchool || l.applyAll,
+            if (isSchool) ...{'cfnob': l.nob, 'cfbgb': l.bgb, 'cfdhb': l.dhb},
           });
         }
-        demTotal += await _generateTempDemands(lines, auth, forClass: cls);
+        await _loadTemplateIds(forClass: cls);
+        demTotal += isSchool
+            ? await _schoolDemands(lines, auth, cls, propagate: false)
+            : await _generateTempDemands(lines, auth, forClass: cls);
         classesDone++;
       } catch (e) {
         fails.add('$cls: ${friendlyError(e)}');
@@ -1529,12 +3483,15 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     }
     if (!mounted) return;
     setState(() => _saving = false);
+    final copiedTicked = lines.any((l) => l.applyAll);
     _snack(
       context,
       fails.isEmpty
-          ? 'Copied fees to $classesDone class(es) • $demTotal demand(s) staged.'
+          ? copiedTicked
+              ? schoolTerm('Copied fees to $classesDone class(es) • $demTotal demand(s) staged.')
+              : schoolTerm('Copied fees to $classesDone class(es). No line is ticked ALL, so no student demands were created.')
           : 'Copied to $classesDone, ${fails.length} failed. ${fails.first}',
-      fails.isEmpty ? AppColors.success : AppColors.error,
+      fails.isEmpty ? (copiedTicked ? AppColors.success : AppColors.warning) : AppColors.error,
     );
     await _load();
   }
@@ -1542,30 +3499,50 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   /// Multi-select dialog of target classes (excludes the source class).
   Future<List<String>?> _pickTargetClasses() async {
     final picked = <String>{};
+    var copyQuery = ''; // what is typed in the dialog's search box
     return showDialog<List<String>>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) {
-          final options = _classNames.where((c) => c != _cls).toList();
+          // Same problem as the class picker: 60-odd classes in a checkbox
+          // list meant scrolling to find each one. The search narrows the
+          // list; ticks already made are KEPT when the text changes, because
+          // `picked` lives outside this builder -- so you can search, tick,
+          // clear the search, search again and the earlier ticks survive.
+          final q = copyQuery.trim().toLowerCase();
+          final options = _classNames.where((c) => c != _cls && (q.isEmpty || c.toLowerCase().contains(q))).toList();
           return AlertDialog(
-            title: Text('Copy fees to classes', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700)),
+            title: Text(schoolTerm('Copy fees to classes'), style: AppUI.cardTitle),
             content: SizedBox(
               width: 360.w,
               height: 360.h,
               child: options.isEmpty
-                  ? Center(child: Text('No other classes', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+                  ? AppUI.empty(title: schoolTerm('No other classes'))
                   : ListView(
                       children: [
                         Padding(
                           padding: EdgeInsets.only(bottom: 4.h),
-                          child: Text('From ${_cls ?? ''} • ${_sem ?? ''} • ${_admId == null ? 'All' : (_admName[_admId] ?? '')}',
-                              style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+                          child: Text('From ${_cls ?? ''} • ${_sem ?? ''}${isSchool ? '' : ' • ${_admId == null ? 'All' : (_admName[_admId] ?? '')}'}', style: AppUI.muted),
                         ),
+                        Padding(
+                          padding: EdgeInsets.only(bottom: 6.h),
+                          child: TextField(
+                            autofocus: true,
+                            style: AppUI.fieldText(context),
+                            decoration: AppUI.field(context, schoolTerm('Search class'), leadingIcon: 'search-normal'),
+                            onChanged: (v) => setLocal(() => copyQuery = v),
+                          ),
+                        ),
+                        if (picked.isNotEmpty)
+                          Padding(
+                            padding: EdgeInsets.only(bottom: 4.h),
+                            child: Text('${picked.length} selected', style: AppUI.label.copyWith(color: AppColors.primary)),
+                          ),
                         for (final c in options)
                           CheckboxListTile(
                             dense: true,
                             value: picked.contains(c),
-                            title: Text(c, style: TextStyle(fontSize: 13.sp)),
+                            title: Text(c, style: AppUI.body),
                             controlAffinity: ListTileControlAffinity.leading,
                             onChanged: (v) => setLocal(() => v == true ? picked.add(c) : picked.remove(c)),
                           ),
@@ -1576,7 +3553,6 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
               ElevatedButton(
                 onPressed: picked.isEmpty ? null : () => Navigator.pop(ctx, picked.toList()),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
                 child: Text('Copy to ${picked.length}'),
               ),
             ],
@@ -1587,6 +3563,17 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   }
 
   Future<void> _delete(int id) async {
+    // A demand raised from this template keeps its cf_id, so deleting the
+    // template would leave those demands describing a fee line that no
+    // longer exists.
+    final used = await countReferencing('feedemand', [('cf_id', id)]);
+    if (used > 0) {
+      if (mounted) {
+        await showMasterInUseDialog(context, name: 'this fee line', count: used, noun: 'fee demand', fix: 'A demand has already been raised from it.');
+      }
+      return;
+    }
+    if (!mounted) return;
     if (!await _confirmDelete(context, 'fee line')) return;
     try {
       await SupabaseService.deleteSchemaRow('classfeedemand', 'cf_id', id, soft: false);
@@ -1606,21 +3593,87 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     return _creation();
   }
 
+  /// Order the term list the way the office reads it: semesters, then YEARLY,
+  /// then the months.
+  ///
+  /// Plain alphabetical interleaved all three -- AUGUST, DECEMBER, FEBRUARY,
+  /// I SEM, II SEM, III SEM, IV SEM, JANUARY, JULY... -- so finding "V SEM"
+  /// meant scanning past six months. Within each group the order is the one
+  /// that means something: I to VIII for semesters, and the ACADEMIC year for
+  /// months, June first, because that is when the year starts here and how
+  /// the mess and hostel fees are billed.
+  static int _semesterOrder(String a, String b) {
+    const sems = ['I SEM', 'II SEM', 'III SEM', 'IV SEM', 'V SEM', 'VI SEM', 'VII SEM', 'VIII SEM'];
+    const months = ['JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER', 'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY'];
+    // (group, position). Anything unrecognised falls to the end, alphabetical,
+    // so a term nobody anticipated is still reachable rather than lost.
+    (int, int) rank(String v) {
+      final u = v.trim().toUpperCase();
+      final si = sems.indexOf(u);
+      if (si >= 0) return (0, si);
+      if (u == 'YEARLY') return (1, 0);
+      final mi = months.indexOf(u);
+      if (mi >= 0) return (2, mi);
+      return (3, 0);
+    }
+
+    final ra = rank(a), rb = rank(b);
+    if (ra.$1 != rb.$1) return ra.$1.compareTo(rb.$1);
+    if (ra.$2 != rb.$2) return ra.$2.compareTo(rb.$2);
+    return a.compareTo(b);
+  }
+
+  /// Compact Both / X / Y picker for a school fee line's Applicable To.
+  Widget _flagDrop(int value, Map<int, String> labels, ValueChanged<int> onChanged) {
+    final set = value != 3;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 6.w),
+      child: DropdownButtonFormField<int>(
+        initialValue: labels.containsKey(value) ? value : 3,
+        isExpanded: true,
+        isDense: true,
+        dropdownColor: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        icon: Icon(Icons.arrow_drop_down, size: 18.sp, color: AppColors.textSecondary),
+        decoration: _dec('', filled: set).copyWith(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 9.h)),
+        items: [
+          for (final e in labels.entries)
+            DropdownMenuItem(value: e.key, child: Text(e.value, style: AppUI.fieldText(context))),
+        ],
+        selectedItemBuilder: (_) => [
+          for (final e in labels.entries)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(e.value,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppUI.fieldText(context, filled: e.key != 3)),
+            ),
+        ],
+        onChanged: (v) => onChanged(v ?? 3),
+      ),
+    );
+  }
+
+  Widget _crumbSep() => Padding(
+        padding: EdgeInsets.symmetric(horizontal: 6.w),
+        child: Icon(Icons.chevron_right, size: 13.sp, color: AppColors.textLight),
+      );
+
   Widget _modeButton(String label, IconData icon, bool active, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8.r),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
         decoration: BoxDecoration(
-          color: active ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(8.r),
+          color: active ? AppColors.primaryLight : Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
           border: Border.all(color: active ? AppColors.primary : AppColors.border),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 15.sp, color: active ? Colors.white : AppColors.textSecondary),
+          Icon(icon, size: 15.sp, color: active ? AppColors.primary : AppColors.textSecondary),
           SizedBox(width: 6.w),
-          Text(label, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: active ? Colors.white : AppColors.textSecondary)),
+          Text(label, style: AppUI.label.copyWith(color: active ? AppColors.primary : AppColors.textSecondary)),
         ]),
       ),
     );
@@ -1631,200 +3684,605 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       // Outer white card wrapping the whole creation panel (mode buttons,
       // filter row, fee table, total/save) so it visually mirrors the
       // Saved Demands card on the right.
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-        // Single top row — filters on the left, mode buttons on the right.
-        // Each filter is an Expanded slot, mode buttons get fixed widths so
-        // everything fits side-by-side without wrapping.
-        Padding(
-          padding: EdgeInsets.only(bottom: 10.h),
-          child: FocusTraversalGroup(child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(child: DropdownButtonFormField<String>(
-                initialValue: _cls,
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(context),
-                icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                decoration: _filledFieldDec(context, 'Select Class', filled: _cls != null),
-                hint: Text('Select Class',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: MediaQuery.of(context).size.width <= 1366 ? 11 : 14)),
-                items: _classNames.map((e) => DropdownMenuItem(value: e, child: Text(e, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
-                // Polished filled state: the chosen value reads bold + accent,
-                // clearly distinct from the muted placeholder.
-                selectedItemBuilder: (context) => _classNames.map((e) => Align(alignment: Alignment.centerLeft, child: Text(e, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
-                onChanged: (v) => setState(() { _cls = v; _reloadGrid(); }),
-              )),
-              SizedBox(width: 8.w),
-              Expanded(child: DropdownButtonFormField<String>(
-                initialValue: _sem,
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(context),
-                icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                decoration: _filledFieldDec(context, 'Select Semester', filled: _sem != null),
-                hint: Text('Select Semester',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: MediaQuery.of(context).size.width <= 1366 ? 11 : 14)),
-                items: _semesters.map((e) => DropdownMenuItem(value: e, child: Text(e, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))).toList(),
-                selectedItemBuilder: (context) => _semesters.map((e) => Align(alignment: Alignment.centerLeft, child: Text(e, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
-                onChanged: (v) => setState(() { _sem = v; _reloadGrid(); }),
-              )),
-              SizedBox(width: 8.w),
-              Expanded(child: DropdownButtonFormField<String>(
-                initialValue: _admId,
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(context),
-                icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                decoration: _filledFieldDec(context, 'All Admission Types', filled: _admId != null),
-                hint: Text('All Admission Types',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: MediaQuery.of(context).size.width <= 1366 ? 11 : 14)),
-                items: [
-                  // 'all' is a sentinel → normalised to null (applies to every
-                  // admission type). Null shows the "All Admission Types" hint.
-                  DropdownMenuItem(value: 'all', child: Text('All Admission Types', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis)),
-                  ..._admTypes.map((a) => DropdownMenuItem(value: a['adm_id'].toString(), child: Text(a['admname']?.toString() ?? '', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis))),
+          // Page header. Built inline rather than with CardTitleBlock, which
+          // takes a subtitle for call-site compatibility but no longer renders
+          // one -- and this header needs its subtitle.
+          Padding(
+            padding: EdgeInsets.only(bottom: 16.h),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              AppUI.iconTile('receipt-edit'),
+              SizedBox(width: 12.w),
+              Expanded(
+                  child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(schoolTerm('Class Fee Demand'), style: AppUI.cardTitle),
+                  SizedBox(height: 2.h),
+                  Text(schoolTerm('Define fee types and amounts for each class'), style: AppUI.muted),
                 ],
-                selectedItemBuilder: (context) => [
-                  Align(alignment: Alignment.centerLeft, child: Text('All Admission Types', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                  ..._admTypes.map((a) => Align(alignment: Alignment.centerLeft, child: Text(a['admname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))),
-                ],
-                onChanged: (v) => setState(() { _admId = v == 'all' ? null : v; _reloadGrid(); }),
               )),
-              SizedBox(width: 8.w),
-              Expanded(child: FocusableTap(
-                onTap: () async {
-                  final now = DateTime.now();
-                  // Due date is independent of the semester start/end dates.
-                  final first = DateTime(now.year - 1);
-                  final last = DateTime(now.year + 5);
-                  final initial = (_due != null && !_due!.isBefore(first) && !_due!.isAfter(last))
-                      ? _due!
-                      : now;
-                  final p = await showDatePicker(context: context, initialDate: initial, firstDate: first, lastDate: last);
-                  if (p != null) setState(() => _due = p);
-                },
-                child: InputDecorator(
-                  // InputDecorator doesn't render hintText when a child widget is
-                  // present, so we render the placeholder text inline ourselves.
-                  decoration: _filledFieldDec(context, '', filled: _due != null),
-                  child: Text(
-                    _due == null ? 'Pay On or Before' : _fmt(_due!),
-                    style: _due == null
-                        ? TextStyle(fontSize: 13.sp, color: AppColors.textPrimary.withValues(alpha: 0.6))
-                        : _fieldTextStyle(context).copyWith(color: AppColors.accent),
-                  ),
-                ),
-              )),
-              SizedBox(width: 10.w),
-              // Action buttons are mouse-only — kept out of Tab so the key
-              // moves only through the input fields (dropdowns + amounts).
-              ExcludeFocus(child: _modeButton('New', Icons.add, !_editMode, () => setState(() {
-                _editMode = false;
-                _reloadGrid();
-              }))),
-              SizedBox(width: 8.w),
-              ExcludeFocus(child: _modeButton('Edit', Icons.edit, _editMode, () => setState(() {
-                _editMode = true;
-                _reloadGrid();
-              }))),
-              SizedBox(width: 8.w),
-              ExcludeFocus(
-                child: OutlinedButton.icon(
-                  onPressed: _saving ? null : _copyFee,
-                  icon: const Icon(Icons.copy_all, size: 15),
-                  label: const Text('Copy Fee'),
-                ),
-              ),
-              SizedBox(width: 8.w),
-              ExcludeFocus(
-                child: _importButton(context, title: 'Class Fee Demand', tabIndex: 7, disabled: _saving, onReturn: _load),
-              ),
-            ],
-          )),
-        ),
-        SizedBox(height: 4.h),
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12.r), border: Border.all(color: AppColors.border.withValues(alpha: 0.6))),
-            child: Column(children: [
-              Container(color: AppColors.tableHeadBg, padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h), child: Row(children: [
-                Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
-                SizedBox(width: 140.w, child: Text('AMOUNT', style: _h())),
-                SizedBox(width: 70.w, child: Text('ALL', textAlign: TextAlign.center, style: _h())),
-                SizedBox(width: 44.w, child: Text('', style: _h())),
-              ])),
-              Expanded(child: FocusTraversalGroup(child: ListView.separated(itemCount: _lines.length, separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.4)), itemBuilder: (_, i) {
-                final l = _lines[i];
-                return Container(color: i.isEven ? Colors.white : AppColors.surface, padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h), child: Row(children: [
-                  Expanded(flex: 3, child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h),
-                    child: l.isCustom
-                        ? DropdownButtonHideUnderline(
-                            child: DropdownButton<String>(
-                              value: l.feeType,
-                              isExpanded: true,
-                              isDense: true,
-                              dropdownColor: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              elevation: 6,
-                              icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                              hint: Text('Select fee type', style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary.withValues(alpha: 0.5))),
-                              items: _feeTypeNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
-                              onChanged: (v) => setState(() => l.feeType = v),
-                            ),
-                          )
-                        : Text(l.feeType ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                  )),
-                  SizedBox(width: 8.w),
-                  SizedBox(width: 132.w, child: TextField(controller: l.amount, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: l.amount.text.trim().isNotEmpty ? AppColors.accent : AppColors.textPrimary), decoration: _dec('', filled: l.amount.text.trim().isNotEmpty), onChanged: (_) => setState(() {}))),
-                  SizedBox(width: 70.w, child: Center(child: Tooltip(message: 'Tick = collectible from all students (feedemand.collectible = true)', child: ExcludeFocus(child: Checkbox(value: l.applyAll, activeColor: AppColors.accent, visualDensity: VisualDensity.compact, onChanged: (v) => setState(() => l.applyAll = v ?? false)))))),
-                  SizedBox(width: 44.w, child: l.isCustom
-                      ? IconButton(
-                          tooltip: 'Remove row',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: () => setState(() { l.dispose(); _lines.removeAt(i); }),
-                          icon: const AppIcon('trash', size: 16, color: AppColors.error),
-                        )
-                      : null),
-                ]));
-              }))),
-              Divider(height: 1.h, color: AppColors.border),
-              Padding(padding: EdgeInsets.all(12.w), child: Row(children: [
-                OutlinedButton.icon(
-                  onPressed: () => setState(() => _lines.add(_FeeLine()..isCustom = true)),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Add Row'),
-                ),
-                SizedBox(width: 12.w),
-                Flexible(child: Text('Tick ALL to make a fee collectible from every student', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.sp, color: AppColors.textLight))),
-                const Spacer(),
-                Text('Total  ', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                Text(_total.toStringAsFixed(2), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
-                SizedBox(width: 16.w),
-                ElevatedButton.icon(onPressed: _saving ? null : _save, icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save, size: 16), label: const Text('Save'), style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white)),
-              ])),
+              // Breadcrumb. Hidden below 1100px: it is orientation, not a
+              // control, and it is the first thing worth losing when the filter
+              // row needs the width.
+              if (MediaQuery.of(context).size.width > 1100)
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.home_outlined, size: 14.sp, color: AppColors.textLight),
+                  for (final crumb in const ['Setup', 'Fee Master']) ...[
+                    _crumbSep(),
+                    Text(crumb, style: AppUI.muted),
+                  ],
+                  _crumbSep(),
+                  Text(schoolTerm('Class Fee Demand'), style: AppUI.label),
+                ]),
             ]),
           ),
-        ),
-      ],
+          // Single top row — filters on the left, mode buttons on the right.
+          // Each filter is an Expanded slot, mode buttons get fixed widths so
+          // everything fits side-by-side without wrapping.
+          Padding(
+            padding: EdgeInsets.only(bottom: 10.h),
+            child: FocusTraversalGroup(
+                child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // TYPE TO FIND A CLASS. There are 60-odd of them, so the plain
+                // dropdown meant scrolling a long list to reach B.TECH (IT) -III.
+                // `contains`, not `startsWith`: the useful fragment is rarely the
+                // first word -- "ece" has to find "B.E ECE -II".
+                Expanded(
+                    child: Autocomplete<String>(
+                  key: ValueKey('cls-${_cls ?? ''}'),
+                  initialValue: TextEditingValue(text: _cls ?? ''),
+                  optionsBuilder: (v) {
+                    final q = v.text.trim().toLowerCase();
+                    if (q.isEmpty) return _classNames;
+                    return _classNames.where((e) => e.toLowerCase().contains(q));
+                  },
+                  onSelected: (v) => setState(() {
+                    _cls = v;
+                    _reloadGrid();
+                  }),
+                  fieldViewBuilder: (context, ctrl, focus, onSubmit) => Focus(
+                    canRequestFocus: false,
+                    skipTraversal: true,
+                    // Leaving the field with text that matches no class puts the
+                    // last valid pick back, so the box never shows a class that
+                    // is not actually selected.
+                    onFocusChange: (has) {
+                      if (has) return;
+                      final m = _matchOne(_classNames, ctrl.text);
+                      if (m != null) {
+                        if (_cls != m)
+                          setState(() {
+                            _cls = m;
+                            _reloadGrid();
+                          });
+                      } else {
+                        ctrl.text = _cls ?? '';
+                      }
+                    },
+                    child: TextField(
+                      controller: ctrl,
+                      focusNode: focus,
+                      style: AppUI.fieldText(context, filled: true),
+                      decoration:
+                          _filledFieldDec(context, schoolTerm('Select Class'), filled: _cls != null, leadingIcon: 'teacher').copyWith(suffixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary)),
+                      onChanged: (v) {
+                        final m = _matchOne(_classNames, v);
+                        if (m != null && m != _cls)
+                          setState(() {
+                            _cls = m;
+                            _reloadGrid();
+                          });
+                      },
+                      onTap: () {
+                        if (ctrl.text.isNotEmpty) ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+                      },
+                    ),
+                  ),
+                  optionsViewBuilder: (context, onSelected, options) => Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 6,
+                      borderRadius: BorderRadius.circular(12),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: 340.h, maxWidth: 320.w),
+                        child: ListView.builder(
+                          padding: EdgeInsets.zero,
+                          shrinkWrap: true,
+                          itemCount: options.length,
+                          itemBuilder: (_, i) {
+                            final e = options.elementAt(i);
+                            return InkWell(
+                              onTap: () => onSelected(e),
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                                child: Text(e, style: AppUI.fieldText(context, filled: true)),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                )),
+                SizedBox(width: 8.w),
+                Expanded(
+                    child: DropdownButtonFormField<String>(
+                  initialValue: _sem,
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: _fieldTextStyle(context),
+                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                  decoration: _filledFieldDec(context, schoolTerm('Select Semester'), filled: _sem != null, leadingIcon: 'book'),
+                  hint: Text(schoolTerm('Select Semester'),
+                      overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+                  items: _semesters
+                      .map((e) =>
+                          DropdownMenuItem(value: e, child: Text(e, style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)))
+                      .toList(),
+                  selectedItemBuilder: (context) => _semesters
+                      .map((e) => Align(
+                          alignment: Alignment.centerLeft, child: Text(e, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
+                      .toList(),
+                  onChanged: (v) => setState(() {
+                    _sem = v;
+                    _reloadGrid();
+                  }),
+                )),
+                SizedBox(width: 8.w),
+                // No admission type on the school database.
+                if (!isSchool) ...[
+                Expanded(
+                    child: DropdownButtonFormField<String>(
+                  initialValue: _admId,
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: _fieldTextStyle(context),
+                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                  decoration: _filledFieldDec(context, 'All Admission Types', filled: _admId != null, leadingIcon: 'layer'),
+                  hint: Text('All Admission Types',
+                      overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+                  items: [
+                    // 'all' is a sentinel → normalised to null (applies to every
+                    // admission type). Null shows the "All Admission Types" hint.
+                    DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All Admission Types', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)),
+                    ..._admTypes.map((a) => DropdownMenuItem(
+                        value: a['adm_id'].toString(),
+                        child: Text(a['admname']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis))),
+                  ],
+                  selectedItemBuilder: (context) => [
+                    Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('All Admission Types', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                    ..._admTypes.map((a) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(a['admname']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
+                  ],
+                  onChanged: (v) => setState(() {
+                    _admId = v == 'all' ? null : v;
+                    _reloadGrid();
+                  }),
+                )),
+                SizedBox(width: 8.w),
+                ],
+                // HOSTEL -- narrows WHO the demand is raised for.
+                //
+                // Sits beside the fee group filter but does the opposite kind of
+                // job: that one only changes which fee types are offered, this
+                // one changes which students get billed when ALL is ticked. A
+                // mess or hostel fee must reach hostellers and nobody else.
+                // Locked to "Hostellers only", and greyed, while the chosen fee
+                // group is ticked HOSTELLERS ONLY -- the group already decides,
+                // and a box reading "All Students" over a batch that reaches
+                // only hostellers is a lie the screen tells about itself.
+                // School: Dayscholar/Hostler is chosen per fee line instead.
+                if (!isSchool) ...[
+                Expanded(
+                    child: DropdownButtonFormField<String>(
+                  key: ValueKey('hostel-${_effHostelFilter ?? 'all'}'),
+                  initialValue: _effHostelFilter ?? 'all',
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: _fieldTextStyle(context),
+                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                  decoration: _filledFieldDec(context, 'All Students', filled: _effHostelFilter != null, leadingIcon: 'buildings'),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('All Students', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'Y', child: Text('Hostellers only', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 'N', child: Text('Day scholars only', overflow: TextOverflow.ellipsis)),
+                  ],
+                  selectedItemBuilder: (context) => [
+                    for (final t in const ['All Students', 'Hostellers only', 'Day scholars only'])
+                      Align(alignment: Alignment.centerLeft, child: Text(t, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                  ],
+                  onChanged: _groupIsHostelOnly
+                      ? null
+                      : (v) => setState(() => _hostelFilter = (v == null || v == 'all') ? null : v),
+                )),
+                SizedBox(width: 8.w),
+                ],
+                // FEE GROUP -- narrows the fee-type picker, nothing else.
+                //
+                // Deliberately NOT part of the Class/Semester/Admission Type
+                // selection: those three identify WHICH saved records are being
+                // edited, so each calls _reloadGrid(). This one only decides
+                // which names the picker offers, so it must not reload the grid
+                // -- doing so would throw away amounts typed but not yet saved.
+                Expanded(
+                    child: DropdownButtonFormField<String>(
+                  initialValue: _fgFilter?.toString(),
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: _fieldTextStyle(context),
+                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                  decoration: _filledFieldDec(context, 'Select Fee Group', filled: _fgFilter != null, leadingIcon: 'receipt-discount'),
+                  hint: Text('Select Fee Group',
+                      overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
+                  items: [
+                    ..._feeGroups.map((g) => DropdownMenuItem(
+                          value: (g['fg_id'] as num?)?.toInt().toString(),
+                          child: Text(g['fgdesc']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis),
+                        )),
+                  ],
+                  selectedItemBuilder: (context) => [
+                    ..._feeGroups.map((g) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
+                  ],
+                  // Deliberately does NOT write to _hostelFilter. A HOSTELLERS
+                  // ONLY group pins the roster, but pinning it by assignment
+                  // was one-way: it set 'Y' and never let go, so switching
+                  // back to COLLEGE FEES left the box still reading
+                  // "Hostellers only" and quietly billed half the class.
+                  // _effHostelFilter derives the pin instead, so it reverts to
+                  // the user's own choice the moment the group changes.
+                  onChanged: (v) => setState(() => _fgFilter = v == null ? null : int.tryParse(v)),
+                )),
+                SizedBox(width: 8.w),
+                Expanded(
+                    child: FocusableTap(
+                  onTap: () async {
+                    final now = DateTime.now();
+                    // Due date is independent of the semester start/end dates.
+                    final first = DateTime(now.year - 1);
+                    final last = DateTime(now.year + 5);
+                    final initial = (_due != null && !_due!.isBefore(first) && !_due!.isAfter(last)) ? _due! : now;
+                    final p = await showDatePicker(context: context, initialDate: initial, firstDate: first, lastDate: last);
+                    if (p != null) setState(() => _due = p);
+                  },
+                  child: InputDecorator(
+                    // InputDecorator doesn't render hintText when a child widget is
+                    // present, so we render the placeholder text inline ourselves.
+                    decoration: _filledFieldDec(context, '', filled: _due != null, leadingIcon: 'calendar-1').copyWith(
+                      // Trailing chevron-free calendar mark: the field opens a
+                      // picker, so it should not look like a text box.
+                      suffixIcon: Padding(
+                        padding: EdgeInsets.only(right: 10.w),
+                        child: AppIcon('calendar', size: 15, color: _due != null ? AppColors.primary : AppColors.textSecondary),
+                      ),
+                      suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                    ),
+                    child: Text(
+                      _due == null ? 'Pay On or Before' : _fmt(_due!),
+                      overflow: TextOverflow.ellipsis,
+                      style: _due == null ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight) : AppUI.fieldText(context, filled: true),
+                    ),
+                  ),
+                )),
+              ],
+            )),
+          ),
+          // ACTIONS ON THEIR OWN LINE.
+          //
+          // They used to share the row with the filters. That was fine with
+          // four fields; with six -- Class, Semester, Admission Type, Students,
+          // Fee Group, Due Date -- the buttons took roughly 600px and left each
+          // field about 165, so every one of them read "All Admissio...",
+          // "COLLEGE FE...", "Pay On or Be...". The filters now have the full
+          // width and the buttons sit right-aligned beneath, which also keeps
+          // them in one place instead of drifting as fields are added.
+          Padding(
+            padding: EdgeInsets.only(bottom: 10.h),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Mouse-only — kept out of Tab so the key moves through the
+                // input fields (pickers + amounts) and not the buttons.
+                ExcludeFocus(
+                    child: _modeButton(
+                        'New',
+                        Icons.add,
+                        !_editMode,
+                        () => setState(() {
+                              _editMode = false;
+                              _reloadGrid();
+                            }))),
+                SizedBox(width: 8.w),
+                ExcludeFocus(
+                    child: _modeButton(
+                        'Edit',
+                        Icons.edit,
+                        _editMode,
+                        () => setState(() {
+                              _editMode = true;
+                              _reloadGrid();
+                            }))),
+                SizedBox(width: 8.w),
+                ExcludeFocus(
+                  child: OutlinedButton.icon(
+                    onPressed: _saving ? null : _copyFee,
+                    icon: const Icon(Icons.copy_all, size: 15),
+                    label: const Text('Copy Fee'),
+                  ),
+                ),
+                SizedBox(width: 8.w),
+                ExcludeFocus(
+                  child: _importButton(context, title: schoolTerm('Class Fee Demand'), tabIndex: 7, disabled: _saving, onReturn: _load),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 4.h),
+          Expanded(
+            child: Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
+              child: Column(children: [
+                Container(
+                    color: AppColors.tableHeadBg,
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                    child: Row(children: [
+                      Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
+                      SizedBox(width: 140.w, child: Text('AMOUNT', textAlign: TextAlign.right, style: _h())),
+                      if (isSchool) ...[
+                        SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
+                        SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
+                        SizedBox(width: 150.w, child: Text('DAYSCHOLAR / HOSTLER', textAlign: TextAlign.center, style: _h())),
+                      ] else
+                        SizedBox(width: 70.w, child: Text('ALL', textAlign: TextAlign.center, style: _h())),
+                      SizedBox(width: 44.w, child: Text('', style: _h())),
+                    ])),
+                // Rows first, then the leftover space carries the "no more fee
+                // types" prompt -- a SliverFillRemaining rather than a Column, so
+                // a long list still scrolls and simply pushes the prompt out of
+                // view instead of squashing it.
+                Expanded(
+                    child: FocusTraversalGroup(
+                        child: CustomScrollView(slivers: [
+                  SliverList.separated(
+                      itemCount: _visibleLines.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                      itemBuilder: (_, i) {
+                        final l = _visibleLines[i];
+                        return Container(
+                            color: i.isEven ? Colors.white : AppColors.surface,
+                            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 5.h),
+                            child: Row(children: [
+                              Expanded(
+                                  flex: 3,
+                                  child: Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 10.h),
+                                    // EVERY ROW IS EDITABLE NOW, saved ones included. A saved
+                                    // row used to be plain text, so correcting a fee type meant
+                                    // deleting the line and adding it back. Save already
+                                    // replaces every row for the selection, so changing one in
+                                    // place persists correctly.
+                                    child: // TYPE TO FIND IT. The plain DropdownButton listed
+                                        // every fee type in the institution alphabetically --
+                                        // over a hundred of them -- so picking BOOK FEES meant
+                                        // scrolling past A.U.SPORTS FEE, ADMISSION & TRANSFER,
+                                        // ALUMNI ASSOCIATION and the rest with no way to jump.
+                                        //
+                                        // Keyed on the group filter so the field rebuilds when
+                                        // the filter changes; without the key the Autocomplete
+                                        // keeps its old option list until it is next focused.
+                                        Autocomplete<String>(
+                                      key: ValueKey('ft-${l.uid}-${_fgFilter ?? 'all'}'),
+                                      initialValue: TextEditingValue(text: l.feeType ?? ''),
+                                      optionsBuilder: (v) {
+                                        final q = v.text.trim().toLowerCase();
+                                        final pool = _pickableFeeTypes;
+                                        // Empty box shows everything, so tapping it still
+                                        // behaves like the dropdown it replaced.
+                                        if (q.isEmpty) return pool;
+                                        // `contains`, not `startsWith`: the useful word is
+                                        // rarely the first one ("DUPLICATE ID CARD" is
+                                        // found by typing "id").
+                                        return pool.where((e) => e.toLowerCase().contains(q));
+                                      },
+                                      onSelected: (v) => setState(() => l.feeType = v),
+                                      // TYPING ALONE MUST COUNT AS CHOOSING.
+                                      //
+                                      // Autocomplete only reports through onSelected --
+                                      // when an option is TAPPED. Type "MESS FEE" in full
+                                      // and press Save and the row looks complete but
+                                      // holds no fee type, so _save() skips it and
+                                      // answers "Add at least one fee line." The old
+                                      // dropdown could not do this: picking always set a
+                                      // value. So the text is matched as it is typed, and
+                                      // on leaving the field anything that matches
+                                      // nothing is put back to the last valid pick --
+                                      // the row is never left looking filled but empty.
+                                      fieldViewBuilder: (context, ctrl, focus, onSubmit) => Focus(
+                                        canRequestFocus: false,
+                                        skipTraversal: true,
+                                        onFocusChange: (hasFocus) {
+                                          if (hasFocus) return;
+                                          final m = _matchFeeType(ctrl.text);
+                                          if (m != null) {
+                                            if (l.feeType != m) setState(() => l.feeType = m);
+                                          } else {
+                                            ctrl.text = l.feeType ?? '';
+                                          }
+                                        },
+                                        child: TextField(
+                                          controller: ctrl,
+                                          focusNode: focus,
+                                          style: AppUI.fieldText(context, filled: true),
+                                          decoration: InputDecoration(
+                                            isDense: true,
+                                            border: InputBorder.none,
+                                            hintText: 'Search fee type',
+                                            hintStyle: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
+                                            suffixIcon: Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
+                                            suffixIconConstraints: BoxConstraints(minWidth: 22.w, minHeight: 22.h),
+                                          ),
+                                          // No setState: only _save() and the blur check
+                                          // read feeType, and rebuilding here would close
+                                          // the options list on every keystroke.
+                                          onChanged: (v) {
+                                            final m = _matchFeeType(v);
+                                            if (m != null) l.feeType = m;
+                                          },
+                                          onSubmitted: (v) {
+                                            final m = _matchFeeType(v);
+                                            if (m != null) setState(() => l.feeType = m);
+                                            onSubmit();
+                                          },
+                                          onTap: () {
+                                            if (ctrl.text.isNotEmpty) ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+                                          },
+                                        ),
+                                      ),
+                                      optionsViewBuilder: (context, onSelected, options) => Align(
+                                        alignment: Alignment.topLeft,
+                                        child: Material(
+                                          elevation: 6,
+                                          borderRadius: BorderRadius.circular(12),
+                                          child: ConstrainedBox(
+                                            constraints: BoxConstraints(maxHeight: 320.h, maxWidth: 420.w),
+                                            child: ListView.builder(
+                                              padding: EdgeInsets.zero,
+                                              shrinkWrap: true,
+                                              itemCount: options.length,
+                                              itemBuilder: (_, k) {
+                                                final e = options.elementAt(k);
+                                                return InkWell(
+                                                  onTap: () => onSelected(e),
+                                                  child: Padding(
+                                                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                                                    child: Text(e, style: AppUI.fieldText(context, filled: true)),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  )),
+                              SizedBox(width: 8.w),
+                              SizedBox(
+                                  width: 132.w,
+                                  child: TextField(
+                                      controller: l.amount,
+                                      keyboardType: TextInputType.number,
+                                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                                      textAlign: TextAlign.right,
+            style: AppUI.money.copyWith(color: l.amount.text.trim().isNotEmpty ? AppColors.primary : AppColors.textPrimary),
+                                      decoration: _dec('', filled: l.amount.text.trim().isNotEmpty).copyWith(
+                                        // The currency sits in the field rather than the column
+                                        // heading, so a row still reads as money on its own.
+                                        prefixIcon: Padding(
+                                          padding: EdgeInsets.only(left: 10.w, right: 6.w),
+                                          child: Text('₹', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+                                        ),
+                                        prefixIconConstraints: BoxConstraints(minWidth: 0, minHeight: 0),
+                                      ),
+                                      onChanged: (_) => setState(() {}))),
+                              if (isSchool) ...[
+                                SizedBox(width: 120.w, child: _flagDrop(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
+                                SizedBox(width: 120.w, child: _flagDrop(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
+                                SizedBox(width: 150.w, child: _flagDrop(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+                              ] else
+                              SizedBox(
+                                  width: 70.w,
+                                  child: Center(
+                                      child: Tooltip(
+                                          message: schoolTerm('Tick = raise a demand for every student in the class. Untick = save the amount on the class template only, no student demand.'),
+                                          child: ExcludeFocus(
+                                              child: Checkbox(
+                                                  value: l.applyAll,
+                                                  activeColor: AppColors.accent,
+                                                  visualDensity: VisualDensity.compact,
+                                                  onChanged: (v) => setState(() => l.applyAll = v ?? false)))))),
+                              // Delete on every row, saved ones included: Save replaces
+                              // the whole selection, so dropping a row here removes it.
+                              SizedBox(
+                                  width: 44.w,
+                                  child: IconButton(
+                                    tooltip: 'Remove row',
+                                    visualDensity: VisualDensity.compact,
+                                    // By identity: `i` indexes the FILTERED view, so
+                                    // removeAt(i) would delete a different row whenever a
+                                    // group filter is on.
+                                    onPressed: () => setState(() {
+                                      l.dispose();
+                                      _lines.remove(l);
+                                    }),
+                                    icon: const AppIcon('trash', size: 16, color: AppColors.error),
+                                  )),
+                            ]));
+                      }),
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24.h),
+                      child: AppUI.empty(
+                        title: _lines.isEmpty ? 'No fee types yet' : 'No more fee types',
+                        why: schoolTerm('Add a new row to define fee types for this class.'),
+                      ),
+                    ),
+                  ),
+                ]))),
+                const Divider(height: 1, color: AppColors.divider),
+                Padding(
+                    padding: EdgeInsets.all(12.w),
+                    child: Row(children: [
+                      OutlinedButton.icon(
+                        onPressed: () => setState(() => _lines.add(_FeeLine()..isCustom = true)),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add Row'),
+                      ),
+                      SizedBox(width: 12.w),
+                      Flexible(
+                          child: Text(isSchool
+                                  ? 'Regular fees are raised for the students they fit (Both = everyone). Optional fees are not -- add them per student in Fee Collection -> Fee Definition.'
+                                  : schoolTerm('Tick ALL to raise this fee as a demand for every student — untick to keep it on the class template only'),
+                              overflow: TextOverflow.ellipsis, style: AppUI.muted)),
+                      const Spacer(),
+                      // Save writes every row, not just the visible ones, so the
+                      // total stays the full one -- and says so while a group filter
+                      // is hiding rows that are part of it.
+                      Text(_fgFilter == null ? 'Total  ' : 'Total, all groups  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+                      Text(_total.toStringAsFixed(2), style: AppUI.money.copyWith(color: AppColors.primary)),
+                      SizedBox(width: 16.w),
+                      ElevatedButton.icon(
+                          onPressed: _saving ? null : _save,
+                          icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save, size: 16),
+                          label: const Text('Save')),
+                    ])),
+              ]),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1837,22 +4295,22 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     return _listCard(
       icon: 'category',
       title: 'Saved Demands',
-      subtitle: 'class-wise fee demands for the academic year',
+      subtitle: schoolTerm('class-wise fee demands for the academic year'),
       count: filtered.length,
       countLabel: 'items',
-      action: _importButton(context, title: 'Class Fee Demand', tabIndex: 7, disabled: _saving, onReturn: _load),
+      action: _importButton(context, title: schoolTerm('Class Fee Demand'), tabIndex: 7, disabled: _saving, onReturn: _load),
       headerCells: [
         SizedBox(width: 70.w, child: Text('TERM', style: _h())),
         Expanded(flex: 2, child: Text('FEE TYPE', style: _h())),
-        SizedBox(width: 70.w, child: Text('AMT', style: _h())),
-        Expanded(child: Text('ADM', style: _h())),
+        SizedBox(width: 70.w, child: Text('AMT', textAlign: TextAlign.right, style: _h())),
+        if (!isSchool) Expanded(child: Text('ADM', style: _h())),
         SizedBox(width: 44.w, child: Text('', style: _h())),
       ],
       body: filtered.isEmpty
-          ? Center(child: Text('No fee demands', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
+          ? AppUI.empty(title: 'No fee demands')
           : ListView.separated(
               itemCount: filtered.length,
-              separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
+              separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
               itemBuilder: (_, i) {
                 final r = filtered[i];
                 final id = r['cf_id'] is int ? r['cf_id'] as int : int.tryParse(r['cf_id'].toString()) ?? 0;
@@ -1862,9 +4320,11 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   child: Row(children: [
                     SizedBox(width: 70.w, child: Text(r['cfterm']?.toString() ?? '', style: _c())),
                     Expanded(flex: 2, child: Text(r['cffeetype']?.toString() ?? '', style: _c())),
-                    SizedBox(width: 70.w, child: Text(r['cfamount']?.toString() ?? '', style: _c())),
-                    Expanded(child: Text(_admName['${r['admissiontype'] ?? ''}'] ?? 'All', style: _c())),
-                    SizedBox(width: 44.w, child: Center(child: InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 15, color: AppColors.error))))),
+                    SizedBox(width: 70.w, child: Text(r['cfamount']?.toString() ?? '', textAlign: TextAlign.right, style: AppUI.money)),
+                    if (!isSchool) Expanded(child: Text(_admName['${r['admissiontype'] ?? ''}'] ?? 'All', style: _c())),
+                    SizedBox(
+                        width: 44.w,
+                        child: Center(child: InkWell(onTap: () => _delete(id), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 15, color: AppColors.error))))),
                   ]),
                 );
               },
@@ -1880,14 +4340,45 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 /// default DExx/NNNNN — see migrations/add_demno_sequence.sql (the set_dem_id /
 /// set_temp_id triggers read this row).
 class _DemandSequencePanel extends StatefulWidget {
-  const _DemandSequencePanel();
+  const _DemandSequencePanel({this.actname = 'DEMNO', this.defaultPrefix = 'DM', this.title = 'Demand No', this.withArrear = false});
+  // actname distinguishes the demand (DEMNO), concession (CONNO), refund
+  // (REFNO) and advance (ADVNO) single-sequence rows in the shared
+  // `sequence` table.
+  final String actname;
+  final String defaultPrefix;
+  final String title;
+  /// Concession No only: on the school database the arrear concession series
+  /// (ARRCONNO, AC26/0001) is managed in the same frame -- pick its row on the
+  /// right to edit it in the form.
+  final bool withArrear;
   @override
   State<_DemandSequencePanel> createState() => _DemandSequencePanelState();
 }
 
 class _DemandSequencePanelState extends State<_DemandSequencePanel> with AutomaticKeepAliveClientMixin {
   bool _loading = true, _saving = false;
-  Map<String, dynamic>? _seq;
+  Map<String, dynamic>? _seq; // the series being edited
+  final Map<String, Map<String, dynamic>?> _rows = {}; // actname -> sequence row
+  int _active = 0;
+
+  /// (actname, default prefix, title) of every series this frame manages.
+  List<(String, String, String)> get _series => [
+        (widget.actname, widget.defaultPrefix, widget.title),
+        if (widget.withArrear && isSchool) ('ARRCONNO', 'AC', 'Arrear Concession No'),
+      ];
+  String get _act => _series[_active].$1;
+  String get _title => _series[_active].$3;
+
+  /// Load the chosen series into the form.
+  void _select(int i) {
+    setState(() {
+      _active = i;
+      _seq = _rows[_series[i].$1];
+      _prefixCtrl.text = _seq?['seqprefix']?.toString() ?? _series[i].$2;
+      _widthCtrl.text = ((_seq?['seqwidth'] as num?)?.toInt() ?? 5).toString();
+      _startCtrl.text = ((_seq?['seqstart'] as num?)?.toInt() ?? 1).toString();
+    });
+  }
   final _prefixCtrl = TextEditingController(text: 'DM');
   final _widthCtrl = TextEditingController(text: '5');
   final _startCtrl = TextEditingController(text: '1');
@@ -1898,6 +4389,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
   @override
   void initState() {
     super.initState();
+    _prefixCtrl.text = widget.defaultPrefix;
     _load();
   }
 
@@ -1917,24 +4409,14 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
     }
     setState(() => _loading = true);
     try {
-      final res = await SupabaseService.fromSchema('sequence')
-          .select()
-          .eq('ins_id', insId)
-          .eq('actname', 'DEMNO')
-          .eq('activestatus', 1)
-          .order('seq_id')
-          .limit(1)
-          .maybeSingle();
+      for (final sr in _series) {
+        final res = await SupabaseService.fromSchema('sequence').select().eq('ins_id', insId).eq('actname', sr.$1).eq('activestatus', 1).order('seq_id').limit(1).maybeSingle();
+        _rows[sr.$1] = res == null ? null : Map<String, dynamic>.from(res);
+      }
       if (!mounted) return;
-      setState(() {
-        _seq = res == null ? null : Map<String, dynamic>.from(res);
-        if (_seq != null) {
-          _prefixCtrl.text = _seq!['seqprefix']?.toString() ?? '';
-          _widthCtrl.text = ((_seq!['seqwidth'] as num?)?.toInt() ?? 5).toString();
-          _startCtrl.text = ((_seq!['seqstart'] as num?)?.toInt() ?? 1).toString();
-        }
-        _loading = false;
-      });
+      if (_active >= _series.length) _active = 0;
+      _select(_active);
+      setState(() => _loading = false);
     } catch (e) {
       debugPrint('DEMNO load: $e');
       if (mounted) setState(() => _loading = false);
@@ -1964,24 +4446,21 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
       // if there is one (even if it wasn't loaded into state), else insert.
       int? seqId = (_seq?['seq_id'] as num?)?.toInt();
       if (seqId == null) {
-        final existing = await SupabaseService.fromSchema('sequence')
-            .select('seq_id')
-            .eq('ins_id', insId)
-            .eq('actname', 'DEMNO')
-            .eq('activestatus', 1)
-            .order('seq_id')
-            .limit(1)
-            .maybeSingle();
+        final existing = await SupabaseService.fromSchema('sequence').select('seq_id').eq('ins_id', insId).eq('actname', _act).eq('activestatus', 1).order('seq_id').limit(1).maybeSingle();
         seqId = (existing?['seq_id'] as num?)?.toInt();
       }
       if (seqId != null) {
-        await SupabaseService.saveSchemaRow('sequence', {
-          'seqprefix': prefix,
-          'seqname': prefix,
-          'seqwidth': width,
-          'seqstart': start,
-          'sequid': sequid,
-        }, pkCol: 'seq_id', pkVal: seqId);
+        await SupabaseService.saveSchemaRow(
+            'sequence',
+            {
+              'seqprefix': prefix,
+              'seqname': prefix,
+              'seqwidth': width,
+              'seqstart': start,
+              'sequid': sequid,
+            },
+            pkCol: 'seq_id',
+            pkVal: seqId);
       } else {
         final year = await _currentYear(insId);
         await SupabaseService.saveSchemaRow('sequence', {
@@ -1989,7 +4468,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
           'mod_id': 0,
           'yr_id': year?['yr_id'] ?? 0,
           'yrlabel': year?['yrlabel']?.toString() ?? '',
-          'actname': 'DEMNO',
+          'actname': _act,
           'seqname': prefix,
           'isprefix': 'Y',
           'seqprefix': prefix,
@@ -2001,7 +4480,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
         });
       }
       if (mounted) {
-        _snack(context, 'Demand No sequence saved.', AppColors.success);
+        _snack(context, '$_title sequence saved.', AppColors.success);
         _load();
       }
     } catch (e) {
@@ -2030,28 +4509,26 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
   Widget _form() {
     final exists = _seq != null;
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: FocusTraversalGroup(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(children: [
-              Icon(Icons.tag_rounded, color: AppColors.accent, size: 20.sp),
-              SizedBox(width: 8.w),
-              Expanded(child: Text('Demand No Sequence', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary))),
-            ]),
-            SizedBox(height: 4.h),
-            Text('one demand-number sequence for the whole institution', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+            AppUI.cardHeader(
+              icon: 'tag',
+              title: '$_title Sequence',
+              subtitle: 'one ${_title.toLowerCase()} sequence for the whole institution',
+            ),
             SizedBox(height: 20.h),
             _lbl('Prefix *'),
             SizedBox(height: 6.h),
             TextField(
               controller: _prefixCtrl,
               textCapitalization: TextCapitalization.characters,
-              style: _fieldTextStyle(context).copyWith(color: _prefixCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
-              decoration: _filledFieldDec(context, 'e.g. DM', filled: _prefixCtrl.text.trim().isNotEmpty),
+              style: AppUI.fieldText(context, filled: _prefixCtrl.text.trim().isNotEmpty),
+              decoration: _filledFieldDec(context, 'e.g. ${widget.defaultPrefix}', filled: _prefixCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
             SizedBox(height: 16.h),
@@ -2061,7 +4538,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               controller: _widthCtrl,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: _fieldTextStyle(context).copyWith(color: _widthCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              style: AppUI.fieldText(context, filled: _widthCtrl.text.trim().isNotEmpty),
               decoration: _filledFieldDec(context, '5', filled: _widthCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
@@ -2073,17 +4550,19 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               enabled: !exists, // the start is locked once the counter is running
-              style: _fieldTextStyle(context).copyWith(color: _startCtrl.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+              style: AppUI.fieldText(context, filled: _startCtrl.text.trim().isNotEmpty),
               decoration: _filledFieldDec(context, '1', filled: _startCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
             SizedBox(height: 12.h),
             Container(
               padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-              decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.accent.withValues(alpha: 0.25))),
+              decoration: BoxDecoration(color: AppColors.infoBg, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.info.withValues(alpha: 0.25))),
               child: Row(children: [
-                Text('Preview:  ', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-                Expanded(child: Text(_prefixCtrl.text.trim().isEmpty ? '—' : _preview, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.accent), overflow: TextOverflow.ellipsis)),
+                Text('Preview:  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+                Expanded(
+                    child: Text(_prefixCtrl.text.trim().isEmpty ? '—' : _preview,
+                        style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.primary), overflow: TextOverflow.ellipsis)),
               ]),
             ),
             SizedBox(height: 18.h),
@@ -2091,11 +4570,8 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
-                icon: _saving
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : Icon(exists ? Icons.save_rounded : Icons.add, size: 16),
+                icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Icon(exists ? Icons.save_rounded : Icons.add, size: 16),
                 label: Text(exists ? 'Update' : 'Create'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
               ),
             ),
           ],
@@ -2104,42 +4580,68 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
     );
   }
 
-  /// Right panel — the configured demand sequence, as a table matching the
-  /// Payment Sequence tab.
+  /// Right panel -- every series this frame manages (one, or Concession +
+  /// Arrear Concession), as a table; click a row to edit it on the left.
   Widget _info() {
-    final s = _seq;
-    final width = (s?['seqwidth'] as num?)?.toInt() ?? 5;
-    final cur = (s?['seqcurno'] as num?)?.toInt() ?? 0;
-    final start = (s?['seqstart'] as num?)?.toInt() ?? 1;
-    final prefix = s?['seqprefix']?.toString() ?? '';
-    final preview = '$prefix${start.toString().padLeft(width, '0')}';
-    final count = s == null ? 0 : 1;
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+    TextStyle h() => AppUI.tableHead;
+    TextStyle c() => AppUI.cell;
+    final multi = _series.length > 1;
+    final listTitle = multi ? 'Concession Sequences' : '${widget.title} Sequences';
+    final count = _series.where((sr) => _rows[sr.$1] != null).length;
+    Widget row(int i) {
+      final sr = _series[i];
+      final s = _rows[sr.$1];
+      final width = (s?['seqwidth'] as num?)?.toInt() ?? 5;
+      final start = (s?['seqstart'] as num?)?.toInt() ?? 1;
+      final prefix = s?['seqprefix']?.toString() ?? '';
+      final on = multi && i == _active;
+      return InkWell(
+        onTap: multi ? () => _select(i) : null,
+        child: Container(
+          decoration: BoxDecoration(
+            color: on ? AppColors.primaryLight : Colors.white,
+            border: const Border(bottom: BorderSide(color: AppColors.divider)),
+          ),
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          child: Row(children: [
+            Expanded(
+                flex: 3,
+                child: Text(sr.$3,
+                    style: c().copyWith(fontWeight: on ? FontWeight.w800 : null, color: on ? AppColors.primary : null),
+                    overflow: TextOverflow.ellipsis)),
+            SizedBox(width: 90.w, child: Text(s == null ? '—' : prefix, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, color: AppColors.primary))),
+            SizedBox(
+                width: 120.w,
+                child: s == null
+                    ? Align(alignment: Alignment.centerLeft, child: AppUI.chip('Not set', AppStatus.warning))
+                    : Text('$prefix${start.toString().padLeft(width, '0')}', style: AppUI.label.copyWith(color: AppColors.primary))),
+            SizedBox(width: 80.w, child: Text(s == null ? '—' : '${(s['seqcurno'] as num?)?.toInt() ?? 0}', textAlign: TextAlign.right, style: c())),
+          ]),
+        ),
+      );
+    }
+
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10.r), border: Border.all(color: AppColors.border)),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
-            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            padding: EdgeInsets.only(bottom: 12.h),
             child: Row(children: [
-              Icon(Icons.tag_rounded, color: AppColors.accent, size: 18.sp),
-              SizedBox(width: 8.w),
-              Text('Demand Sequences', style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              AppUI.iconTile('tag'),
+              SizedBox(width: 12.w),
+              Text(listTitle, style: AppUI.cardTitle),
               SizedBox(width: 10.w),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
-                child: Text('$count sequence${count == 1 ? '' : 's'}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-              ),
+              AppUI.chip('$count sequence${count == 1 ? '' : 's'}', AppStatus.info),
               const Spacer(),
+              if (multi) Text('Click a row to edit it', style: AppUI.muted),
             ]),
           ),
           Expanded(
             child: Container(
               clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8.r), border: Border.all(color: AppColors.border)),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
               child: Column(
                 children: [
                   Container(
@@ -2149,26 +4651,13 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
                       Expanded(flex: 3, child: Text('SEQUENCE', style: h())),
                       SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
                       SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
-                      SizedBox(width: 80.w, child: Text('CURRENT', style: h())),
+                      SizedBox(width: 80.w, child: Text('CURRENT', textAlign: TextAlign.right, style: h())),
                     ]),
                   ),
                   Expanded(
-                    child: s == null
-                        ? Center(child: Text('No demand sequence yet', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
-                        : ListView(
-                            children: [
-                              Container(
-                                color: Colors.white,
-                                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
-                                child: Row(children: [
-                                  Expanded(flex: 3, child: Text('Demand No', style: c(), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 90.w, child: Text(prefix, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.primary))),
-                                  SizedBox(width: 120.w, child: Text(preview, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-                                  SizedBox(width: 80.w, child: Text('$cur', style: c())),
-                                ]),
-                              ),
-                            ],
-                          ),
+                    child: !multi && _rows[widget.actname] == null
+                        ? AppUI.empty(title: 'No ${widget.title.toLowerCase()} sequence yet', why: 'Set a prefix and starting number on the left and save.')
+                        : ListView(children: [for (var i = 0; i < _series.length; i++) row(i)]),
                   ),
                 ],
               ),

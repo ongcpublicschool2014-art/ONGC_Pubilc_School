@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -17,10 +18,12 @@ import '../../utils/formatters.dart';
 import '../auth/register_screen.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 class SuperAdminDashboard extends StatefulWidget {
   const SuperAdminDashboard({super.key});
 
@@ -58,6 +61,15 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   ];
 
   List<Map<String, dynamic>> _institutions = [];
+  // Manage Institutions screen: dedicated full-column list + table state.
+  List<Map<String, dynamic>> _manageList = [];
+  bool _manageLoaded = false;
+  bool _manageLoading = false;
+  String _manageFilter = 'all'; // all | active | inactive
+  String _manageSearch = '';
+  Map<String, dynamic>? _editInstitution; // set when editing via the Register wizard
+  int _managePage = 0;
+  final int _managePerPage = 10;
   bool _loadingInstitutions = true;
   bool _loadingFinanceData = true;
   bool _syncingLogos = false;
@@ -79,6 +91,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   }
   List<_InstitutionFinanceSummary> _institutionSummaries = [];
   List<_SuperAdminTransactionRow> _recentTransactions = [];
+
+  // Trust-wide chart data (from get_super_admin_charts): reconciled collection
+  // by normalised method and by month, aggregated across all institutions.
+  Map<String, double> _superByMethod = {};
+  Map<String, double> _superByMonth = {}; // 'YYYY-MM' -> amount
 
   // Horizontal scroll controllers for the two summary tables, used to drive
   // ClassicHScrollbar (matches the modern table-bar look elsewhere).
@@ -177,11 +194,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   /// specific year re-runs the dashboard RPC with p_yrlabel set.
   Widget _buildYearFilter() {
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 10.w),
-      height: 36,
+      padding: EdgeInsets.symmetric(horizontal: 12.w),
+      height: AppUI.controlHeight(context),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
         border: Border.all(color: AppColors.border),
       ),
       child: DropdownButtonHideUnderline(
@@ -189,11 +206,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           value: _selectedYear,
           isDense: true,
           icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
+          style: AppUI.fieldText(context),
           items: [
             for (final y in _availableYears)
               DropdownMenuItem<String>(
@@ -307,6 +320,83 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     return result;
   }
 
+  /// Trust-wide reconciled collection by method + by month (across all
+  /// institution schemas). Degrades gracefully if the RPC isn't deployed.
+  Future<void> _loadCharts() async {
+    try {
+      final res = await SupabaseService.client
+          .rpc('get_super_admin_charts', params: {'p_yrlabel': _selectedYear});
+      if (res is! Map) return;
+      final method = <String, double>{};
+      final rawMethod = res['by_method'];
+      if (rawMethod is Map) {
+        rawMethod.forEach((k, v) {
+          final norm = _normPayMode(k.toString());
+          method[norm] = (method[norm] ?? 0) + ((v as num?)?.toDouble() ?? 0);
+        });
+      }
+      final month = <String, double>{};
+      final rawMonth = res['by_month'];
+      if (rawMonth is Map) {
+        rawMonth.forEach((k, v) => month[k.toString()] = (v as num?)?.toDouble() ?? 0);
+      }
+      // Fold miscellaneous collections into the by-mode + monthly charts, so the
+      // graph summary matches the admin dashboard (which includes misc).
+      await _addMiscToCharts(method, month);
+      if (mounted) setState(() {
+        _superByMethod = method;
+        _superByMonth = month;
+      });
+    } catch (e) {
+      debugPrint('[SuperAdmin] charts RPC failed: $e');
+    }
+  }
+
+  /// Add each institution's misc collections to the by-mode + monthly maps.
+  Future<void> _addMiscToCharts(Map<String, double> method, Map<String, double> month) async {
+    if (_institutionSummaries.isEmpty) return;
+    try {
+      final schemas = await _resolveCurrentSchemas(_institutionSummaries);
+      await Future.wait(_institutionSummaries.map((s) async {
+        final schema = schemas[s.insId];
+        if (schema == null) return;
+        try {
+          // All-time, so this passes 1000 rows on any established institution.
+          // Truncating would silently under-report the collection totals.
+          final rows = await SupabaseService.fetchAll(() => SupabaseService
+              .client
+              .schema(schema)
+              .from('misc_collection')
+              .select('paymode, mcdate, totalamount')
+              .eq('activestatus', 1));
+          for (final r in (rows as List)) {
+            final amt = (r['totalamount'] as num?)?.toDouble() ?? 0;
+            if (amt <= 0) continue;
+            final mode = _normPayMode(r['paymode']?.toString() ?? 'Cash');
+            method[mode] = (method[mode] ?? 0) + amt;
+            final d = r['mcdate']?.toString() ?? '';
+            if (d.length >= 7) {
+              final ym = d.substring(0, 7);
+              month[ym] = (month[ym] ?? 0) + amt;
+            }
+          }
+        } catch (_) {}
+      }));
+    } catch (e) {
+      debugPrint('[SuperAdmin] misc charts merge failed: $e');
+    }
+  }
+
+  String _normPayMode(String raw) {
+    final m = raw.trim().toLowerCase();
+    if (m.isEmpty) return 'Other';
+    if (m.contains('cash')) return 'Cash';
+    if (m.contains('upi') || m.contains('online') || m.contains('net') || m.contains('razor') || m.contains('paytm')) return 'Online';
+    if (m.contains('card')) return 'Card';
+    if (m.contains('dd') || m.contains('cheque') || m.contains('draft')) return 'DD/Cheque';
+    return raw.trim();
+  }
+
   Future<void> _loadTodayCollections(
       List<_InstitutionFinanceSummary> summaries) async {
     // Try the v2 RPC first — single round-trip aggregation for everything.
@@ -344,6 +434,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         }
         if (mounted) setState(() {});
         if (!haveToday) await _loadTodayOnly(summaries);
+        await _loadTodayMisc(summaries);
         return;
       }
     } catch (e) {
@@ -440,6 +531,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         debugPrint('today collection error for ${s.insName}: $e');
       }
     }));
+    await _loadTodayMisc(summaries);
     if (mounted) setState(() {});
   }
 
@@ -472,6 +564,31 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             0, (sum, r) => sum + ((r['transtotalamount'] as num?)?.toDouble() ?? 0));
       } catch (e) {
         debugPrint('today-only fetch error for ${s.insName}: $e');
+      }
+    }));
+    if (mounted) setState(() {});
+  }
+
+  /// Today's miscellaneous collection per institution (misc_collection.mcdate =
+  /// today). Superadmin runs as anon; misc_collection is readable per-schema.
+  Future<void> _loadTodayMisc(List<_InstitutionFinanceSummary> summaries) async {
+    final now = DateTime.now();
+    final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final schemas = await _resolveCurrentSchemas(summaries);
+    await Future.wait(summaries.map((s) async {
+      final schema = schemas[s.insId];
+      if (schema == null) return;
+      try {
+        final rows = await SupabaseService.client
+            .schema(schema)
+            .from('misc_collection')
+            .select('totalamount')
+            .eq('activestatus', 1)
+            .eq('mcdate', todayStr);
+        s.todayMisc = (rows as List).fold<double>(
+            0, (sum, r) => sum + ((r['totalamount'] as num?)?.toDouble() ?? 0));
+      } catch (e) {
+        debugPrint('today misc error for ${s.insName}: $e');
       }
     }));
     if (mounted) setState(() {});
@@ -519,7 +636,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             totalDemand: (row['total_demand'] as num?)?.toDouble() ?? 0,
             totalCollected: (row['total_collected'] as num?)?.toDouble() ?? 0,
             totalPending: (row['total_pending'] as num?)?.toDouble() ?? 0,
+            totalConcession: (row['total_concession'] as num?)?.toDouble() ?? 0,
+            totalMisc: (row['total_misc'] as num?)?.toDouble() ?? 0,
+            totalFine: (row['total_fine'] as num?)?.toDouble() ?? 0,
             transactionCount: (row['transaction_count'] as num?)?.toInt() ?? 0,
+            studentCount: (row['student_count'] as num?)?.toInt() ?? 0,
             activeStatus: row['activestatus'] == 1,
           ),
         );
@@ -536,6 +657,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       }
 
       _loadTodayCollections(summaries);
+      _loadCharts();
     } catch (e, st) {
       debugPrint('[SuperAdmin] RPC FAILED: $e');
       debugPrint('[SuperAdmin] Stack: $st');
@@ -544,7 +666,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           SnackBar(
             content: Text('Dashboard load failed. ${friendlyError(e)}',
                 style: const TextStyle(fontSize: 12)),
-            backgroundColor: Colors.red,
+            backgroundColor: AppColors.error,
             duration: const Duration(seconds: 10),
           ),
         );
@@ -624,14 +746,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           if (isDesktop)
             AnimatedContainer(
               duration: const Duration(milliseconds: 250),
-              width: _sidebarCollapsed ? 78 : 240,
+              width: _sidebarCollapsed ? 78 : (size.width < 1100 ? 200 : size.width < 1400 ? 230 : 270),
               // Lay the sidebar out at its target width and clip — otherwise
               // the content overflows while the width tween is mid-flight.
               child: ClipRect(
                 child: OverflowBox(
                   alignment: Alignment.centerLeft,
-                  minWidth: _sidebarCollapsed ? 78 : 240,
-                  maxWidth: _sidebarCollapsed ? 78 : 240,
+                  minWidth: _sidebarCollapsed ? 78 : (size.width < 1100 ? 200 : size.width < 1400 ? 230 : 270),
+                  maxWidth: _sidebarCollapsed ? 78 : (size.width < 1100 ? 200 : size.width < 1400 ? 230 : 270),
                   // Keep the sidebar out of keyboard Tab traversal so tabbing
                   // through a form doesn't jump into the nav menu between rows.
                   child: ExcludeFocus(child: _buildSidebar(context, _sidebarCollapsed)),
@@ -735,7 +857,9 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       groupedIndices[section]!.add(i);
     }
 
-    final hPad = collapsed ? 12.0 : 14.0;
+    final hPad = collapsed
+        ? 12.w
+        : (MediaQuery.of(context).size.width < 1100 ? 10.w : 14.w);
 
     return Container(
       decoration: const BoxDecoration(
@@ -747,8 +871,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         children: [
           Container(
             padding: EdgeInsets.symmetric(
-              horizontal: collapsed ? 10 : 20,
-              vertical: 20,
+              horizontal: collapsed ? 12 : (MediaQuery.of(context).size.width < 1100 ? 14.w : 24.w),
+              vertical: 20.h,
             ),
             child: Row(
               children: [
@@ -756,34 +880,42 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 // Welcome). The mark is dark navy on a transparent PNG, so
                 // without this it sinks into the navy sidebar.
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
                   child: Container(
-                    width: 56,
-                    height: 56,
+                    width: collapsed ? 46 : 56.w,
+                    height: collapsed ? 46 : 56.h,
                     color: Colors.white,
-                    padding: const EdgeInsets.all(5),
+                    padding: EdgeInsets.all(collapsed ? 4 : 5),
                     child: Image.asset(
                       'assets/images/educore360_logo.png',
                       fit: BoxFit.contain,
                       errorBuilder: (_, __, ___) => const AppIcon(
                         'teacher',
                         color: AppColors.primary,
-                        size: 18,
+                        size: 16,
                       ),
                     ),
                   ),
                 ),
                 if (!collapsed) ...[
-                  const SizedBox(width: 10),
-                  const Text(
-                    'EduCore 360',
-                    style: TextStyle(
-                      fontSize: 17,
-                      color: AppColors.sidebarText,
-                      fontWeight: FontWeight.w700,
+                  SizedBox(width: 10.w),
+                  // Expanded, not Flexible + Spacer: a Spacer is an Expanded
+                  // that claims every spare pixel, so the loosely-fitted text
+                  // beside it was squeezed down to "EduCo...". Expanded here
+                  // gives the name the remaining width and drops the Spacer,
+                  // which the close button below doesn't need.
+                  Expanded(
+                    child: Text(
+                      'EduCore360',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16.sp,
+                        color: AppColors.sidebarText,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                  const Spacer(),
                   Builder(
                     builder: (ctx) {
                       final scaffold = Scaffold.maybeOf(ctx);
@@ -812,22 +944,19 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     if (!collapsed)
                       Padding(
                         padding: EdgeInsets.only(
-                          top: s == 0 ? 4 : 18,
-                          bottom: 8,
-                          left: 10,
+                          top: s == 0 ? 4.h : 18.h,
+                          bottom: 8.h,
+                          left: 10.w,
                         ),
                         child: Text(
                           orderedSections[s],
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                            color: AppColors.accent,
+                          style: AppUI.caps.copyWith(
+                            color: AppColors.sidebarText.withValues(alpha: 0.6),
                           ),
                         ),
                       )
                     else
-                      SizedBox(height: s == 0 ? 4 : 18),
+                      SizedBox(height: s == 0 ? 4.h : 18.h),
                     for (final idx in groupedIndices[orderedSections[s]]!)
                       _buildNavTile(context, idx, collapsed),
                   ],
@@ -851,7 +980,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     const unselectedFg = AppColors.sidebarText;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: EdgeInsets.only(bottom: 10.h),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -862,6 +991,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             final prevIndex = _selectedNavIndex;
             setState(() {
               _selectedNavIndex = index;
+              // Register Institution from the nav = a fresh registration.
+              if (index == 1) _editInstitution = null;
               // Clear any active drilldown so the chosen menu's page
               // actually renders instead of the previous drilldown view.
               _aggregateDrilldownMode = null;
@@ -877,41 +1008,47 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
               scaffold.closeEndDrawer();
             }
           },
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            padding: EdgeInsets.symmetric(
-              horizontal: collapsed ? 4 : 14,
-              vertical: 12,
-            ),
+            padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
             decoration: BoxDecoration(
-              color: isSelected ? selectedBg : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
+              // Active tile = solid accent pill on the navy sidebar.
+              color: isSelected ? selectedBg : null,
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
             ),
             child: Row(
               mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
               children: [
-                AppIcon(
-                  isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
-                  style: isSelected ? AppIconStyle.bold : AppIconStyle.linear,
-                  color: isSelected ? selectedFg : unselectedFg,
-                  size: 20,
+                Container(
+                  width: 34.w, height: 34.w, alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: isSelected ? 0.22 : 0.07),
+                    borderRadius: BorderRadius.circular(9.r),
+                    border: Border.all(color: Colors.white.withValues(alpha: isSelected ? 0.28 : 0.10)),
+                  ),
+                  child: AppIcon(
+                    isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
+                    style: isSelected ? AppIconStyle.bold : AppIconStyle.linear,
+                    color: isSelected ? selectedFg : unselectedFg,
+                    size: 20.sp,
+                  ),
                 ),
                 if (!collapsed) ...[
-                  const SizedBox(width: 12),
+                  SizedBox(width: 12.w),
                   Expanded(
                     child: Text(
                       item.label,
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 13.5.sp,
                         color: isSelected ? selectedFg : unselectedFg,
-                        fontWeight:
-                            isSelected ? FontWeight.w700 : FontWeight.w600,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
                       ),
                     ),
                   ),
+                  Icon(Icons.chevron_right, size: 18.sp, color: (isSelected ? selectedFg : unselectedFg).withValues(alpha: isSelected ? 0.95 : 0.5)),
                 ],
               ],
             ),
@@ -1022,12 +1159,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   _navItems[_selectedNavIndex].label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                      letterSpacing: -0.2,
-                      height: 1.1),
+                  style: AppUI.cardTitle.copyWith(height: 1.1),
                 ),
                 SizedBox(height: 6.h),
                 Row(
@@ -1245,17 +1377,17 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final fg = filled ? Colors.white : AppColors.textSecondary;
     return Material(
       color: bg,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
       elevation: 0,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
         child: Container(
           width: 44,
           height: 44,
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
           ),
           alignment: Alignment.center,
           child: iconLinear
@@ -1288,7 +1420,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     }
     switch (_selectedNavIndex) {
       case 1:
-        return RegisterScreen(onRegistered: _refreshDashboard);
+        return RegisterScreen(
+          key: ValueKey('register_${_editInstitution?['ins_id'] ?? 'new'}'),
+          editInstitution: _editInstitution,
+          onRegistered: () {
+            _refreshDashboard();
+            setState(() { _manageLoaded = false; _editInstitution = null; });
+          },
+        );
       case 2:
         return _buildManageInstitutions(context);
       case 3:
@@ -1312,74 +1451,306 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             const Expanded(child: Center(child: CircularProgressIndicator()))
           else if (_institutionSummaries.isEmpty)
             Expanded(
-                child: Center(
-                    child: Text('No institutions found',
-                        style: TextStyle(
-                            color: AppColors.textSecondary, fontSize: 14, fontWeight: FontWeight.w600))))
-          else ...[
-            _buildSummaryRow(),
-            SizedBox(height: 16.h),
+                child: AppUI.empty(
+                    icon: 'buildings-2',
+                    title: 'No institutions found',
+                    why: 'No institution has been registered yet. Use Register Institution in the menu to add one.'))
+          else
             Expanded(
-              child: Container(
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 12.h),
-                      child: Row(
-                        children: [
-                          const CardTitleBlock(icon: 'buildings-2', title: 'Institutions Overview', subtitle: 'summary across every institution'),
-                          const Spacer(),
-                          Text('${_institutionSummaries.length} institutes',
-                              style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
-                        child: ListView.separated(
-                          padding: EdgeInsets.zero,
-                          itemCount: _institutionSummaries.length,
-                          separatorBuilder: (_, __) => SizedBox(height: 12.h),
-                          itemBuilder: (context, index) {
-                            final s = _institutionSummaries[index];
-                            return _buildInstitutionCard(context, s);
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.only(bottom: 8.h),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _buildSummaryRow(),
+                  SizedBox(height: AppUI.gap),
+                  // Row 1: Institution Overview (left) + Collection Overview (right).
+                  LayoutBuilder(builder: (context, c) {
+                    if (c.maxWidth <= 1050) {
+                      return Column(children: [_scInstitutionOverview(), SizedBox(height: AppUI.gap), _scCollectionOverview()]);
+                    }
+                    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Expanded(flex: 3, child: _scInstitutionOverview()),
+                      SizedBox(width: AppUI.gap),
+                      Expanded(flex: 2, child: _scCollectionOverview()),
+                    ]);
+                  }),
+                  SizedBox(height: AppUI.gap),
+                  // Row 2: Quick Actions (full width — Collection by Mode removed;
+                  // the Collection Overview donut already shows the by-mode split).
+                  _scQuickActions(),
+                ]),
               ),
             ),
-          ],
         ],
       ),
     );
   }
+
+  // ── Redesigned dashboard sections ──────────────────────────────────────────
+  Widget _scPanel({required String icon, required String title, String? subtitle, Widget? trailing, required Widget child}) {
+    return Container(
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          CardTitleBlock(icon: icon, title: title, subtitle: subtitle),
+          const Spacer(),
+          if (trailing != null) trailing,
+        ]),
+        SizedBox(height: 14.h),
+        child,
+      ]),
+    );
+  }
+
+  Color _methodColor(String m) {
+    switch (m) {
+      case 'Cash':
+        return AppColors.success;
+      case 'Online':
+        return AppColors.primary;
+      case 'Card':
+        return AppColors.demand;
+      case 'DD/Cheque':
+        return AppColors.warning;
+      default:
+        return AppColors.textLight;
+    }
+  }
+
+  Widget _scStatChip(String icon, Color color, String value, String label) => Container(
+        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: color.withValues(alpha: 0.18))),
+        child: Row(children: [
+          AppUI.iconTile(icon, color: color, size: 16),
+          SizedBox(width: 10.w),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(label.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps),
+            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          ])),
+        ]),
+      );
+
+  Widget _scStatusPill(bool active) =>
+      AppUI.chip(active ? 'Active' : 'Inactive', active ? AppStatus.success : AppStatus.danger);
+
+  Widget _scInstitutionOverview() {
+    final active = _institutionSummaries.where((s) => s.activeStatus).length;
+    final inactive = _institutionSummaries.length - active;
+    final students = _institutionSummaries.fold<int>(0, (s, e) => s + e.studentCount);
+    final top = [..._institutionSummaries]..sort((a, b) => b.totalCollected.compareTo(a.totalCollected));
+    final topN = top.take(5).toList();
+    Widget h(String t, {int flex = 2, TextAlign a = TextAlign.left}) => AppUI.th(t, flex: flex, align: a);
+    return _scPanel(
+      icon: 'buildings-2', title: 'Institution Overview', subtitle: 'across every institution',
+      trailing: TextButton(onPressed: _openAllInstitutions, child: const Text('View all')),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: _scStatChip('tick-circle', AppColors.success, '$active', 'Active')),
+          SizedBox(width: 10.w),
+          Expanded(child: _scStatChip('close-circle', AppColors.error, '$inactive', 'Inactive')),
+          SizedBox(width: 10.w),
+          Expanded(child: _scStatChip('people', AppColors.primary, '$students', 'Students')),
+        ]),
+        SizedBox(height: 16.h),
+        Text('Top Institutions by Collection', style: AppUI.label),
+        SizedBox(height: 8.h),
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+          decoration: AppUI.tableHeadBar.copyWith(borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [h('INSTITUTION', flex: 4), h('COLLECTION', flex: 2, a: TextAlign.right), h('PENDING', flex: 2, a: TextAlign.right), h('STATUS', flex: 2, a: TextAlign.right)]),
+        ),
+        for (final s in topN)
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider))),
+            child: Row(children: [
+              Expanded(flex: 4, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
+              Expanded(flex: 2, child: Text(_formatAmount(s.totalCollected), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: AppColors.success))),
+              Expanded(flex: 2, child: Text(_formatAmount(s.totalPending), textAlign: TextAlign.right, style: AppUI.money)),
+              Expanded(flex: 2, child: Align(alignment: Alignment.centerRight, child: _scStatusPill(s.activeStatus))),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _scDonutWithLegend() {
+    final entries = _superByMethod.entries.where((e) => e.value > 0).toList()..sort((a, b) => b.value.compareTo(a.value));
+    if (entries.isEmpty) {
+      return SizedBox(height: 120.h, child: Center(child: Text('No reconciled collection yet', textAlign: TextAlign.center, style: AppUI.muted)));
+    }
+    final total = entries.fold<double>(0, (s, e) => s + e.value);
+    final slices = [for (final e in entries) _ScSlice(e.key, e.value, _methodColor(e.key))];
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      SizedBox(
+        width: 128.w, height: 128.w,
+        child: Stack(alignment: Alignment.center, children: [
+          CustomPaint(size: Size(128.w, 128.w), painter: _ScDonut(slices, total)),
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('TOTAL', style: AppUI.caps),
+            FittedBox(fit: BoxFit.scaleDown, child: Text(_formatAmount(total), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary))),
+          ]),
+        ]),
+      ),
+      SizedBox(width: 16.w),
+      Expanded(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final s in slices)
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 4.h),
+            child: Row(children: [
+              Container(width: 11.w, height: 11.w, decoration: BoxDecoration(color: s.color, borderRadius: BorderRadius.circular(3.r))),
+              SizedBox(width: 8.w),
+              Expanded(child: Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.body)),
+              Text('${(total <= 0 ? 0 : s.value / total * 100).toStringAsFixed(0)}%', textAlign: TextAlign.right, style: AppUI.label.copyWith(color: AppColors.textSecondary)),
+            ]),
+          ),
+      ])),
+    ]);
+  }
+
+  Widget _scMonthlyBars() {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final now = DateTime.now();
+    final values = <double>[];
+    final labels = <String>[];
+    for (var i = 11; i >= 0; i--) {
+      final d = DateTime(now.year, now.month - i, 1);
+      final key = '${d.year}-${d.month.toString().padLeft(2, '0')}';
+      values.add(_superByMonth[key] ?? 0);
+      labels.add(monthNames[d.month - 1]);
+    }
+    final maxV = values.fold<double>(0, (m, v) => math.max(m, v));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Monthly Collection Trend', style: AppUI.label),
+      SizedBox(height: 10.h),
+      maxV <= 0
+          ? SizedBox(height: 100.h, child: Center(child: Text('No monthly collection yet', textAlign: TextAlign.center, style: AppUI.muted)))
+          : SizedBox(height: 150.h, child: LayoutBuilder(builder: (context, c) => CustomPaint(size: Size(c.maxWidth, 150.h), painter: _ScBars(values, labels, maxV)))),
+    ]);
+  }
+
+  Widget _scCollectionOverview() => _scPanel(
+        icon: 'chart-1', title: 'Collection Overview', subtitle: 'this year, reconciled',
+        child: Column(children: [_scDonutWithLegend(), SizedBox(height: 16.h), _scMonthlyBars()]),
+      );
+
+  Widget _scCollectionByMode() {
+    final total = _superByMethod.values.fold<double>(0, (s, v) => s + v);
+    final online = _superByMethod['Online'] ?? 0;
+    final onlinePct = total <= 0 ? 0 : (online / total * 100);
+    return _scPanel(
+      icon: 'grid-1', title: 'Collection by Mode', subtitle: 'this year, reconciled',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _scDonutWithLegend(),
+        if (total > 0) ...[
+          SizedBox(height: 14.h),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+            decoration: BoxDecoration(color: AppColors.successBg, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.success.withValues(alpha: 0.18))),
+            child: Row(children: [
+              AppUI.iconTile('chart-1', color: AppColors.success, size: 16),
+              SizedBox(width: 10.w),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text('Online collections are ${onlinePct.toStringAsFixed(0)}% of total', style: AppUI.label),
+                Text(onlinePct >= 40 ? 'Great digital adoption — keep it up.' : 'Keep promoting digital payments.', style: AppUI.muted),
+              ])),
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  /// Opens the full detailed institution list on its own page (from the
+  /// Institution Overview "View all").
+  void _openAllInstitutions() {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => Scaffold(
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.textPrimary,
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: AppColors.border)),
+        title: Row(children: [
+          AppUI.iconTile('buildings-2', size: 18),
+          SizedBox(width: 12.w),
+          Text('All Institutions', style: AppUI.cardTitle),
+        ]),
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16.w),
+        child: _scAllInstitutions(context),
+      ),
+    )));
+  }
+
+  Widget _scQuickActions() {
+    final actions = <(String, String, int)>[
+      ('user-add', 'Register Institution', 1),
+      ('buildings-2', 'Manage Institutions', 2),
+      ('setting-2', 'Settings', 3),
+    ];
+    return _scPanel(
+      icon: 'grid-1', title: 'Quick Actions',
+      child: LayoutBuilder(builder: (context, c) {
+        final perRow = c.maxWidth > 800 ? 3 : 1;
+        const gap = 12.0;
+        final w = (c.maxWidth - gap * (perRow - 1)) / perRow;
+        return Wrap(spacing: gap, runSpacing: gap, children: [
+          for (final a in actions)
+            SizedBox(
+              width: w,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => setState(() => _selectedNavIndex = a.$3),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 14.h, horizontal: 14.w),
+                    decoration: BoxDecoration(color: AppColors.primaryLight.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
+                    child: Row(children: [
+                      AppUI.iconTile(a.$1, size: 18),
+                      SizedBox(width: 12.w),
+                      Expanded(child: Text(a.$2, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.label)),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+        ]);
+      }),
+    );
+  }
+
+  Widget _scAllInstitutions(BuildContext context) => _scPanel(
+        icon: 'buildings-2', title: 'All Institutions', subtitle: 'detailed finance',
+        trailing: Text('${_institutionSummaries.length} institutes', style: AppUI.muted),
+        child: ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: _institutionSummaries.length,
+          separatorBuilder: (_, __) => SizedBox(height: 12.h),
+          itemBuilder: (context, i) => _buildInstitutionCard(context, _institutionSummaries[i]),
+        ),
+      );
 
   Widget _buildMobileDashboardHome(BuildContext context) {
     if (_loadingFinanceData) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_institutionSummaries.isEmpty) {
-      return const Center(
-        child: Text('No institutions found',
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 14, fontWeight: FontWeight.w600)),
+      return AppUI.empty(
+        icon: 'buildings-2',
+        title: 'No institutions found',
+        why: 'No institution has been registered yet. Use Register Institution to add one.',
       );
     }
 
     final activeCount = _institutionSummaries.where((s) => s.activeStatus).length;
     final totalDemand = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.totalDemand);
     final totalCollection = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.totalCollected);
-    final totalTodayCollection = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.todayCollected);
+    final totalTodayCollection = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.todayCollected + s.todayMisc);
     final totalPending = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.totalPending);
 
     return ListView(
@@ -1389,7 +1760,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         Row(
           children: [
             Text(_navItems[_selectedNavIndex].label,
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3)),
+                style: AppUI.pageTitle.copyWith(fontSize: 22)),
             const SizedBox(width: 10),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1403,23 +1774,21 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   AppIcon('security-user', size: 12, color: AppColors.accent),
                   const SizedBox(width: 4),
                   const Text('Super Admin',
-                      style: TextStyle(fontSize: 11, color: AppColors.accent, fontWeight: FontWeight.w700)),
+                      style: TextStyle(fontSize: 12, color: AppColors.accent, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
           ],
         ),
         const SizedBox(height: 4),
-        const Text("Here's a snapshot of all institutions",
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+        Text("Here's a snapshot of all institutions", style: AppUI.muted),
         const SizedBox(height: 24),
 
         // Hero balance card — Total Demand
         Center(
           child: Column(
             children: [
-              const Text('Total Demand',
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+              Text('TOTAL DEMAND', style: AppUI.caps),
               const SizedBox(height: 6),
               Text(_formatAmount(totalDemand),
                   style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.5)),
@@ -1432,38 +1801,18 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         Row(
           children: [
             Expanded(
-              child: SizedBox(
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: () => setState(() => _selectedNavIndex = 1),
-                  icon: AppIcon('add', size: 16, color: Colors.white),
-                  label: const Text('Register'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                    textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                  ),
-                ),
+              child: ElevatedButton.icon(
+                onPressed: () => setState(() => _selectedNavIndex = 1),
+                icon: AppIcon('add', size: 16, color: Colors.white),
+                label: const Text('Register'),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: SizedBox(
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: () => setState(() => _selectedNavIndex = 2),
-                  icon: AppIcon('buildings-2', size: 16, color: Colors.white),
-                  label: const Text('Manage'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.textPrimary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                    textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                  ),
-                ),
+              child: OutlinedButton.icon(
+                onPressed: () => setState(() => _selectedNavIndex = 2),
+                icon: AppIcon('buildings-2', size: 16, color: AppColors.primary),
+                label: const Text('Manage'),
               ),
             ),
           ],
@@ -1474,10 +1823,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Quick Stats',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
-            Text('$activeCount active',
-                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+            Text('Quick Stats', style: AppUI.cardTitle),
+            Text('$activeCount active', style: AppUI.muted),
           ],
         ),
         const SizedBox(height: 12),
@@ -1521,12 +1868,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Institutions',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+            Text('Institutions', style: AppUI.cardTitle),
             InkWell(
               onTap: () => setState(() => _selectedNavIndex = 2),
-              child: const Text('View all',
-                  style: TextStyle(fontSize: 13, color: AppColors.accent, fontWeight: FontWeight.w700)),
+              child: Text('View all', style: AppUI.label.copyWith(color: AppColors.primary)),
             ),
           ],
         ),
@@ -1542,15 +1887,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   Widget _miniStatCard(String icon, String label, String value, Color color, {VoidCallback? onTap}) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(AppUI.cardRadius),
       child: Container(
         width: 160,
         padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1558,14 +1899,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: AppIcon(icon, color: color, size: 16),
-                ),
+                AppUI.iconTile(icon, color: color, size: 14),
                 const Spacer(),
                 if (onTap != null)
                   AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary),
@@ -1575,15 +1909,15 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Text(label.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppUI.caps),
+                const SizedBox(height: 2),
                 Text(value,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
-                const SizedBox(height: 2),
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
               ],
             ),
           ],
@@ -1595,11 +1929,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   Widget _mobileInstitutionRow(_InstitutionFinanceSummary s) {
     final expanded = _expandedInsIds.contains(s.insId);
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
@@ -1639,12 +1969,12 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                         Text(s.insName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                            style: AppUI.label.copyWith(fontSize: 14)),
                         const SizedBox(height: 2),
                         Text('Code: ${s.insCode}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+                            style: AppUI.muted),
                       ],
                     ),
                   ),
@@ -1653,13 +1983,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(_formatAmount(s.totalCollected),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
-                      Text(s.activeStatus ? 'Active' : 'Inactive',
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: s.activeStatus ? AppColors.success : AppColors.textSecondary)),
+                      Text(_formatAmount(s.totalCollected), textAlign: TextAlign.right, style: AppUI.money),
+                      const SizedBox(height: 4),
+                      AppUI.chip(s.activeStatus ? 'Active' : 'Inactive',
+                          s.activeStatus ? AppStatus.success : AppStatus.neutral),
                     ],
                   ),
                   const SizedBox(width: 6),
@@ -1681,7 +2008,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     child: Column(
                       children: [
-                        Container(height: 1, color: AppColors.border),
+                        Container(height: 1, color: AppColors.divider),
                         const SizedBox(height: 12),
                         _institutionMetricsGrid(s),
                       ],
@@ -1708,14 +2035,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           width: cardWidth,
           child: InkWell(
             onTap: onTap,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 // Light tinted cell, matching the trust-level summary cards.
-                color: color.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: color.withValues(alpha: 0.28)),
+                color: color.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                border: Border.all(color: color.withValues(alpha: 0.22)),
               ),
               child: Row(
                 children: [
@@ -1735,15 +2062,15 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        Text(label.toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppUI.caps.copyWith(fontSize: 11)),
+                        const SizedBox(height: 2),
                         Text(value,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
-                        const SizedBox(height: 2),
-                        Text(label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
                       ],
                     ),
                   ),
@@ -1803,84 +2130,61 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final totalCollection = _institutionSummaries.fold<double>(
         0, (sum, s) => sum + s.totalCollected);
     final totalTodayCollection = _institutionSummaries.fold<double>(
-        0, (sum, s) => sum + s.todayCollected);
+        0, (sum, s) => sum + s.todayCollected + s.todayMisc);
     final totalPending = _institutionSummaries.fold<double>(
         0, (sum, s) => sum + s.totalPending);
+    final totalMisc = _institutionSummaries.fold<double>(0, (sum, s) => sum + s.totalMisc);
+    final totalStudents = _institutionSummaries.fold<int>(0, (sum, s) => sum + s.studentCount);
+    final activeCount = _institutionSummaries.where((s) => s.activeStatus).length;
     return LayoutBuilder(builder: (context, c) {
       final w = c.maxWidth;
       const gap = 12.0;
-      final cols = w < 600 ? 2 : 4;
+      // 7 KPI cards across on wide screens (matches the reference), stepping
+      // down to 4 then 2 as width shrinks.
+      final cols = w < 600 ? 2 : (w < 1150 ? 4 : 7);
       final cardWidth = (w - gap * (cols - 1)) / cols;
+      final collectedPct = totalDemand <= 0 ? 0.0 : (totalCollection / totalDemand * 100).clamp(0, 100);
+      final pendingPct = totalDemand <= 0 ? 0.0 : (totalPending / totalDemand * 100).clamp(0, 100);
       final cards = <Widget>[
-        // Same four hues as the per-institution cells below, so a figure keeps
-        // its colour whether you read it at trust or institution level.
-        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _formatAmount(totalDemand), 'Total Demand',
-            onTap: () => _showAggregateDrilldown(context, 'demand'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _formatAmount(totalCollection), 'Total Collection',
-            onTap: () => _showAggregateDrilldown(context, 'collection'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), 'Today Collection',
-            onTap: () => _showAggregateDrilldown(context, 'today_collection'))),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _formatAmount(totalPending), 'Total Pending',
-            onTap: () => _showAggregateDrilldown(context, 'pending'))),
+        // Non-interactive KPI cards (no drill-down), with real subtitles.
+        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _formatAmount(totalDemand), 'Total Demand', subtitle: 'For the trust')),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _formatAmount(totalCollection), 'Total Collection', subtitle: '${collectedPct.toStringAsFixed(1)}% collected', subtitleColor: AppColors.success)),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('receipt-2', AppColors.accent, _formatAmount(totalMisc), 'Misc Collection', subtitle: 'Miscellaneous fees')),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), "Today's Collection", subtitle: "Today's reconciled")),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _formatAmount(totalPending), 'Total Pending', subtitle: '${pendingPct.toStringAsFixed(1)}% pending', subtitleColor: AppColors.error)),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('buildings-2', AppColors.primary, '$activeCount of ${_institutionSummaries.length}', 'Institutions', subtitle: 'Active Institutions')),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('people', AppColors.today, '$totalStudents', 'Total Students', subtitle: 'Across institutions')),
       ];
       return Wrap(spacing: gap, runSpacing: gap, children: cards);
     });
   }
 
-  Widget _buildSummaryCard(String icon, Color iconColor, String value, String label, {VoidCallback? onTap}) {
-    // Raw pixel sizes — don't scale with screenutil so cards stay readable
-    // on narrow phone screens where .sp values would shrink below 5px.
-    final card = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-      decoration: BoxDecoration(
-        // Light tinted card: a wash of the metric's own accent colour, at a low
-        // alpha so the dark value text stays well above AA contrast.
-        color: iconColor.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: iconColor.withValues(alpha: 0.28)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              // Solid white chip so the icon separates from the tint.
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: iconColor.withValues(alpha: 0.22)),
+  Widget _buildSummaryCard(String icon, Color iconColor, String value, String label, {String? subtitle, Color? subtitleColor}) {
+    // AppUI.kpi layout (icon tile, CAPS label, 20/800 value, muted sub),
+    // composed locally so long amounts scale down instead of ellipsizing.
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: AppUI.card(),
+      child: Row(children: [
+        AppUI.iconTile(icon, color: iconColor),
+        SizedBox(width: 12.w),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(label.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps),
+            SizedBox(height: 4.h),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(value, maxLines: 1, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
             ),
-            child: AppIcon(icon, color: iconColor, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.2)),
-                const SizedBox(height: 4),
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-              ],
-            ),
-          ),
-          if (onTap != null)
-            AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary),
-        ],
-      ),
+            if (subtitle != null) ...[
+              SizedBox(height: 2.h),
+              Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: subtitleColor == null ? AppUI.muted : AppUI.muted.copyWith(color: subtitleColor, fontWeight: FontWeight.w700)),
+            ],
+          ]),
+        ),
+      ]),
     );
-    return onTap != null
-        ? InkWell(
-            borderRadius: BorderRadius.circular(12.r),
-            onTap: onTap,
-            child: card,
-          )
-        : card;
   }
 
   void _showAggregateDrilldown(BuildContext context, String mode) {
@@ -1894,12 +2198,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   Widget _buildInstitutionCard(
       BuildContext context, _InstitutionFinanceSummary s) {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1940,32 +2240,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     Text(s.insName,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textPrimary)),
+                        style: AppUI.cardTitle),
                   ],
                 ),
               ),
               const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: s.activeStatus
-                      ? AppColors.success.withValues(alpha: 0.1)
-                      : AppColors.textSecondary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  s.activeStatus ? 'Active' : 'Inactive',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: s.activeStatus
-                          ? AppColors.success
-                          : AppColors.textSecondary),
-                ),
-              ),
+              AppUI.chip(s.activeStatus ? 'Active' : 'Inactive',
+                  s.activeStatus ? AppStatus.success : AppStatus.neutral),
             ],
           ),
           const SizedBox(height: 14),
@@ -1974,64 +2255,50 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             // Adaptive layout: stack vertically on mobile, 2-col on tablet,
             // single row on desktop.
             const gap = 12.0;
-            // Same four hues as the trust-level cards, so a figure keeps its
-            // colour at both levels. (Collection and Today were both green.)
-            final demand = _buildFinanceTile('Total Demand', s.totalDemand, AppColors.demand,
-                icon: 'wallet-1', onTap: () => _showCourseWiseDemand(context, s));
-            final collection = _buildFinanceTile('Total Collection', s.totalCollected, AppColors.success,
-                icon: 'tick-circle', onTap: () => _showCourseWiseCollection(context, s));
-            final approval = _buildFinanceTile('Today Collection', s.todayCollected, AppColors.today,
-                icon: 'calendar', onTap: () => _showCourseWiseTodayCollection(context, s));
-            final pending = _buildFinanceTile('Total Pending', s.totalPending, AppColors.warning,
-                icon: 'timer', onTap: () => _showCourseWisePending(context, s));
+            // The same 8 finance figures the institution admin sees on its own
+            // dashboard, in the same order, so the breakdown matches exactly.
+            final feesDue = _buildFinanceTile('Total Fees Due', s.totalDemand, AppColors.demand,
+                icon: 'receipt-2', onTap: () => _showRegArrDialog(context, s.insId, 'demand', 'Total Fees Due', AppColors.demand, 'receipt-2', s.totalDemand));
+            final collected = _buildFinanceTile('Total Collected', s.totalCollected, AppColors.success,
+                icon: 'tick-circle', onTap: () => _showRegArrDialog(context, s.insId, 'paid', 'Total Collected', AppColors.success, 'money-recive', s.totalCollected));
+            final misc = _buildFinanceTile('Misc Collection', s.totalMisc, AppColors.accent, icon: 'receipt-2');
+            final fine = _buildFinanceTile('Fine Collected', s.totalFine, AppColors.error, icon: 'receipt-edit');
+            final concession = _buildFinanceTile('Concession', s.totalConcession, AppColors.info, icon: 'discount-shape');
+            final today = _buildFinanceTile('Today Collection', s.todayCollected + s.todayMisc, AppColors.today,
+                icon: 'calendar', onTap: () => _showTodayBreakdown(context, s));
+            final pendingApproval = _buildFinanceTile('Pending Approval', s.pendingApproval, AppColors.warning,
+                icon: 'money-remove', onTap: () => _showPendingApprovalDialog(context, s));
+            final outstanding = _buildFinanceTile('Outstanding', s.totalPending, AppColors.today,
+                icon: 'wallet-money', onTap: () => _showRegArrDialog(context, s.insId, 'pending', 'Outstanding', AppColors.today, 'wallet-money', s.totalPending));
+            final tiles = [feesDue, collected, misc, fine, concession, today, pendingApproval, outstanding];
 
             if (w < 600) {
-              // Mobile: stack vertically
-              return Column(
-                children: [
-                  demand,
-                  SizedBox(height: gap),
-                  collection,
-                  SizedBox(height: gap),
-                  approval,
-                  SizedBox(height: gap),
-                  pending,
-                ],
-              );
-            } else if (w < 1000) {
-              // Tablet: 2-column grid for finance tiles
-              final tileWidth = (w - gap) / 2;
-              return Column(
-                children: [
-                  Row(children: [
-                    SizedBox(width: tileWidth, child: demand),
-                    SizedBox(width: gap),
-                    SizedBox(width: tileWidth, child: collection),
-                  ]),
-                  SizedBox(height: gap),
-                  Row(children: [
-                    SizedBox(width: tileWidth, child: approval),
-                    SizedBox(width: gap),
-                    SizedBox(width: tileWidth, child: pending),
-                  ]),
-                ],
-              );
+              // Mobile: stack vertically.
+              return Column(children: [
+                for (var i = 0; i < tiles.length; i++) ...[if (i > 0) SizedBox(height: gap), tiles[i]],
+              ]);
             }
-            // Desktop: single row, original layout
-            return IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: demand),
-                  SizedBox(width: gap),
-                  Expanded(child: collection),
-                  SizedBox(width: gap),
-                  Expanded(child: approval),
-                  SizedBox(width: gap),
-                  Expanded(child: pending),
-                ],
-              ),
-            );
+            // Rows of N Expanded tiles.
+            Widget rowOf(List<Widget> row) => IntrinsicHeight(
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    for (var i = 0; i < row.length; i++) ...[if (i > 0) SizedBox(width: gap), Expanded(child: row[i])],
+                  ]),
+                );
+            if (w < 1000) {
+              // Tablet: 2 per row → 4 rows.
+              return Column(children: [
+                rowOf([feesDue, collected]), SizedBox(height: gap),
+                rowOf([misc, fine]), SizedBox(height: gap),
+                rowOf([concession, today]), SizedBox(height: gap),
+                rowOf([pendingApproval, outstanding]),
+              ]);
+            }
+            // Desktop: 4 per row → 2 rows (matches the admin KPI grid).
+            return Column(children: [
+              rowOf([feesDue, collected, misc, fine]),
+              SizedBox(height: gap),
+              rowOf([concession, today, pendingApproval, outstanding]),
+            ]);
           }),
         ],
       ),
@@ -2049,7 +2316,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 14.h),
             child: Column(
               children: [
-                Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.black)),
+                Text(label, style: AppUI.body),
                 SizedBox(height: 6.h),
                 Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
               ],
@@ -2063,13 +2330,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       child: Container(
         decoration: BoxDecoration(
           color: collectionColor.withValues(alpha: 0.04),
-          borderRadius: BorderRadius.circular(10.r),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
           border: Border.all(color: collectionColor.withValues(alpha: 0.15)),
         ),
         child: Row(
           children: [
             half('Total Collection', _formatAmount(s.totalCollected), collectionColor, () => _showCourseWiseCollection(context, s)),
-            Container(width: 1, height: 38.h, color: AppColors.border),
+            Container(width: 1, height: 38.h, color: AppColors.divider),
             half('Total Pending', _formatAmount(pending), pendingColor, () => _showCourseWisePending(context, s)),
           ],
         ),
@@ -2085,37 +2352,28 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         // Light tinted tile in the metric's own colour, matching the trust-level
         // summary cards above. (This previously hardcoded AppColors.accent for
         // the icon and ignored `color`, so every tile rendered the same blue.)
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.28)),
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              // Solid white chip so the icon separates from the tint.
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: color.withValues(alpha: 0.22)),
-            ),
-            child: AppIcon(icon, color: color, size: 22),
-          ),
+          AppUI.iconTile(icon, color: color),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Text(label.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppUI.caps),
+                const SizedBox(height: 4),
                 Text(_formatAmount(amount),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.2)),
-                const SizedBox(height: 4),
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                    style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
               ],
             ),
           ),
@@ -2126,7 +2384,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     );
     return onTap != null
         ? InkWell(
-            borderRadius: BorderRadius.circular(10.r),
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
             onTap: onTap,
             child: tile)
         : tile;
@@ -2166,41 +2424,223 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     });
   }
 
+  Widget _saBreakdownRow(String icon, Color color, String label, double amount, {bool bold = false}) {
+    return Row(children: [
+      AppUI.iconTile(icon, color: color, size: 16),
+      SizedBox(width: 12.w),
+      Expanded(child: Text(label, style: bold ? AppUI.label.copyWith(fontSize: 14.sp, fontWeight: FontWeight.w800) : AppUI.body)),
+      Text(_formatAmount(amount), textAlign: TextAlign.right, style: bold ? AppUI.money.copyWith(fontSize: 15.sp, fontWeight: FontWeight.w800, color: color) : AppUI.money),
+    ]);
+  }
+
+  /// Regular vs Arrear split for one institution — same dialog the institution
+  /// admin sees (via get_fee_totals_by_seqtype). [metric] = demand|paid|pending.
+  /// [cardTotal] is the authoritative figure shown on the card (from
+  /// get_super_admin_dashboard, which matches the admin) — used for the Total
+  /// row so it always agrees with the card even if the split RPC drifts.
+  void _showRegArrDialog(BuildContext context, int insId, String metric, String title, Color color, String icon, double cardTotal) {
+    // Create the RPC future ONCE here — not inside the FutureBuilder — so a
+    // dialog rebuild never re-fires the query.
+    final splitFuture = SupabaseService.client.rpc('get_fee_totals_by_seqtype', params: {'p_ins_id': insId});
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 420.w),
+          child: Padding(
+            padding: EdgeInsets.all(22.w),
+            child: FutureBuilder<dynamic>(
+              future: splitFuture,
+              builder: (c, snap) {
+                final head = Row(children: [
+                  AppUI.iconTile(icon, color: color),
+                  SizedBox(width: 12.w),
+                  Expanded(child: Text(title, style: AppUI.cardTitle)),
+                ]);
+                if (snap.connectionState != ConnectionState.done) {
+                  return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [head, SizedBox(height: 20.h), SizedBox(height: 100.h, child: const Center(child: CircularProgressIndicator()))]);
+                }
+                final raw = snap.data;
+                final m = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+                double val(String type) => ((m[type] as Map?)?[metric] as num?)?.toDouble() ?? 0;
+                final reg = val('regular'), arr = val('arrear');
+                // Total row uses the authoritative card figure (matches admin).
+                return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  head,
+                  SizedBox(height: 18.h),
+                  _saBreakdownRow('receipt-2', color, 'Regular', reg),
+                  Divider(height: 20.h, color: AppColors.divider),
+                  _saBreakdownRow('receipt-edit', color, 'Arrear', arr),
+                  Divider(height: 20.h, color: AppColors.divider),
+                  _saBreakdownRow(icon, color, 'Total', cardTotal, bold: true),
+                  SizedBox(height: 18.h),
+                  Align(alignment: Alignment.centerRight, child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))),
+                ]);
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchInstitutionPending(int insId) async {
+    try {
+      final all = await SupabaseService.getPaymentsByDateRange(insId, fromDate: DateTime(2015, 1, 1), toDate: DateTime.now());
+      return List<Map<String, dynamic>>.from(all)
+          .where((p) => (p['recon_status']?.toString() ?? '') == 'P')
+          .toList()
+        ..sort((a, b) => (b['paydate']?.toString() ?? '').compareTo(a['paydate']?.toString() ?? ''));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Today Collection split into Fee Collection + Misc — same as the admin's.
+  void _showTodayBreakdown(BuildContext context, _InstitutionFinanceSummary s) {
+    final fee = s.todayCollected;
+    final misc = s.todayMisc;
+    final total = fee + misc;
+    Widget line(String icon, String label, double v, Color color) => Padding(
+          padding: EdgeInsets.symmetric(vertical: 8.h),
+          child: Row(children: [
+            AppUI.iconTile(icon, color: color, size: 16),
+            SizedBox(width: 12.w),
+            Expanded(child: Text(label, style: AppUI.body)),
+            Text(_formatAmount(v), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: color)),
+          ]),
+        );
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 440.w),
+          child: Padding(
+            padding: EdgeInsets.all(20.w),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                AppUI.iconTile('calendar', color: AppColors.today),
+                SizedBox(width: 12.w),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text('Today Collection', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cardTitle),
+                  Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
+                ])),
+                IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close, size: 18), color: AppColors.textSecondary),
+              ]),
+              SizedBox(height: 12.h),
+              line('tick-circle', 'Fee Collection', fee, AppColors.success),
+              Divider(height: 1, color: AppColors.divider),
+              line('receipt-2', 'Misc Collection', misc, AppColors.accent),
+              SizedBox(height: 12.h),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                decoration: BoxDecoration(color: AppColors.today.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.today.withValues(alpha: 0.22))),
+                child: Row(children: [
+                  Expanded(child: Text('Total Today', style: AppUI.label)),
+                  Text(_formatAmount(total), textAlign: TextAlign.right, style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.today)),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Pending-approval student list for one institution — same as the admin's.
+  void _showPendingApprovalDialog(BuildContext context, _InstitutionFinanceSummary s) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.r)),
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 560.w, maxHeight: 560.h),
+          child: Padding(
+            padding: EdgeInsets.all(20.w),
+            child: FutureBuilder<List<Map<String, dynamic>>>(
+              future: _fetchInstitutionPending(s.insId),
+              builder: (c, snap) {
+                final head = Row(children: [
+                  AppUI.iconTile('money-remove', color: AppColors.warning),
+                  SizedBox(width: 12.w),
+                  Expanded(child: Text('Pending Approval', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cardTitle)),
+                  IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close, size: 18), color: AppColors.textSecondary),
+                ]);
+                if (!snap.hasData) {
+                  return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [head, SizedBox(height: 20.h), SizedBox(height: 140.h, child: const Center(child: CircularProgressIndicator()))]);
+                }
+                final list = snap.data!;
+                final total = list.fold<double>(0, (a, p) => a + ((p['transtotalamount'] as num?)?.toDouble() ?? 0));
+                return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  head,
+                  SizedBox(height: 4.h),
+                  Text('${list.length} payment${list.length == 1 ? '' : 's'} • ${_formatAmount(total)} awaiting reconcile', style: AppUI.muted),
+                  SizedBox(height: 14.h),
+                  if (list.isEmpty)
+                    SizedBox(height: 160.h, child: AppUI.empty(icon: 'tick-circle', title: 'Nothing pending', why: 'Every payment for this institution has been reconciled.'))
+                  else
+                    Flexible(child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => Divider(height: 14.h, color: AppColors.divider),
+                      itemBuilder: (_, i) {
+                        final p = list[i];
+                        final name = (p['stuname']?.toString() ?? '').trim();
+                        final admno = p['stuadmno']?.toString() ?? '';
+                        final cls = p['stuclass']?.toString() ?? '';
+                        final receipt = p['paynumber']?.toString() ?? '';
+                        final amount = (p['transtotalamount'] as num?)?.toDouble() ?? 0;
+                        final rawDate = p['paydate']?.toString() ?? '';
+                        final date = rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate;
+                        return Row(children: [
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(name.isEmpty ? '—' : name, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.label),
+                            SizedBox(height: 2.h),
+                            Text([if (admno.isNotEmpty) admno, if (cls.isNotEmpty) cls, if (receipt.isNotEmpty) receipt].join(' • '), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
+                          ])),
+                          SizedBox(width: 10.w),
+                          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                            Text(_formatAmount(amount), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: AppColors.warning)),
+                            SizedBox(height: 2.h),
+                            Text(date, style: AppUI.muted.copyWith(fontSize: 12.sp)),
+                          ]),
+                        ]);
+                      },
+                    )),
+                ]);
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildStatCard(BuildContext context, String title, String value,
       String icon, Color color) {
     return Expanded(
       child: Container(
-        padding: EdgeInsets.all(20.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14.r),
-          border: Border.all(color: AppColors.border),
-        ),
+        padding: EdgeInsets.all(16.w),
+        decoration: AppUI.card(),
         child: Row(
           children: [
-            Container(
-              width: 48.w,
-              height: 48.h,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12.r),
-              ),
-              child: AppIcon(icon, color: color, size: 18),
-            ),
-            SizedBox(width: 16.w),
+            AppUI.iconTile(icon, color: color),
+            SizedBox(width: 12.w),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(title.toUpperCase(), style: AppUI.caps),
+                SizedBox(height: 4.h),
                 Text(value,
-                    style: Theme.of(context)
-                        .textTheme
-                        .headlineMedium
-                        ?.copyWith(fontWeight: FontWeight.w700)),
-                Text(title,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Colors.black)),
+                    style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
               ],
             ),
           ],
@@ -2212,12 +2652,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   Widget _buildInstitutionFinanceSection(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2225,26 +2661,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             children: [
               Text(
                 'All Colleges Fee Overview',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: AppUI.cardTitle,
               ),
               const Spacer(),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(20.r),
-                ),
-                child: Text(
-                  'View Only',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.black,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ),
+              AppUI.chip('View Only', AppStatus.neutral),
             ],
           ),
           SizedBox(height: 16.h),
@@ -2256,15 +2676,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
               ),
             )
           else if (_institutionSummaries.isEmpty)
-            Padding(
-              padding: EdgeInsets.symmetric(vertical: 12.h),
-              child: Text(
-                'No fee collection data available yet.',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: Colors.black),
-              ),
+            AppUI.empty(
+              icon: 'chart-1',
+              title: 'No fee collection data available yet.',
+              why: 'No institution has recorded a fee collection yet.',
             )
           else
             Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2275,13 +2690,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
                 headingRowColor: WidgetStateProperty.all(
-                    AppColors.primary.withValues(alpha: 0.08)),
+                    AppColors.tableHeadBg),
                 columns: const [
                   DataColumn(label: Text('COLLEGE')),
                   DataColumn(label: Text('CODE')),
-                  DataColumn(label: Text('FEE COLLECTION')),
-                  DataColumn(label: Text('PENDING FEES')),
-                  DataColumn(label: Text('TRANSACTIONS')),
+                  DataColumn(label: Text('FEE COLLECTION'), numeric: true),
+                  DataColumn(label: Text('PENDING FEES'), numeric: true),
+                  DataColumn(label: Text('TRANSACTIONS'), numeric: true),
                   DataColumn(label: Text('STATUS')),
                 ],
                 rows: _institutionSummaries.map((item) {
@@ -2289,30 +2704,12 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     cells: [
                       DataCell(Text(item.insName)),
                       DataCell(Text(item.insCode)),
-                      DataCell(Text(_formatCurrency(item.totalCollected))),
-                      DataCell(Text(_formatCurrency(item.totalPending))),
+                      DataCell(Text(_formatCurrency(item.totalCollected), style: AppUI.money)),
+                      DataCell(Text(_formatCurrency(item.totalPending), style: AppUI.money)),
                       DataCell(Text('${item.transactionCount}')),
                       DataCell(
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: 10.w, vertical: 4.h),
-                          decoration: BoxDecoration(
-                            color: item.activeStatus
-                                ? AppColors.success.withValues(alpha: 0.1)
-                                : AppColors.error.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20.r),
-                          ),
-                          child: Text(
-                            item.activeStatus ? 'Active' : 'Inactive',
-                            style: TextStyle(
-                              color: item.activeStatus
-                                  ? AppColors.success
-                                  : AppColors.error,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                        AppUI.chip(item.activeStatus ? 'Active' : 'Inactive',
+                            item.activeStatus ? AppStatus.success : AppStatus.danger),
                       ),
                     ],
                   );
@@ -2329,21 +2726,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   Widget _buildRecentTransactionsSection(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Recent Transactions Across Colleges',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: AppUI.cardTitle,
           ),
           SizedBox(height: 16.h),
           if (_loadingFinanceData)
@@ -2354,15 +2744,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
               ),
             )
           else if (_recentTransactions.isEmpty)
-            Padding(
-              padding: EdgeInsets.symmetric(vertical: 12.h),
-              child: Text(
-                'No transactions found.',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: Colors.black),
-              ),
+            AppUI.empty(
+              icon: 'receipt-2',
+              title: 'No transactions found.',
+              why: 'No payment has been recorded across the colleges yet.',
             )
           else
             Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2373,11 +2758,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
                 headingRowColor: WidgetStateProperty.all(
-                    AppColors.primary.withValues(alpha: 0.08)),
+                    AppColors.tableHeadBg),
                 columns: const [
                   DataColumn(label: Text('COLLEGE')),
                   DataColumn(label: Text('RECEIPT NO')),
-                  DataColumn(label: Text('AMOUNT')),
+                  DataColumn(label: Text('AMOUNT'), numeric: true),
                   DataColumn(label: Text('METHOD')),
                   DataColumn(label: Text('REFERENCE')),
                   DataColumn(label: Text('DATE')),
@@ -2395,7 +2780,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     cells: [
                       DataCell(Text(row.institutionName)),
                       DataCell(Text(payment.paynumber ?? '—')),
-                      DataCell(Text(_formatCurrency(payment.transtotalamount))),
+                      DataCell(Text(_formatCurrency(payment.transtotalamount), style: AppUI.money)),
                       DataCell(Text(payment.paymethod ?? '-')),
                       DataCell(
                         SizedBox(
@@ -2408,22 +2793,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                       ),
                       DataCell(Text(_formatDate(date))),
                       DataCell(
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: 10.w, vertical: 4.h),
-                          decoration: BoxDecoration(
-                            color: statusColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20.r),
-                          ),
-                          child: Text(
-                            statusText,
-                            style: TextStyle(
-                              color: statusColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                        AppUI.chip(statusText,
+                            statusColor == AppColors.success ? AppStatus.success : AppStatus.danger),
                       ),
                     ],
                   );
@@ -2445,195 +2816,314 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 
+  Future<void> _loadManageList() async {
+    if (_manageLoading) return;
+    setState(() => _manageLoading = true);
+    try {
+      final res = await SupabaseService.client
+          .from('institution')
+          .select('ins_id, insname, inscode, inslogo, inscity, insstate, insstadate, activestatus')
+          .order('ins_id');
+      if (mounted) setState(() { _manageList = List<Map<String, dynamic>>.from(res); _manageLoaded = true; _manageLoading = false; });
+    } catch (e) {
+      debugPrint('manage institutions load error: $e');
+      if (mounted) setState(() { _manageLoaded = true; _manageLoading = false; });
+    }
+  }
+
+  /// public.institution allows activestatus 1, 2 or 9 — NOT 0, unlike most
+  /// tables in the schema. 0 is what this toggle used to send, so switching an
+  /// institution off failed on institution_activestatus_check and the row
+  /// silently rolled back to Active.
+  ///
+  /// 2 is the inactive/suspended value here; 9 means deleted elsewhere in the
+  /// system and would be wrong for a reversible switch. Everything that reads
+  /// this column tests `== 1`, so any non-1 value reads as inactive.
+  static const int _insActive = 1;
+  static const int _insInactive = 2;
+
+  Future<void> _setInstitutionActive(int insId, bool active) async {
+    final idx = _manageList.indexWhere((i) => i['ins_id'] == insId);
+    final prev = idx >= 0 ? _manageList[idx]['activestatus'] : null;
+    final next = active ? _insActive : _insInactive;
+    if (idx >= 0) setState(() => _manageList[idx]['activestatus'] = next);
+    try {
+      // institution has RLS (SELECT-only for anon) → write via SECURITY DEFINER RPC.
+      await SupabaseService.client.rpc('admin_update_institution', params: {
+        'p_ins_id': insId,
+        'p_patch': {'activestatus': next, 'updatedby': 'SUPERADMIN'},
+      });
+    } catch (e) {
+      if (idx >= 0 && mounted) setState(() => _manageList[idx]['activestatus'] = prev);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Status update failed: $e'), backgroundColor: AppColors.error));
+    }
+  }
+
+  String _fmtInsDate(dynamic v) {
+    final s = v?.toString() ?? '';
+    if (s.length < 10) return s;
+    try {
+      final d = DateTime.parse(s.substring(0, 10));
+      const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return '${d.day} ${m[d.month - 1]} ${d.year}';
+    } catch (_) {
+      return s;
+    }
+  }
+
   Widget _buildManageInstitutions(BuildContext context) {
+    if (!_manageLoaded && !_manageLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadManageList());
+    }
+    final all = _manageList;
+    final activeCount = all.where((i) => i['activestatus'] == 1).length;
+    final inactiveCount = all.length - activeCount;
+    final q = _manageSearch.trim().toLowerCase();
+    final filtered = all.where((i) {
+      if (_manageFilter == 'active' && i['activestatus'] != 1) return false;
+      if (_manageFilter == 'inactive' && i['activestatus'] == 1) return false;
+      if (q.isNotEmpty) {
+        final hay = '${i['insname'] ?? ''} ${i['inscode'] ?? ''}'.toLowerCase();
+        if (!hay.contains(q)) return false;
+      }
+      return true;
+    }).toList();
+    final total = filtered.length;
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Container(
         clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-              // Wrap so the button group flows below the title on narrow
-              // viewports instead of overflowing horizontally.
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                alignment: WrapAlignment.spaceBetween,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CardTitleBlock(icon: 'buildings-2', title: 'All Institutions', subtitle: 'manage every institution on the platform'),
-                      const SizedBox(width: 10),
-                      Text('${_institutions.length} institutes',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 8,
-                    children: [
-                      SizedBox(
-                        height: 40,
-                        child: OutlinedButton.icon(
-                          onPressed: _syncingLogos ? null : _syncInstitutionLogos,
-                          icon: _syncingLogos
-                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                              : AppIcon('refresh', size: 16, color: AppColors.accent),
-                          label: const Text('Sync Logos'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.accent,
-                            side: const BorderSide(color: AppColors.accent),
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        height: 40,
-                        child: ElevatedButton.icon(
-                          onPressed: () => setState(() => _selectedNavIndex = 1),
-                          icon: AppIcon('add', size: 16, color: Colors.white),
-                          label: const Text('Register New'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.accent,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(horizontal: 18),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: AppVerticalScrollbar(
-                builder: (context, controller) => _loadingInstitutions
-                  ? const Center(child: CircularProgressIndicator())
-                  : _institutions.isEmpty
-                      ? Center(child: Text('No institutions found',
-                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)))
-                      : ListView.separated(
-                          controller: controller,
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                          itemCount: _institutions.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final ins = _institutions[index];
-                            return Container(
-                              decoration: BoxDecoration(
-                                color: AppColors.surface,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: AppColors.border),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Builder(builder: (_) {
-                                      final logo = ins['inslogo']?.toString() ?? '';
-                                      final fallback = Text(
-                                        (ins['insname'] as String? ?? 'I')[0].toUpperCase(),
-                                        style: const TextStyle(
-                                            color: AppColors.primary,
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 18),
-                                      );
-                                      return Container(
-                                        width: 44,
-                                        height: 44,
-                                        decoration: BoxDecoration(
-                                          color: AppColors.primary.withValues(alpha: 0.1),
-                                          borderRadius: BorderRadius.circular(10),
-                                        ),
-                                        clipBehavior: Clip.antiAlias,
-                                        alignment: Alignment.center,
-                                        child: logo.isEmpty
-                                            ? fallback
-                                            : Image.network(
-                                                logo,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (_, __, ___) => fallback,
-                                              ),
-                                      );
-                                    }),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            ins['insname'] ?? '',
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                                fontSize: 14,
-                                                color: AppColors.textPrimary,
-                                                height: 1.2),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'Code: ${ins['inscode'] ?? ''}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                                fontSize: 12,
-                                                color: AppColors.textSecondary,
-                                                fontWeight: FontWeight.w600),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: ins['activestatus'] == 1
-                                            ? AppColors.success.withValues(alpha: 0.12)
-                                            : AppColors.error.withValues(alpha: 0.12),
-                                        borderRadius: BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        ins['activestatus'] == 1 ? 'Active' : 'Inactive',
-                                        style: TextStyle(
-                                          color: ins['activestatus'] == 1
-                                              ? AppColors.success
-                                              : AppColors.error,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-            ),
-            ),
-          ],
-        ),
+        decoration: AppUI.card(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _manageHeader(all.length),
+          Padding(padding: const EdgeInsets.fromLTRB(16, 4, 16, 12), child: _manageTabsAndSearch(all.length, activeCount, inactiveCount)),
+          Expanded(child: _loadingInstitutions || _manageLoading
+              ? const Center(child: CircularProgressIndicator())
+              : total == 0
+                  ? AppUI.empty(
+                      icon: 'buildings-2',
+                      title: 'No institutions found',
+                      why: all.isEmpty
+                          ? 'No institution has been registered yet. Use Register New to add one.'
+                          : 'No institution matches this filter or search. Clear the search or pick All.')
+                  : _manageTable(filtered)),
+        ]),
       ),
     );
+  }
+
+  Widget _manageHeader(int count) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+        child: Wrap(spacing: 12, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, alignment: WrapAlignment.spaceBetween, children: [
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            AppUI.iconTile('buildings-2'),
+            const SizedBox(width: 12),
+            Text('Institutions', style: AppUI.cardTitle),
+            const SizedBox(width: 10),
+            AppUI.chip('$count Total', AppStatus.info),
+          ]),
+          Wrap(spacing: 10, runSpacing: 8, children: [
+            OutlinedButton(
+              onPressed: _manageLoading ? null : () { setState(() => _manageLoaded = false); _loadManageList(); },
+              // Icon-only: square at the theme control height.
+              style: OutlinedButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size(AppUI.controlHeight(context), AppUI.controlHeight(context))),
+              child: const AppIcon('refresh', size: 17, color: AppColors.primary),
+            ),
+            ElevatedButton.icon(
+              onPressed: () => setState(() { _editInstitution = null; _selectedNavIndex = 1; }),
+              icon: const AppIcon('add', size: 16, color: Colors.white),
+              label: const Text('Register New'),
+            ),
+          ]),
+        ]),
+      );
+
+  Widget _manageTabsAndSearch(int allCount, int activeCount, int inactiveCount) {
+    Widget tab(String label, int cnt, String value, Color cntColor) {
+      final sel = _manageFilter == value;
+      return Padding(padding: const EdgeInsets.only(right: 8), child: InkWell(
+        onTap: () => setState(() { _manageFilter = value; _managePage = 0; }),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(color: sel ? AppColors.primary : Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: sel ? AppColors.primary : AppColors.border)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: sel ? Colors.white : AppColors.textPrimary)),
+            const SizedBox(width: 8),
+            Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1), decoration: BoxDecoration(color: sel ? Colors.white.withValues(alpha: 0.25) : cntColor.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(20)), child: Text('$cnt', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: sel ? Colors.white : cntColor))),
+          ]),
+        ),
+      ));
+    }
+    return Row(children: [
+      tab('All', allCount, 'all', AppColors.primary),
+      tab('Active', activeCount, 'active', AppColors.success),
+      tab('Inactive', inactiveCount, 'inactive', AppColors.error),
+      const Spacer(),
+      SizedBox(width: 320, child: TextField(
+        onChanged: (v) => setState(() { _manageSearch = v; _managePage = 0; }),
+        style: AppUI.fieldText(context),
+        decoration: AppUI.field(context, 'Search by institution name or code...').copyWith(
+          prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
+        ),
+      )),
+    ]);
+  }
+
+  Widget _manageTable(List<Map<String, dynamic>> rows) {
+    TextStyle h() => AppUI.tableHead;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(color: AppColors.tableHeadBg, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), child: Row(children: [
+        Expanded(flex: 4, child: Text('INSTITUTION', style: h())),
+        Expanded(flex: 2, child: Text('CODE', style: h())),
+        SizedBox(width: 110, child: Text('STATUS', style: h())),
+        Expanded(flex: 2, child: Text('REGISTERED ON', style: h())),
+        SizedBox(width: 200, child: Text('ACTION', textAlign: TextAlign.center, style: h())),
+      ])),
+      Expanded(child: ListView.separated(
+        padding: EdgeInsets.zero,
+        itemCount: rows.length,
+        separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+        itemBuilder: (context, i) => _manageRow(rows[i]),
+      )),
+    ]);
+  }
+
+  /// ins_id currently uploading a logo, so only that row shows a spinner.
+  int? _logoUploadingIns;
+
+  /// Replace an institution's logo. Registration is the only other place a
+  /// logo can be set, and backfillInstitutionLogos deliberately skips rows that
+  /// already have one — so without this a logo could be set once and never
+  /// changed.
+  Future<void> _changeInstitutionLogo(Map<String, dynamic> ins) async {
+    final insId = ins['ins_id'] as int?;
+    final inscode = ins['inscode']?.toString().trim();
+    if (insId == null || inscode == null || inscode.isEmpty) return;
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg'],
+    );
+    if (result == null || result.files.single.path == null) return;
+    final picked = result.files.single;
+    final ext = picked.extension?.toLowerCase() ?? '';
+    if (!['png', 'jpg', 'jpeg'].contains(ext)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Only PNG, JPG, JPEG formats are allowed'),
+            backgroundColor: AppColors.error));
+      }
+      return;
+    }
+
+    setState(() => _logoUploadingIns = insId);
+    try {
+      // Same path shape registration uses, so the bucket keeps one file per
+      // institution instead of accumulating a copy per upload.
+      final path = 'logos/$inscode.$ext';
+      await SupabaseService.client.storage.from('InstitutionLogos').upload(
+            path,
+            File(picked.path!),
+            fileOptions: const FileOptions(upsert: true),
+          );
+      var url = SupabaseService.client.storage
+          .from('InstitutionLogos')
+          .getPublicUrl(path);
+      // The path never changes, so without a cache-buster the CDN keeps
+      // serving the previous image and the new logo appears not to save.
+      url = '$url?v=${DateTime.now().millisecondsSinceEpoch}';
+      await SupabaseService.client
+          .from('institution')
+          .update({'inslogo': url}).eq('ins_id', insId);
+      if (!mounted) return;
+      setState(() {
+        final i = _manageList.indexWhere((e) => e['ins_id'] == insId);
+        if (i >= 0) _manageList[i]['inslogo'] = url;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Logo updated'), backgroundColor: AppColors.success));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Logo upload failed. ${friendlyError(e)}'),
+            backgroundColor: AppColors.error));
+      }
+    } finally {
+      if (mounted) setState(() => _logoUploadingIns = null);
+    }
+  }
+
+  Widget _manageRow(Map<String, dynamic> ins) {
+    final active = ins['activestatus'] == 1;
+    final insId = ins['ins_id'] as int? ?? 0;
+    final loc = [ins['inscity'], ins['insstate']].where((e) => (e?.toString().trim().isNotEmpty ?? false)).join(', ');
+    final logo = ins['inslogo']?.toString() ?? '';
+    final fallback = Text((ins['insname'] as String? ?? 'I')[0].toUpperCase(), style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w800, fontSize: 18));
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), child: Row(children: [
+      // INSTITUTION
+      Expanded(flex: 4, child: Row(children: [
+        Container(width: 44, height: 44, clipBehavior: Clip.antiAlias, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)), child: logo.isEmpty ? fallback : Image.network(logo, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(ins['insname']?.toString() ?? '', maxLines: 2, overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, height: 1.2)),
+          if (loc.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(children: [const Icon(Icons.location_on_outlined, size: 13, color: AppColors.textLight), const SizedBox(width: 3), Flexible(child: Text(loc, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted.copyWith(fontSize: 12)))]),
+          ],
+        ])),
+      ])),
+      // CODE
+      Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text(ins['inscode']?.toString() ?? '', style: AppUI.cell.copyWith(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 2),
+        Text('Institution Code', style: AppUI.muted.copyWith(fontSize: 12)),
+      ])),
+      // STATUS
+      SizedBox(width: 110, child: Align(alignment: Alignment.centerLeft, child: AppUI.chip(active ? 'Active' : 'Inactive', active ? AppStatus.success : AppStatus.danger))),
+      // REGISTERED ON
+      Expanded(flex: 2, child: Row(children: [const Icon(Icons.calendar_today_outlined, size: 14, color: AppColors.textLight), const SizedBox(width: 6), Flexible(child: Text(_fmtInsDate(ins['insstadate']), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(color: AppColors.textSecondary)))])),
+      // ACTION
+      SizedBox(width: 280, child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        OutlinedButton.icon(
+          onPressed: _logoUploadingIns == insId ? null : () => _changeInstitutionLogo(ins),
+          icon: _logoUploadingIns == insId
+              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.image_outlined, size: 15),
+          label: const Text('Logo'),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          onPressed: () => setState(() { _editInstitution = ins; _selectedNavIndex = 1; }),
+          icon: const Icon(Icons.edit_outlined, size: 15),
+          label: const Text('Edit'),
+        ),
+        const SizedBox(width: 10),
+        Switch(value: active, activeThumbColor: Colors.white, activeTrackColor: AppColors.primary, onChanged: (v) => _setInstitutionActive(insId, v)),
+      ])),
+    ]));
+  }
+
+  Widget _managePagination(int total, int pageCount, int start) {
+    final from = total == 0 ? 0 : start + 1;
+    final to = (start + _managePerPage).clamp(0, total);
+    Widget navBtn(IconData ic, VoidCallback? onTap) => InkWell(onTap: onTap, borderRadius: BorderRadius.circular(8), child: Container(width: 32, height: 32, alignment: Alignment.center, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)), child: Icon(ic, size: 18, color: onTap == null ? AppColors.textLight : AppColors.textPrimary)));
+    final startPage = (_managePage - 2).clamp(0, (pageCount - 5).clamp(0, pageCount)).toInt();
+    final endPage = (startPage + 5).clamp(0, pageCount).toInt();
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), child: Row(children: [
+      Text(AppUI.showing(from, to, total), style: AppUI.muted),
+      const Spacer(),
+      navBtn(Icons.chevron_left, _managePage > 0 ? () => setState(() => _managePage--) : null),
+      const SizedBox(width: 6),
+      for (int p = startPage; p < endPage; p++) ...[
+        InkWell(onTap: () => setState(() => _managePage = p), borderRadius: BorderRadius.circular(8), child: Container(width: 32, height: 32, alignment: Alignment.center, decoration: BoxDecoration(color: p == _managePage ? AppColors.primary : Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: p == _managePage ? AppColors.primary : AppColors.border)), child: Text('${p + 1}', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: p == _managePage ? Colors.white : AppColors.textPrimary)))),
+        const SizedBox(width: 6),
+      ],
+      navBtn(Icons.chevron_right, _managePage < pageCount - 1 ? () => setState(() => _managePage++) : null),
+      const SizedBox(width: 14),
+      Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9), border: Border.all(color: AppColors.border)), child: Text('$_managePerPage / page', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
+    ]));
   }
 }
 
@@ -2653,9 +3143,14 @@ class _InstitutionFinanceSummary {
   final double totalDemand;
   double totalCollected;
   double totalPending;
+  final double totalConcession;
+  final double totalMisc;
+  final double totalFine;
   final int transactionCount;
+  final int studentCount;
   final bool activeStatus;
   double todayCollected;
+  double todayMisc; // today's miscellaneous collection (separate from fee)
   double pendingApproval;
 
   _InstitutionFinanceSummary({
@@ -2664,7 +3159,12 @@ class _InstitutionFinanceSummary {
     required this.insCode,
     this.insLogo,
     this.todayCollected = 0,
+    this.todayMisc = 0,
     this.pendingApproval = 0,
+    this.totalConcession = 0,
+    this.totalMisc = 0,
+    this.totalFine = 0,
+    this.studentCount = 0,
     required this.totalDemand,
     required this.totalCollected,
     required this.totalPending,
@@ -2744,13 +3244,13 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
   @override
   Widget build(BuildContext context) {
     final s = widget.summary;
-    const collectionColor = Color(0xFF43A047);
-    const pendingColor = Color(0xFFEF5350);
+    const collectionColor = AppColors.success;
+    const pendingColor = AppColors.error;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
       appBar: AppBar(
-        title: Text(s.insName),
+        title: Text(s.insName, style: AppUI.cardTitle),
         backgroundColor: Colors.white,
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
@@ -2768,18 +3268,15 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                         child: Container(
                           padding: EdgeInsets.symmetric(vertical: 16.h),
                           decoration: BoxDecoration(
-                            color: collectionColor.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(12.r),
+                            color: AppColors.successBg,
+                            borderRadius: BorderRadius.circular(AppUI.cardRadius),
                             border: Border.all(
                                 color: collectionColor.withValues(alpha: 0.2)),
                           ),
                           child: Column(
                             children: [
-                              Text('Total Collection',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: collectionColor)),
+                              Text('TOTAL COLLECTION',
+                                  style: AppUI.caps.copyWith(color: collectionColor)),
                               SizedBox(height: 6.h),
                               Text(
                                   _fmt(_classWiseData.fold<double>(
@@ -2800,18 +3297,15 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                         child: Container(
                           padding: EdgeInsets.symmetric(vertical: 16.h),
                           decoration: BoxDecoration(
-                            color: pendingColor.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(12.r),
+                            color: AppColors.errorBg,
+                            borderRadius: BorderRadius.circular(AppUI.cardRadius),
                             border: Border.all(
                                 color: pendingColor.withValues(alpha: 0.2)),
                           ),
                           child: Column(
                             children: [
-                              Text('Total Pending',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: pendingColor)),
+                              Text('TOTAL PENDING',
+                                  style: AppUI.caps.copyWith(color: pendingColor)),
                               SizedBox(height: 6.h),
                               Text(
                                   _fmt(_classWiseData.fold<double>(
@@ -2837,10 +3331,10 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                     padding:
                         EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.08),
+                      color: AppColors.tableHeadBg,
                       borderRadius:
-                          BorderRadius.vertical(top: Radius.circular(12.r)),
-                      border: Border.all(color: AppColors.border),
+                          BorderRadius.vertical(top: Radius.circular(AppUI.cardRadius)),
+                      border: Border.all(color: AppColors.cardBorder),
                     ),
                     child: Row(
                       children: [
@@ -2848,31 +3342,11 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                             flex: 3,
                             child: Padding(
                                 padding: EdgeInsets.fromLTRB(16.w, 0, 24.w, 0),
-                                child: Text('Course - Class',
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700)))),
-                        Expanded(
-                            child: Text('Students',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.accent),
-                                textAlign: TextAlign.right)),
-                        Expanded(
-                            child: Text('Collection',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: collectionColor),
-                                textAlign: TextAlign.right)),
-                        Expanded(
-                            child: Text('Pending',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: pendingColor),
-                                textAlign: TextAlign.right)),
+                                child: Text(schoolTerm('Course - Class').toUpperCase(),
+                                    style: AppUI.tableHead))),
+                        AppUI.th('Students', align: TextAlign.right),
+                        AppUI.th('Collection', align: TextAlign.right),
+                        AppUI.th('Pending', align: TextAlign.right),
                       ],
                     ),
                   ),
@@ -2880,24 +3354,22 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.vertical(
-                            bottom: Radius.circular(12.r)),
-                        border: Border(
-                          left: BorderSide(color: AppColors.border),
-                          right: BorderSide(color: AppColors.border),
-                          bottom: BorderSide(color: AppColors.border),
+                            bottom: Radius.circular(AppUI.cardRadius)),
+                        border: const Border(
+                          left: BorderSide(color: AppColors.cardBorder),
+                          right: BorderSide(color: AppColors.cardBorder),
+                          bottom: BorderSide(color: AppColors.cardBorder),
                         ),
                       ),
                       child: _classWiseData.isEmpty
-                          ? Center(
-                              child: Text('No data',
-                                  style: TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 13)))
+                          ? AppUI.empty(
+                              title: 'No data',
+                              why: 'This institution has no fee demand or collection recorded yet.')
                           : ListView.separated(
                               controller: controller,
                               itemCount: _classWiseData.length,
                               separatorBuilder: (_, __) =>
-                                  const Divider(height: 1, color: AppColors.border),
+                                  const Divider(height: 1, color: AppColors.divider),
                               itemBuilder: (context, index) {
                                 final row = _classWiseData[index];
                                 final cls = row['class'] as String;
@@ -2913,30 +3385,18 @@ class _InstitutionDetailPageState extends State<_InstitutionDetailPage> {
                                       Expanded(
                                           flex: 3,
                                           child: Text(cls,
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight:
-                                                      FontWeight.w600))),
+                                              style: AppUI.cell)),
                                       Expanded(
                                           child: Text('${row['students'] ?? 0}',
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: AppColors.accent),
+                                              style: AppUI.cell,
                                               textAlign: TextAlign.right)),
                                       Expanded(
                                           child: Text(_fmt(collection),
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: collectionColor),
+                                              style: AppUI.money.copyWith(color: collectionColor),
                                               textAlign: TextAlign.right)),
                                       Expanded(
                                           child: Text(_fmt(pending),
-                                              style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: pendingColor),
+                                              style: AppUI.money.copyWith(color: pendingColor),
                                               textAlign: TextAlign.right)),
                                     ],
                                   ),
@@ -3226,16 +3686,15 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                 padding: const EdgeInsets.only(right: 8),
                 child: InkWell(
                   onTap: onTap,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
                       border: Border.all(color: AppColors.border),
                     ),
-                    child: Text(label,
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                    child: Text(label, style: AppUI.label),
                   ),
                 ),
               );
@@ -3251,11 +3710,13 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                 );
                 if (picked != null) onChanged(picked);
               },
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white,
+                  border: Border.all(color: value != null ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -3266,10 +3727,9 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                       value != null
                           ? '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}'
                           : hint,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: value != null ? AppColors.textPrimary : AppColors.textSecondary),
+                      style: value != null
+                          ? AppUI.fieldText(ctx)
+                          : AppUI.fieldText(ctx).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
                     ),
                   ],
                 ),
@@ -3277,18 +3737,14 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
             );
           }
 
-          Widget sectionLabel(String text) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.3)),
-              );
+          Widget sectionLabel(String text) => AppUI.sectionLabel(text);
 
           return AlertDialog(
             backgroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
             title: Row(
               children: [
-                Text('Filters', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                Text('Filters', style: AppUI.cardTitle),
                 const Spacer(),
                 IconButton(
                   onPressed: () => Navigator.pop(ctx),
@@ -3344,15 +3800,9 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
             actions: [
               TextButton(
                 onPressed: () => setStateDialog(() { from = null; to = null; }),
-                child: Text('Clear', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+                child: const Text('Clear'),
               ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
                 onPressed: () {
                   setState(() {
                     _filterFrom = from;
@@ -3405,10 +3855,9 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
               textAlign: align,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: weight ?? FontWeight.w600,
-                  color: color ?? AppColors.textSecondary)),
+              style: AppUI.cell.copyWith(
+                  fontWeight: weight ?? FontWeight.w500,
+                  color: color ?? AppColors.textPrimary)),
         );
 
     final rows = <Widget>[];
@@ -3425,7 +3874,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
           child: Row(
             children: [
               cell(i == 0 ? course : '', 3,
-                  weight: FontWeight.w700, color: AppColors.accent),
+                  weight: FontWeight.w700, color: AppColors.primary),
               cell('${r['class'] ?? ''}', 2),
               cell('${_studentsOf(r)}', 2, align: TextAlign.right),
               cell(_fmt(amount), 4,
@@ -3541,26 +3990,10 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                 children: [
                   LayoutBuilder(builder: (context, c) {
                     final isMobile = c.maxWidth < 700;
-                    final backButton = InkWell(
-                      onTap: widget.onBack ?? () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(10),
-                      child: Container(
-                        height: 40,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                          color: AppColors.accent,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
-                            const SizedBox(width: 6),
-                            const Text('Back',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-                          ],
-                        ),
-                      ),
+                    final backButton = ElevatedButton.icon(
+                      onPressed: widget.onBack ?? () => Navigator.of(context).pop(),
+                      icon: AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
+                      label: const Text('Back'),
                     );
                     final totalPill = Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -3571,42 +4004,21 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('$totalLabel: ',
-                              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                          Text('$totalLabel: ', style: AppUI.muted),
                           Text(_fmt(total),
-                              style: const TextStyle(fontSize: 13, color: AppColors.accent, fontWeight: FontWeight.w800)),
+                              style: AppUI.money.copyWith(color: AppColors.primary, fontWeight: FontWeight.w800)),
                         ],
                       ),
                     );
-                    final dateBtn = SizedBox(
-                      height: 40,
-                      child: OutlinedButton.icon(
-                        onPressed: _openDateFilter,
-                        icon: AppIcon('calendar-1', size: 16, color: AppColors.textPrimary),
-                        label: const Text('Date',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppColors.border),
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
+                    final dateBtn = OutlinedButton.icon(
+                      onPressed: _openDateFilter,
+                      icon: AppIcon('calendar-1', size: 16, color: AppColors.primary),
+                      label: const Text('Date'),
                     );
-                    final refreshBtn = SizedBox(
-                      height: 40,
-                      child: ElevatedButton.icon(
-                        onPressed: _load,
-                        icon: AppIcon('refresh', size: 16, color: Colors.white),
-                        label: const Text('Refresh'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 18),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                        ),
-                      ),
+                    final refreshBtn = ElevatedButton.icon(
+                      onPressed: _load,
+                      icon: AppIcon('refresh', size: 16, color: Colors.white),
+                      label: const Text('Refresh'),
                     );
                     final breadcrumbText = Row(
                       mainAxisSize: MainAxisSize.min,
@@ -3615,23 +4027,19 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                           child: Text(widget.summary.insName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                              style: AppUI.muted),
                         ),
                         const SizedBox(width: 6),
                         AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                         const SizedBox(width: 6),
-                        Text('Course-wise $valueLabel',
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                        Text(schoolTerm('Course-wise $valueLabel'),
+                            style: AppUI.label),
                       ],
                     );
 
                     return Container(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.border),
-                      ),
+                      decoration: AppUI.card(),
                       child: isMobile
                           ? Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3642,16 +4050,16 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                       child: Text(widget.summary.insName,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                                          style: AppUI.muted),
                                     ),
                                     const SizedBox(width: 6),
                                     AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                                     const SizedBox(width: 6),
                                     Flexible(
-                                      child: Text('Course-wise $valueLabel',
+                                      child: Text(schoolTerm('Course-wise $valueLabel'),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                          style: AppUI.label),
                                     ),
                                   ],
                                 ),
@@ -3671,7 +4079,7 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                               children: [
                                 backButton,
                                 const SizedBox(width: 12),
-                                Container(width: 1, height: 18, color: AppColors.border),
+                                Container(width: 1, height: 18, color: AppColors.divider),
                                 const SizedBox(width: 12),
                                 breadcrumbText,
                                 const Spacer(),
@@ -3688,15 +4096,11 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                             ),
                     );
                   }),
-                  const SizedBox(height: 16),
+                  SizedBox(height: AppUI.gap),
                   Expanded(
                     child: Container(
                       clipBehavior: Clip.antiAlias,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.border),
-                      ),
+                      decoration: AppUI.card(),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -3704,20 +4108,13 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
                             child: Row(
                               children: [
-                                AppIcon(titleIcon,
-                                    size: 18, color: AppColors.accent),
-                                const SizedBox(width: 8),
-                                const Text('Course-wise Breakdown',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.textPrimary)),
+                                AppUI.iconTile(titleIcon, size: 18),
+                                const SizedBox(width: 12),
+                                Text(schoolTerm('Course-wise Breakdown'),
+                                    style: AppUI.cardTitle),
                                 const Spacer(),
-                                Text('${_rows.length} ${_rows.length == 1 ? "course" : "courses"}',
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary,
-                                        fontWeight: FontWeight.w600)),
+                                Text(schoolTerm('${_rows.length} ${_rows.length == 1 ? "course" : "courses"}'),
+                                    style: AppUI.muted),
                               ],
                             ),
                           ),
@@ -3728,8 +4125,8 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                 clipBehavior: Clip.antiAlias,
                                 decoration: BoxDecoration(
                                   color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: AppColors.border),
+                                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                                  border: Border.all(color: AppColors.cardBorder),
                                 ),
                                 child: Column(
                                   children: [
@@ -3741,51 +4138,32 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                         children: [
                                           Expanded(
                                               flex: 3,
-                                              child: Text('COURSE',
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w700,
-                                                      color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                              child: Text(schoolTerm('COURSE'),
+                                                  style: AppUI.tableHead)),
                                           Expanded(
                                               flex: 2,
-                                              child: Text('CLASS',
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w700,
-                                                      color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                              child: Text(schoolTerm('CLASS'),
+                                                  style: AppUI.tableHead)),
                                           Expanded(
                                               flex: 2,
                                               child: Text(
                                                   studentsHeader,
                                                   textAlign: TextAlign.right,
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w700,
-                                                      color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                  style: AppUI.tableHead)),
                                           Expanded(
                                               flex: 4,
                                               child: Text(
                                                   valueLabel.toUpperCase(),
                                                   textAlign: TextAlign.right,
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w700,
-                                                      color: AppColors.textPrimary,
-                                                      letterSpacing: 0.4))),
+                                                  style: AppUI.tableHead)),
                                         ],
                                       ),
                                     ),
                                     Expanded(
                                       child: _rows.isEmpty
-                                          ? Center(
-                                              child: Text('No data',
-                                                  style: TextStyle(
-                                                      fontSize: 13,
-                                                      color: AppColors.textSecondary,
-                                                      fontWeight: FontWeight.w600)))
+                                          ? AppUI.empty(
+                                              title: 'No data',
+                                              why: 'Nothing recorded for this institution in the selected range.')
                                           : _buildCourseBreakdownTable(rowPadH),
                                     ),
                                     if (_rows.isNotEmpty)
@@ -3809,38 +4187,30 @@ class _CourseWiseCollectionPageState extends State<_CourseWiseCollectionPage> {
                                         return Container(
                                           decoration: const BoxDecoration(
                                             color: AppColors.tableHeadBg,
-                                            border: Border(top: BorderSide(color: AppColors.border)),
+                                            border: Border(top: BorderSide(color: AppColors.divider)),
                                           ),
                                           padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 14),
                                           child: Row(
                                             children: [
-                                              const Expanded(
+                                              Expanded(
                                                   flex: 3,
                                                   child: Text('GRAND TOTAL',
-                                                      style: TextStyle(
-                                                          fontSize: 13,
+                                                      style: AppUI.label.copyWith(
                                                           fontWeight: FontWeight.w800,
-                                                          color: AppColors.textPrimary,
                                                           letterSpacing: 0.4))),
                                               const Expanded(flex: 2, child: SizedBox()),
                                               Expanded(
                                                   flex: 2,
                                                   child: Text('$totalStudents',
                                                       textAlign: TextAlign.right,
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
-                                                          fontWeight: FontWeight.w800,
-                                                          color: AppColors.textPrimary))),
+                                                      style: AppUI.money.copyWith(fontWeight: FontWeight.w800))),
                                               Expanded(
                                                   flex: 4,
                                                   child: Text(_fmt(totalAmount),
                                                       textAlign: TextAlign.right,
                                                       maxLines: 1,
                                                       overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
-                                                          fontWeight: FontWeight.w800,
-                                                          color: AppColors.textPrimary))),
+                                                      style: AppUI.money.copyWith(fontWeight: FontWeight.w800))),
                                             ],
                                           ),
                                         );
@@ -3926,7 +4296,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text('Only PNG, JPG, JPEG formats are allowed'),
-              backgroundColor: Colors.red),
+              backgroundColor: AppColors.error),
         );
       }
       return;
@@ -3970,13 +4340,13 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
           .eq('trust_id', 1);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trust settings saved'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Trust settings saved'), backgroundColor: AppColors.success),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Failed to save. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -4040,43 +4410,18 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
 
   Widget _buildTrustCard(bool isMobile) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: EdgeInsets.only(bottom: AppUI.gap),
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Padding(
         padding: EdgeInsets.fromLTRB(isMobile ? 16 : 20, 20, isMobile ? 16 : 20, 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: AppIcon('buildings-2', color: AppColors.accent, size: 18),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Trust Settings',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                      SizedBox(height: 2),
-                      Text('Name shown at the top of the super-admin dashboard',
-                          style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                    ],
-                  ),
-                ),
-              ],
+            AppUI.cardHeader(
+              icon: 'buildings-2',
+              title: 'Trust Settings',
+              subtitle: 'Name shown at the top of the super-admin dashboard',
             ),
             const SizedBox(height: 20),
             Row(
@@ -4110,8 +4455,8 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                             height: 56,
                             decoration: BoxDecoration(
                               color: AppColors.surface,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: AppColors.border),
+                              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                              border: Border.all(color: AppColors.cardBorder),
                             ),
                             clipBehavior: Clip.antiAlias,
                             child: _trustLogoFile != null
@@ -4137,22 +4482,15 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                                   _trustLogoFileName ?? (((_trustLogoUrl ?? '').isNotEmpty) ? 'Current logo' : 'No logo selected'),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                                  style: AppUI.label,
                                 ),
                                 const SizedBox(height: 6),
                                 Row(
                                   children: [
                                     OutlinedButton.icon(
                                       onPressed: _pickTrustLogo,
-                                      icon: AppIcon('document-upload', size: 14, color: AppColors.accent),
+                                      icon: AppIcon('document-upload', size: 14, color: AppColors.primary),
                                       label: Text(_trustLogoFile == null && (_trustLogoUrl ?? '').isEmpty ? 'Choose file' : 'Change'),
-                                      style: OutlinedButton.styleFrom(
-                                        side: const BorderSide(color: AppColors.border),
-                                        foregroundColor: AppColors.textPrimary,
-                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                                      ),
                                     ),
                                     if (_trustLogoFile != null || (_trustLogoUrl ?? '').isNotEmpty) ...[
                                       const SizedBox(width: 8),
@@ -4162,7 +4500,8 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                                           _trustLogoFileName = null;
                                           _trustLogoUrl = null;
                                         }),
-                                        child: const Text('Remove', style: TextStyle(fontSize: 12, color: Colors.redAccent, fontWeight: FontWeight.w600)),
+                                        style: TextButton.styleFrom(foregroundColor: AppColors.error),
+                                        child: const Text('Remove'),
                                       ),
                                     ],
                                   ],
@@ -4179,23 +4518,12 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
             ),
             const SizedBox(height: 28),
             Center(
-              child: SizedBox(
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: _savingTrust ? null : _saveTrust,
-                  icon: _savingTrust
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : AppIcon('save-2', size: 18, color: Colors.white),
-                  label: Text(_savingTrust ? 'Saving…' : 'Save Trust',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
+              child: ElevatedButton.icon(
+                onPressed: _savingTrust ? null : _saveTrust,
+                icon: _savingTrust
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : AppIcon('save-2', size: 18, color: Colors.white),
+                label: Text(_savingTrust ? 'Saving…' : 'Save Trust'),
               ),
             ),
           ],
@@ -4225,7 +4553,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
       if (!ok) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Current password is incorrect'), backgroundColor: Colors.red),
+            const SnackBar(content: Text('Current password is incorrect'), backgroundColor: AppColors.error),
           );
         }
         setState(() => _saving = false);
@@ -4252,7 +4580,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings updated successfully'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Settings updated successfully'), backgroundColor: AppColors.success),
         );
         _currentPwdCtrl.clear();
         _newPwdCtrl.clear();
@@ -4261,7 +4589,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Update failed. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Update failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -4269,16 +4597,9 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     }
   }
 
-  Widget _label(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(text,
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary)),
-      );
+  Widget _label(String text) => AppUI.fieldLabel(text);
 
-  TextStyle _fieldStyle() => TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary);
+  TextStyle _fieldStyle() => AppUI.fieldText(context);
 
   String? _validateEmail(String? v) {
     final t = (v ?? '').trim();
@@ -4289,25 +4610,12 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
     return null;
   }
 
-  // [filled] = the field has a value. Filled fields get an amber (accent)
-  // border; empty fields stay grey; the focused border is always amber.
-  InputDecoration _inputDec(String hint, {Widget? suffix, bool filled = false}) => InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.55), fontSize: 13, fontWeight: FontWeight.w500),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: filled ? AppColors.accent : AppColors.border, width: 1.5)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: filled ? AppColors.accent : AppColors.border, width: 1.5)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-        errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.error, width: 1.5)),
-        focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.error, width: 1.5)),
-        filled: true,
-        fillColor: Colors.white,
+  // [filled] = the field has a value (accent edge); the shared kit field.
+  InputDecoration _inputDec(String hint, {Widget? suffix, bool filled = false}) =>
+      AppUI.field(context, hint, filled: filled, suffix: suffix).copyWith(
         // No hover tint — read-only fields shouldn't look interactive.
         hoverColor: Colors.transparent,
-        isDense: false,
-        constraints: const BoxConstraints(minHeight: 48, maxHeight: 48),
-        suffixIcon: suffix,
-        suffixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 16, maxHeight: 16),
+        suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 32),
       );
 
   @override
@@ -4321,11 +4629,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
           _buildTrustCard(isMobile),
           Container(
             clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(),
             child: Form(
               key: _formKey,
               child: Padding(
@@ -4333,32 +4637,11 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                 child: FocusTraversalGroup(
                   child: Column(
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: AppColors.accent.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: AppIcon('setting-2', color: AppColors.accent, size: 18),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('Account Settings',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                        SizedBox(height: 2),
-                        Text('Manage your account credentials',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                      ],
+                    AppUI.cardHeader(
+                      icon: 'setting-2',
+                      title: 'Account Settings',
+                      subtitle: 'Manage your account credentials',
                     ),
-                  ),
-                ],
-              ),
               const SizedBox(height: 24),
               if (isMobile) ...[
                 _label('Username'),
@@ -4434,31 +4717,10 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                 },
               ),
               const SizedBox(height: 24),
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: AppIcon('lock', color: AppColors.accent, size: 18),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('Change Password',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                        SizedBox(height: 2),
-                        Text('Leave new password blank to keep current',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-                      ],
-                    ),
-                  ),
-                ],
+              AppUI.cardHeader(
+                icon: 'lock',
+                title: 'Change Password',
+                subtitle: 'Leave new password blank to keep current',
               ),
               const SizedBox(height: 16),
               Align(
@@ -4473,7 +4735,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                   'Enter current password',
                   filled: _currentPwdCtrl.text.isNotEmpty,
                   suffix: IconButton(
-                    icon: AppIcon(_showCurrent ? 'eye-slash' : 'eye', size: 12, color: AppColors.textSecondary),
+                    icon: AppIcon(_showCurrent ? 'eye-slash' : 'eye', size: 16, color: AppColors.textSecondary),
                     onPressed: () => setState(() => _showCurrent = !_showCurrent),
                   ),
                 ),
@@ -4491,7 +4753,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                     'Leave blank to keep current',
                     filled: _newPwdCtrl.text.isNotEmpty,
                     suffix: IconButton(
-                      icon: AppIcon(_showNew ? 'eye-slash' : 'eye', size: 12, color: AppColors.textSecondary),
+                      icon: AppIcon(_showNew ? 'eye-slash' : 'eye', size: 16, color: AppColors.textSecondary),
                       onPressed: () => setState(() => _showNew = !_showNew),
                     ),
                   ),
@@ -4511,7 +4773,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                     'Re-enter new password',
                     filled: _confirmPwdCtrl.text.isNotEmpty,
                     suffix: IconButton(
-                      icon: AppIcon(_showConfirm ? 'eye-slash' : 'eye', size: 12, color: AppColors.textSecondary),
+                      icon: AppIcon(_showConfirm ? 'eye-slash' : 'eye', size: 16, color: AppColors.textSecondary),
                       onPressed: () => setState(() => _showConfirm = !_showConfirm),
                     ),
                   ),
@@ -4534,7 +4796,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                         'Leave blank to keep current',
                         filled: _newPwdCtrl.text.isNotEmpty,
                         suffix: IconButton(
-                          icon: AppIcon(_showNew ? 'eye-slash' : 'eye', size: 12, color: AppColors.textSecondary),
+                          icon: AppIcon(_showNew ? 'eye-slash' : 'eye', size: 16, color: AppColors.textSecondary),
                           onPressed: () => setState(() => _showNew = !_showNew),
                         ),
                       ),
@@ -4556,7 +4818,7 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                         'Re-enter new password',
                         filled: _confirmPwdCtrl.text.isNotEmpty,
                         suffix: IconButton(
-                          icon: AppIcon(_showConfirm ? 'eye-slash' : 'eye', size: 12, color: AppColors.textSecondary),
+                          icon: AppIcon(_showConfirm ? 'eye-slash' : 'eye', size: 16, color: AppColors.textSecondary),
                           onPressed: () => setState(() => _showConfirm = !_showConfirm),
                         ),
                       ),
@@ -4571,23 +4833,12 @@ class _SuperAdminSettingsState extends State<_SuperAdminSettings> {
                 ]),
               const SizedBox(height: 28),
               Center(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: _saving ? null : _save,
-                    icon: _saving
-                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : AppIcon('save-2', size: 18, color: Colors.white),
-                    label: Text(_saving ? 'Saving...' : 'Save Changes',
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(horizontal: 32),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
+                child: ElevatedButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : AppIcon('save-2', size: 18, color: Colors.white),
+                  label: Text(_saving ? 'Saving...' : 'Save Changes'),
                 ),
               ),
             ],
@@ -4686,26 +4937,10 @@ class _AggregateDrilldownPage extends StatelessWidget {
     final columnLabel = isMobile ? mobileColLabel : _columnLabel;
     final rowPadH = isMobile ? 12.0 : 16.0;
 
-    final backButton = InkWell(
-      onTap: onBack ?? () => Navigator.of(context).pop(),
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: AppColors.accent,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
-            const SizedBox(width: 6),
-            const Text('Back',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-          ],
-        ),
-      ),
+    final backButton = ElevatedButton.icon(
+      onPressed: onBack ?? () => Navigator.of(context).pop(),
+      icon: AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
+      label: const Text('Back'),
     );
     final totalPill = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -4716,10 +4951,9 @@ class _AggregateDrilldownPage extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('Total: ',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          Text('Total: ', style: AppUI.muted),
           Text(aggregate,
-              style: const TextStyle(fontSize: 13, color: AppColors.accent, fontWeight: FontWeight.w800)),
+              style: AppUI.money.copyWith(color: AppColors.primary, fontWeight: FontWeight.w800)),
         ],
       ),
     );
@@ -4733,19 +4967,14 @@ class _AggregateDrilldownPage extends StatelessWidget {
           children: [
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.border),
-              ),
+              decoration: AppUI.card(),
               child: isMobile
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Text('Dashboard',
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                            Text('Dashboard', style: AppUI.muted),
                             const SizedBox(width: 6),
                             AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                             const SizedBox(width: 6),
@@ -4753,7 +4982,7 @@ class _AggregateDrilldownPage extends StatelessWidget {
                               child: Text(_title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                  style: AppUI.label),
                             ),
                           ],
                         ),
@@ -4765,29 +4994,23 @@ class _AggregateDrilldownPage extends StatelessWidget {
                       children: [
                         backButton,
                         const SizedBox(width: 12),
-                        Container(width: 1, height: 18, color: AppColors.border),
+                        Container(width: 1, height: 18, color: AppColors.divider),
                         const SizedBox(width: 12),
-                        const Text('Dashboard',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                        Text('Dashboard', style: AppUI.muted),
                         const SizedBox(width: 6),
                         AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                         const SizedBox(width: 6),
-                        Text(_title,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                        Text(_title, style: AppUI.label),
                         const Spacer(),
                         totalPill,
                       ],
                     ),
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: AppUI.gap),
             Expanded(
               child: Container(
                 clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.border),
-                ),
+                decoration: AppUI.card(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -4797,8 +5020,7 @@ class _AggregateDrilldownPage extends StatelessWidget {
                         children: [
                           const CardTitleBlock(icon: 'buildings-2', title: 'Institution Breakdown', subtitle: 'fee performance per institution'),
                           const Spacer(),
-                          Text('${filtered.length} institutes',
-                              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                          Text('${filtered.length} institutes', style: AppUI.muted),
                         ],
                       ),
                     ),
@@ -4809,8 +5031,8 @@ class _AggregateDrilldownPage extends StatelessWidget {
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.border),
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                          border: Border.all(color: AppColors.cardBorder),
                         ),
                         child: Column(
                           children: [
@@ -4819,18 +5041,19 @@ class _AggregateDrilldownPage extends StatelessWidget {
                               padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 12),
                               child: Row(
                                 children: [
-                                  const SizedBox(width: 28, child: Text('#', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  const Expanded(flex: 5, child: Text('INSTITUTION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  Expanded(flex: 2, child: Text('CODE', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
-                                  Expanded(flex: 4, child: Text(columnLabel, textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.4))),
+                                  SizedBox(width: 28, child: Text('#', style: AppUI.tableHead)),
+                                  AppUI.th('INSTITUTION', flex: 5),
+                                  AppUI.th('CODE', flex: 2),
+                                  AppUI.th(columnLabel, flex: 4, align: TextAlign.right),
                                 ],
                               ),
                             ),
                             Expanded(
                               child: filtered.isEmpty
-                                  ? const Center(
-                                      child: Text('No data',
-                                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                                  ? AppUI.empty(
+                                      icon: 'buildings-2',
+                                      title: 'No data',
+                                      why: 'No institution has a figure for this metric yet.',
                                     )
                                   : ListView.builder(
                                       itemCount: filtered.length,
@@ -4842,36 +5065,22 @@ class _AggregateDrilldownPage extends StatelessWidget {
                                           padding: EdgeInsets.symmetric(horizontal: rowPadH, vertical: 14),
                                           child: Row(
                                             children: [
-                                              SizedBox(width: 28, child: Text('${i + 1}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                                              SizedBox(width: 28, child: Text('${i + 1}', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+                                              Expanded(flex: 5, child: Text(s.insName, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
+                                              Expanded(flex: 2, child: Text(s.insCode, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
                                               Expanded(
                                                 flex: 4,
                                                 child: mode == 'active'
                                                     ? Align(
                                                         alignment: Alignment.centerRight,
-                                                        child: Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                                          decoration: BoxDecoration(
-                                                            color: s.activeStatus
-                                                                ? AppColors.success.withValues(alpha: 0.1)
-                                                                : AppColors.textSecondary.withValues(alpha: 0.1),
-                                                            borderRadius: BorderRadius.circular(999),
-                                                          ),
-                                                          child: Text(
-                                                            s.activeStatus ? 'Active' : 'Inactive',
-                                                            style: TextStyle(
-                                                                fontSize: 11,
-                                                                fontWeight: FontWeight.w700,
-                                                                color: s.activeStatus ? AppColors.success : AppColors.textSecondary),
-                                                          ),
-                                                        ),
+                                                        child: AppUI.chip(s.activeStatus ? 'Active' : 'Inactive',
+                                                            s.activeStatus ? AppStatus.success : AppStatus.neutral),
                                                       )
                                                     : Text(_formatAmount(_value(s)),
                                                         textAlign: TextAlign.right,
                                                         maxLines: 1,
                                                         overflow: TextOverflow.ellipsis,
-                                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                                                        style: AppUI.money),
                                               ),
                                             ],
                                           ),
@@ -4893,4 +5102,92 @@ class _AggregateDrilldownPage extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── SuperAdmin dashboard chart painters ──────────────────────────────────────
+class _ScSlice {
+  final String label;
+  final double value;
+  final Color color;
+  _ScSlice(this.label, this.value, this.color);
+}
+
+class _ScDonut extends CustomPainter {
+  final List<_ScSlice> slices;
+  final double total;
+  _ScDonut(this.slices, this.total);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (total <= 0) return;
+    final rect = Rect.fromLTWH(6, 6, size.width - 12, size.height - 12);
+    final stroke = size.width * 0.20;
+    var start = -1.5708;
+    const gap = 0.03;
+    for (final s in slices) {
+      final sweep = (s.value / total) * 6.28319;
+      final paint = Paint()
+        ..color = s.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.butt;
+      final drawSweep = (sweep - gap).clamp(0.0, 6.28319);
+      canvas.drawArc(rect.deflate(stroke / 2), start + gap / 2, drawSweep, false, paint);
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ScDonut old) => old.slices != slices || old.total != total;
+}
+
+class _ScBars extends CustomPainter {
+  final List<double> values;
+  final List<String> labels;
+  final double maxV;
+  _ScBars(this.values, this.labels, this.maxV);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty || maxV <= 0) return;
+    final h = size.height - 22;
+    final grid = Paint()
+      ..color = AppColors.divider
+      ..strokeWidth = 1;
+    for (var g = 0; g <= 3; g++) {
+      final y = h * g / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+    final n = values.length;
+    final slot = size.width / n;
+    final barW = slot * 0.5;
+    for (var i = 0; i < n; i++) {
+      final bh = (values[i] / maxV).clamp(0.0, 1.0) * (h - 6);
+      final left = i * slot + (slot - barW) / 2;
+      final top = h - bh;
+      if (bh > 0) {
+        final rrect = RRect.fromRectAndCorners(
+          Rect.fromLTWH(left, top, barW, bh),
+          topLeft: const Radius.circular(4),
+          topRight: const Radius.circular(4),
+        );
+        canvas.drawRRect(
+            rrect,
+            Paint()
+              ..shader = LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [AppColors.primary, AppColors.primary.withValues(alpha: 0.55)],
+              ).createShader(Rect.fromLTWH(left, top, barW, bh)));
+      }
+      final tp = TextPainter(
+        text: TextSpan(text: labels[i], style: const TextStyle(fontSize: 10, color: AppColors.textLight, fontWeight: FontWeight.w600)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(left + barW / 2 - tp.width / 2, h + 6));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ScBars old) => old.values != values || old.maxV != maxV;
 }

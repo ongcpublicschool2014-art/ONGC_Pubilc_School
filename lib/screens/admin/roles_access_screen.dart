@@ -3,20 +3,28 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_menu.dart';
+import '../../utils/dashboard_tiles.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/pill_tab.dart';
+import '../../widgets/app_ui.dart';
 import 'custom_roles_screen.dart';
 
 /// Roles & Access — Admin-only. Two tabs:
 ///   * Roles       — create/rename the institution's roles (custuserroles).
-///   * Menu Access — tick which sidebar menus each role may see.
+///   * Menu Access — tick which sidebar menus each role may see, and which
+///     dashboard cards and charts it may see on the landing page.
 ///
 /// Menu grants are stored per role in public.rolemenuaccess. A role with no
 /// rows has never been configured and keeps the app's built-in defaults, so
 /// this screen is additive — nothing changes until an Admin saves something.
+///
+/// Dashboard tiles share that table, prefixed (see utils/dashboard_tiles.dart)
+/// so a tile key can never be read as a menu label. Saving also writes
+/// kDashboardConfiguredMarker: without it, a role with every tile unticked
+/// would look unconfigured and be shown the whole dashboard.
 class RolesAccessScreen extends StatefulWidget {
   const RolesAccessScreen({super.key});
 
@@ -50,22 +58,23 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> with SingleTicker
           listenable: _tab,
           builder: (context, _) => Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+            child: // Wrap, not a horizontal scroll view: the row can run past the
+              // window on a laptop screen, and a horizontal
+              // SingleChildScrollView has no scrollbar and ignores the mouse
+              // wheel on desktop, leaving the last tabs unreachable.
+              Wrap(
+                spacing: PillTab.gap(context),
+                runSpacing: 8,
                 children: [
-                  for (var i = 0; i < _tabLabels.length; i++) ...[
+                  for (var i = 0; i < _tabLabels.length; i++)
                     PillTab(
                       icon: _tabIcons[i],
                       label: _tabLabels[i],
                       selected: _tab.index == i,
                       onTap: () => _tab.animateTo(i),
                     ),
-                    if (i < _tabLabels.length - 1) SizedBox(width: PillTab.gap(context)),
-                  ],
                 ],
               ),
-            ),
           ),
         ),
         Expanded(
@@ -143,11 +152,14 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
     final configured = _access[urId];
     setState(() {
       _urId = urId;
+      // A role nobody has configured keeps the built-in menu defaults and the
+      // whole dashboard -- no marker, so every tile reads as allowed.
       _selected = configured != null
           ? {...configured}
           : {
               for (final i in kAssignableNavItems)
                 if (_defaultVisible(i, roleName)) i.label,
+              ...kAllDashboardTiles.map((d) => d.key),
             };
     });
   }
@@ -175,12 +187,17 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
         urId: _urId!,
         // Belt-and-braces: force the never-revocable menus back in for Admin,
         // so a stale UI state can't persist a lockout.
-        allowed: _isAdminRole ? {..._selected, ...kAlwaysAllowedForAdmin} : _selected,
+        // The marker says the dashboard HAS been configured, so unticking
+        // every tile means an empty dashboard rather than a default one.
+        allowed: {
+          ...(_isAdminRole ? {..._selected, ...kAlwaysAllowedForAdmin} : _selected),
+          kDashboardConfiguredMarker,
+        },
         createdBy: context.read<AuthProvider>().userName,
       );
       if (!mounted) return;
       setState(() {
-        _access[_urId!] = {..._selected};
+        _access[_urId!] = {..._selected, kDashboardConfiguredMarker};
         _saving = false;
       });
       _snack('Menu access saved. Affected users see it next time they log in.', AppColors.success);
@@ -202,8 +219,11 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_roles.isEmpty) {
-      return Center(child: Text('No roles found. Create one in the Roles tab first.',
-          style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)));
+      return AppUI.empty(
+        title: 'No roles found. Create one in the Roles tab first.',
+        why: 'Menu access is set per role, and this institution has none yet.',
+        icon: 'security-user',
+      );
     }
 
     // Group the assignable menus by their sidebar section.
@@ -213,23 +233,17 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
     }
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 10.h),
-            child: Row(children: [
-              const AppIcon('lock-1', size: 20, color: AppColors.primary),
-              SizedBox(width: 10.w),
-              Text('Menu Access', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-              SizedBox(width: 10.w),
-              Text('choose which menus a role can open', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
-              const Spacer(),
+            padding: EdgeInsets.fromLTRB(AppUI.cardPad, 16.h, AppUI.cardPad, 12.h),
+            child: AppUI.cardHeader(
+              icon: 'lock-1',
+              title: 'Menu Access',
+              subtitle: 'choose which menus a role can open',
+              trailing: [
               SizedBox(
                 width: 220.w,
                 child: DropdownButtonFormField<int>(
@@ -238,17 +252,8 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
                   dropdownColor: Colors.white,
                   borderRadius: BorderRadius.circular(12),
                   elevation: 6,
-                  style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-                  decoration: InputDecoration(
-                    hintText: 'Select role',
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.border)),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.border)),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r), borderSide: const BorderSide(color: AppColors.accent)),
-                  ),
+                  style: AppUI.fieldText(context),
+                  decoration: AppUI.field(context, 'Select role', filled: _urId != null),
                   items: _roles
                       .map((r) => DropdownMenuItem(
                             value: (r['ur_id'] as num).toInt(),
@@ -263,21 +268,21 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
 
           if (_isAdminRole)
             Padding(
-              padding: EdgeInsets.fromLTRB(18.w, 0, 18.w, 10.h),
+              padding: EdgeInsets.fromLTRB(AppUI.cardPad, 0, AppUI.cardPad, 12.h),
               child: Container(
                 padding: EdgeInsets.all(12.w),
                 decoration: BoxDecoration(
-                  color: AppColors.warning.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8.r),
-                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+                  color: AppColors.warningBg,
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
                 ),
                 child: Row(children: [
                   Icon(Icons.info_outline, size: 18.sp, color: AppColors.warning),
                   SizedBox(width: 10.w),
                   Expanded(
                     child: Text(
-                      'You can hide menus from the Admin role, but ${kAlwaysAllowedForAdmin.where((m) => m != 'Dashboard').join(' and ')} stay locked on — without them no Admin could undo the change.',
-                      style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary),
+                      'You can hide menus from the Admin role, but ${kAlwaysAllowedForAdmin.join(' and ')} stay locked on — without them no Admin could undo the change.',
+                      style: AppUI.muted.copyWith(color: AppColors.warning),
                     ),
                   ),
                 ]),
@@ -286,27 +291,42 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
 
           Expanded(
             child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(18.w, 0, 18.w, 12.h),
+              padding: EdgeInsets.fromLTRB(AppUI.cardPad, 0, AppUI.cardPad, 12.h),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   for (final entry in sections.entries) ...[
-                    Padding(
-                      padding: EdgeInsets.only(top: 10.h, bottom: 6.h),
-                      child: Row(children: [
-                        Text(entry.key,
-                            style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w800, letterSpacing: 0.8, color: AppColors.textLight)),
-                        SizedBox(width: 10.w),
-                        Expanded(child: Divider(color: AppColors.border, height: 1)),
-                        SizedBox(width: 10.w),
-                        _sectionToggle(entry.value),
-                      ]),
-                    ),
-                    Wrap(
-                      spacing: 8.w,
-                      runSpacing: 8.h,
+                    _accessCard(
+                      name: entry.key,
+                      icon: kSectionMeta[entry.key]?[0] ?? 'element-3',
+                      tint: _sectionTint(entry.key),
+                      granted: entry.value
+                          .where((i) => _selected.contains(i.label))
+                          .length,
+                      total: entry.value.length,
+                      toggle: _sectionToggle(entry.value),
                       children: [for (final i in entry.value) _menuChip(i)],
                     ),
+                    // The dashboard's own cards and panels belong WITH the
+                    // Dashboard menu that opens them, not at the far end of the
+                    // page: granting the menu and then scrolling past every
+                    // other section to choose what it shows is two halves of
+                    // one decision.
+                    if (entry.value.any((i) => i.label == 'Dashboard'))
+                      for (final tiles in kDashboardTileSections.entries)
+                        _accessCard(
+                          name: tiles.key,
+                          icon: 'element-3',
+                          tint: AppColors.demand,
+                          granted: tiles.value
+                              .where((d) => _selected.contains(d.key))
+                              .length,
+                          total: tiles.value.length,
+                          toggle: _tileSectionToggle(tiles.value),
+                          children: [
+                            for (final d in tiles.value) _tileChip(d)
+                          ],
+                        ),
                   ],
                 ],
               ),
@@ -314,12 +334,13 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
           ),
 
           Padding(
-            padding: EdgeInsets.all(14.w),
+            padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 14.h),
             child: Row(children: [
-              Text(
-                '${_selected.length} of ${kAssignableNavItems.length} menus allowed',
-                style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary),
-              ),
+              _countPill('MENUS', _menuCount, kAssignableNavItems.length,
+                  AppColors.primary),
+              SizedBox(width: 10.w),
+              _countPill('DASHBOARD TILES', _tileCount,
+                  kAllDashboardTiles.length, AppColors.demand),
               const Spacer(),
               ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
@@ -327,12 +348,90 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
                     ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.save, size: 16),
                 label: const Text('Save Access'),
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
               ),
             ]),
           ),
         ],
       ),
+    );
+  }
+
+  /// "12 of 39 MENUS" as a pill: the two counts used to be one grey sentence,
+  /// and the number that matters -- how much this role can reach -- was the
+  /// hardest thing on the screen to find.
+  Widget _countPill(String label, int n, int total, Color tint) => Container(
+        padding: EdgeInsets.symmetric(horizontal: 11.w, vertical: 6.h),
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('$n',
+              style: TextStyle(
+                  fontSize: 13.sp, fontWeight: FontWeight.w800, color: tint)),
+          Text(' / $total  ',
+              style: AppUI.muted),
+          Text(label, style: AppUI.caps),
+        ]),
+      );
+
+  /// A colour per section, so a long grant list is scanned by shape rather
+  /// than read line by line -- and so a section is recognisable here by the
+  /// same hue it carries in the sidebar family it belongs to.
+  Color _sectionTint(String section) => switch (section) {
+        'ADMISSION' => AppColors.accent,
+        'STUDENTS' => AppColors.success,
+        'TC' => AppColors.demand,
+        'FEES' => AppColors.warning,
+        'REPORTS' => AppColors.demand,
+        'BANKING' => AppColors.today,
+        'SETUP' => AppColors.primaryDark,
+        'GENERAL' => AppColors.info,
+        _ => AppColors.primary,
+      };
+
+  /// One section of grants: its own card, its own colour, and a count of what
+  /// is granted out of what exists. The count is the thing an administrator
+  /// actually checks -- it used to be a bare heading over a run of chips.
+  Widget _accessCard({
+    required String name,
+    required String icon,
+    required Color tint,
+    required int granted,
+    required int total,
+    required Widget toggle,
+    required List<Widget> children,
+  }) {
+    final all = granted == total;
+    final none = granted == 0;
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: 12.h),
+      clipBehavior: Clip.antiAlias,
+      decoration: AppUI.card(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: EdgeInsets.fromLTRB(16.w, 10.h, 16.w, 10.h),
+          decoration: const BoxDecoration(
+            color: AppColors.tableHeadBg,
+            border: Border(bottom: BorderSide(color: AppColors.divider)),
+          ),
+          child: Row(children: [
+            AppUI.iconTile(icon, color: tint, size: 14),
+            SizedBox(width: 10.w),
+            Text(name, style: AppUI.caps.copyWith(color: AppColors.textPrimary)),
+            SizedBox(width: 9.w),
+            AppUI.chip('$granted/$total',
+                all ? AppStatus.success : (none ? AppStatus.neutral : AppStatus.info)),
+            const Spacer(),
+            toggle,
+          ]),
+        ),
+        Padding(
+          padding: EdgeInsets.all(16.w),
+          child: Wrap(spacing: 8.w, runSpacing: 8.h, children: children),
+        ),
+      ]),
     );
   }
 
@@ -348,11 +447,21 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
           _selected.addAll(items.map((i) => i.label));
         }
       }),
-      borderRadius: BorderRadius.circular(6.r),
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
-        child: Text(all ? 'Clear' : 'Select all',
-            style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(all ? Icons.remove_done : Icons.done_all,
+              size: 13.sp, color: AppColors.primary),
+          SizedBox(width: 5.w),
+          Text(all ? 'Clear' : 'Select all',
+              style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.primary)),
+        ]),
       ),
     );
   }
@@ -362,19 +471,88 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
   bool _isLocked(AppNavItem item) =>
       _isAdminRole && kAlwaysAllowedForAdmin.contains(item.label);
 
+  /// Menu grants only -- the tile keys share _selected but are counted apart,
+  /// so "12 of 37 menus" does not silently include dashboard tiles.
+  int get _menuCount =>
+      _selected.where((s) => !s.startsWith(kDashboardTilePrefix)).length;
+
+  int get _tileCount =>
+      kAllDashboardTiles.where((d) => _selected.contains(d.key)).length;
+
+  /// "All / None" for a dashboard section.
+  Widget _tileSectionToggle(List<DashboardTile> tiles) {
+    final all = tiles.every((d) => _selected.contains(d.key));
+    return InkWell(
+      onTap: () => setState(() {
+        if (all) {
+          _selected.removeAll(tiles.map((d) => d.key));
+        } else {
+          _selected.addAll(tiles.map((d) => d.key));
+        }
+      }),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(all ? Icons.remove_done : Icons.done_all,
+              size: 13.sp, color: AppColors.demand),
+          SizedBox(width: 5.w),
+          Text(all ? 'Clear' : 'Select all',
+              style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.demand)),
+        ]),
+      ),
+    );
+  }
+
+  /// One dashboard card or panel. Nothing here is ever locked: hiding every
+  /// tile leaves the dashboard empty but still reachable, and Menu Access
+  /// itself is what an Admin needs to undo it.
+  Widget _tileChip(DashboardTile tile) {
+    final on = _selected.contains(tile.key);
+    return InkWell(
+      onTap: () => setState(() => on ? _selected.remove(tile.key) : _selected.add(tile.key)),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
+        decoration: BoxDecoration(
+          color: on ? AppColors.primaryLight : Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: on ? AppColors.primary : AppColors.border, width: on ? 1.4 : 1),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(on ? Icons.check_box : Icons.check_box_outline_blank,
+              size: 17.sp, color: on ? AppColors.primary : AppColors.textLight),
+          SizedBox(width: 8.w),
+          AppIcon(tile.icon, size: 15.sp, color: on ? AppColors.primary : AppColors.textSecondary),
+          SizedBox(width: 8.w),
+          Text(tile.label,
+              style: AppUI.body.copyWith(
+                  fontSize: 13.sp,
+                  fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                  color: on ? AppColors.primary : AppColors.textPrimary)),
+        ]),
+      ),
+    );
+  }
+
   Widget _menuChip(AppNavItem item) {
     final on = _selected.contains(item.label);
     final locked = _isLocked(item);
     return InkWell(
       onTap: locked
-          ? () => _snack('${item.label} must stay enabled for Admin — otherwise no one could undo it.', AppColors.warning)
+          ? () => _snack('${item.navTitle} must stay enabled for Admin — otherwise no one could undo it.', AppColors.warning)
           : () => setState(() => on ? _selected.remove(item.label) : _selected.add(item.label)),
-      borderRadius: BorderRadius.circular(8.r),
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
         decoration: BoxDecoration(
-          color: on ? AppColors.primary.withValues(alpha: 0.08) : Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
+          color: on ? AppColors.primaryLight : Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
           border: Border.all(color: on ? AppColors.primary : AppColors.border, width: on ? 1.4 : 1),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -383,8 +561,8 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
           SizedBox(width: 8.w),
           AppIcon(item.icon, size: 15.sp, color: on ? AppColors.primary : AppColors.textSecondary),
           SizedBox(width: 6.w),
-          Text(item.label,
-              style: TextStyle(fontSize: 12.5.sp, fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? AppColors.textPrimary : AppColors.textSecondary)),
+          Text(item.navTitle,
+              style: AppUI.body.copyWith(fontSize: 13.sp, fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? AppColors.textPrimary : AppColors.textSecondary)),
         ]),
       ),
     );

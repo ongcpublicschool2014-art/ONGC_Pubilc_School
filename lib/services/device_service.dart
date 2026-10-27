@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../config/supabase_config.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'supabase_service.dart';
@@ -73,6 +74,19 @@ class DeviceService {
   /// this returns false and the activation-code prompt is shown again — the
   /// office can audit each install and re-bind the PC explicitly.
   static Future<bool> isActivated() async {
+    // Test builds may waive the gate, but only while pointed at a non-production
+    // project (see SupabaseConfig.skipDeviceActivation). A production install
+    // has no config.json, so this is false there and the gate stands.
+    if (SupabaseConfig.skipDeviceActivation && !SupabaseConfig.isDefaultProject) {
+      return true;
+    }
+    // A build made with --dart-define=SKIP_DEVICE_ACTIVATION=true. Waives the
+    // gate unconditionally, so such a build must never be handed out as a
+    // release -- it is for a test PC that cannot be given a config.json.
+    if (SupabaseConfig.forceSkipDeviceActivation) {
+      debugPrint('DEVICE ACTIVATION BYPASSED - test build, not for release');
+      return true;
+    }
     final bound = await _storage.read(key: _kBoundInsId);
     final sa = await _storage.read(key: _kIsSuperAdmin);
     return (bound != null && bound.isNotEmpty) || sa == 'true';

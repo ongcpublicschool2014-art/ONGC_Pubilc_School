@@ -1,19 +1,15 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 
-import './app_icon.dart';
+import './app_ui.dart';
 class AttendanceChartWidget extends StatelessWidget {
   const AttendanceChartWidget({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -23,37 +19,23 @@ class AttendanceChartWidget extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Attendance Overview',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Weekly attendance trend',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontSize: 13,
-                        ),
-                  ),
+                  Text('Attendance Overview', style: AppUI.cardTitle),
+                  const SizedBox(height: 2),
+                  Text('Weekly attendance trend', style: AppUI.muted),
                 ],
               ),
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                   border: Border.all(color: AppColors.border),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      'This Week',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                    ),
+                    Text('This Week', style: AppUI.label),
                     const SizedBox(width: 4),
                     const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   ],
@@ -110,10 +92,7 @@ class _LegendItem extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           label,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-              ),
+          style: AppUI.muted,
         ),
       ],
     );
@@ -143,11 +122,7 @@ class _AttendanceBarChart extends StatelessWidget {
                 // Percentage label
                 Text(
                   '${day.present}%',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 12,
-                        color: AppColors.textPrimary,
-                      ),
+                  style: AppUI.label,
                 ),
                 const SizedBox(height: 8),
                 // Stacked bar
@@ -189,10 +164,7 @@ class _AttendanceBarChart extends StatelessWidget {
                 // Day label
                 Text(
                   day.day,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
-                      ),
+                  style: AppUI.muted,
                 ),
               ],
             ),

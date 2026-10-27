@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_menu.dart';
+import '../../utils/school_terms.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../students/students_screen.dart';
-import '../fees/fee_collection_screen.dart';
+import 'dashboard_overview_screen.dart';
+
 import '../admin/master_import_screen.dart';
 import '../fees/student_fee_collection_screen.dart';
-import '../fees/student_ledger_screen.dart';
 import '../transactions/failed_transactions_screen.dart';
 import '../admin/admin_creation_screen.dart';
 import '../admin/roles_access_screen.dart';
@@ -21,23 +21,45 @@ import '../notices/notices_screen.dart';
 import '../notifications/notification_screen.dart';
 import '../fees/fee_demand_screen.dart';
 import '../fees/fee_demand_approval_screen.dart';
+import '../fees/fee_demand_import_screen.dart';
 import '../admin/master_data_screen.dart';
 import '../admin/utilities_screen.dart';
 import '../fees/bank_reconciliation_screen.dart';
 import '../fees/reports_screen.dart';
+import '../reports/admission_register_screen.dart';
+import '../reports/tc_report_screen.dart';
+import '../reports/consolidated_summary_screen.dart';
+import '../tc/tc_certificate_screen.dart';
+import '../tc/tc_format_screen.dart';
+import '../tc/tc_list_screens.dart';
 import '../fees/fee_master_screen.dart';
 import '../fees/fee_concession_screen.dart';
 import '../fees/fee_refund_screen.dart';
+import '../fees/fee_cancel_screen.dart';
+import '../fees/misc_collection_screen.dart';
+import '../fees/advance_collection_screen.dart';
+import '../fees/advance_fee_collection_screen.dart';
+import '../fees/advance_adjustment_screen.dart';
+import '../fees/advance_reconcile_screen.dart';
+import '../admin/year_end_screen.dart';
 import '../admission/admission_screen.dart';
 import '../admission/fast_admission_screen.dart';
-import '../admission/class_allocation_tabs_screen.dart';
+import '../admission/class_allocation_screen.dart';
+import '../admission/interim_promotion_screen.dart';
+import '../admission/transfer_certificate_screen.dart';
+import '../admission/new_rollno_screen.dart';
+import '../admission/emis_umis_screen.dart';
 import '../admission/admission_master_screen.dart';
 
 
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/student_avatar.dart';
 import '../../widgets/update_dialog.dart';
 import '../../utils/friendly_error.dart';
+import '../../services/pending_collection_sweep.dart';
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -127,7 +149,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  List<AppNavItem> _getNavItems(BuildContext context) {
+  /// Role-filtered menus, minus the school-only ones on a college.
+  List<AppNavItem> _getNavItems(BuildContext context) => isSchool
+      ? _getRoleNavItems(context).where((i) => !kSchoolHiddenNavItems.contains(i.label)).toList()
+      : _getRoleNavItems(context).where((i) => !kCollegeHiddenSubItems.contains(i.label)).toList();
+
+  List<AppNavItem> _getRoleNavItems(BuildContext context) {
     final auth = context.read<AuthProvider>();
     final isAdmin = auth.currentUser?.urname == 'Admin';
     final isAccountant = auth.currentUser?.urname == 'Accountant';
@@ -138,9 +165,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final allowed = _allowedMenus;
     if (allowed != null) {
       final effective = isAdmin ? {...allowed, ...kAlwaysAllowedForAdmin} : allowed;
-      return kAppNavItems
-          .where((item) => item.label == 'Dashboard' || effective.contains(item.label))
-          .toList();
+      // Dashboard obeys the grant like every other menu — no force-include.
+      // Roles configured before Dashboard became assignable are backfilled by
+      // migrations/rolemenuaccess_dashboard.sql so none of them lose it.
+      return kAppNavItems.where((item) => effective.contains(item.label)).toList();
     }
 
     // Never configured — Admin sees everything except accountant-only screens.
@@ -164,6 +192,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // One-shot update check after login (silent if up to date / offline).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) maybePromptUpdate(context);
+      // Keep resolving unfinished Paytm collections for as long as the app is
+      // open, instead of only when somebody opens the right screen. Started
+      // from the dashboard because it outlives every other screen.
+      if (!mounted) return;
+      final auth = context.read<AuthProvider>();
+      final insId = auth.insId;
+      if (insId != null) {
+        PendingCollectionSweep.startAuto(
+            insId: insId, sessionToken: auth.sessionToken);
+      }
     });
     _navScrollCtrl.addListener(_updateNavMoreBelow);
     _searchFocusNode.addListener(() {
@@ -201,7 +239,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .select('yrlabel, iyrstadate, iyrenddate, activestatus')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
-          .order('iyr_id', ascending: false);
+          .order('yrlabel', ascending: false);
       final years = List<Map<String, dynamic>>.from(result);
       if (years.isNotEmpty && mounted) {
         // Detect current year from active schema
@@ -238,14 +276,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final shortName = (insRow['inshortname'] as String).toLowerCase();
     final newSchema = '$shortName${yearLabel.replaceAll('-', '')}';
 
-    // Set new schema
-    SupabaseService.setSchema(newSchema);
+    // New schema everywhere: the client, the screens that re-apply
+    // auth.schema on open, and the server session (so RPCs follow it).
+    await auth.switchYear(newSchema, yearLabel);
+    if (!mounted) return;
     setState(() => _academicYear = yearLabel);
 
     // Reload all data
     _loadStudentsForSearch();
     _loadUnreadNotifCount();
-    // Reset to dashboard tab to refresh
+    // Back to the first menu in the sidebar (Dashboard for most roles, but it
+    // can now be hidden) to refresh.
     setState(() => _selectedNavIndex = 0);
   }
 
@@ -262,33 +303,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
-        title: Text('Create New Academic Year', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16.sp)),
+        title: Text('Create New Academic Year', style: AppUI.cardTitle),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('New Year: $nextLabel', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+            Text('New Year: $nextLabel', style: AppUI.label.copyWith(color: AppColors.primary)),
             SizedBox(height: 16.h),
             TextField(
               controller: startDateCtrl,
-              decoration: InputDecoration(
-                labelText: 'Start Date (YYYY-MM-DD)',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                isDense: true,
-              ),
+              decoration: AppUI.field(context, '', label: 'Start Date (YYYY-MM-DD)'),
             ),
             SizedBox(height: 12.h),
             TextField(
               controller: endDateCtrl,
-              decoration: InputDecoration(
-                labelText: 'End Date (YYYY-MM-DD)',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.r)),
-                isDense: true,
-              ),
+              decoration: AppUI.field(context, '', label: 'End Date (YYYY-MM-DD)'),
             ),
             SizedBox(height: 8.h),
-            Text('This will create a new empty schema with all tables.', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+            Text('This will create a new empty schema with all tables.', style: AppUI.muted),
           ],
         ),
         actions: [
@@ -298,7 +330,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Navigator.pop(ctx);
               await _createNewYear(nextLabel, startDateCtrl.text.trim(), endDateCtrl.text.trim());
             },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
             child: const Text('Create'),
           ),
         ],
@@ -430,9 +461,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _removeSearchOverlay();
     _searchController.clear();
     _searchFocusNode.unfocus();
+    // Found by label, not a fixed index: the sidebar is built from the role's
+    // grants, so Students is not always second (and may be absent entirely).
+    final idx = _navItems.indexWhere((i) => i.label == 'Students');
+    if (idx < 0) return;
     setState(() {
       _navigateToStudent = student;
-      _selectedNavIndex = 1; // Students tab
+      _selectedNavIndex = idx;
     });
   }
 
@@ -446,14 +481,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         offset: Offset(0, 48.h),
         child: Material(
           elevation: 8,
-          borderRadius: BorderRadius.circular(12.r),
+          borderRadius: BorderRadius.circular(12),
           child: Container(
             constraints: BoxConstraints(maxHeight: 400.h),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12.r),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(radius: 12),
             child: ListView.builder(
               padding: EdgeInsets.symmetric(vertical: 4.h),
               shrinkWrap: true,
@@ -466,24 +497,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
                     child: Row(
                       children: [
-                        CircleAvatar(
-                          radius: 18.r,
-                          backgroundColor: AppColors.accent.withValues(alpha: 0.1),
-                          child: s.stuphoto != null && s.stuphoto!.startsWith('http')
-                              ? ClipOval(child: Image.network(s.stuphoto!, width: 36.w, height: 36.h, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Text(s.stuname[0].toUpperCase(), style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 14.sp))))
-                              : Text(s.stuname[0].toUpperCase(), style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 14.sp)),
+                        StudentAvatar(
+                          photoUrl: (s.stuphoto?.startsWith('http') ?? false) ? s.stuphoto : null,
+                          name: s.stuname,
+                          size: 36,
+                          enlargeOnTap: false, // tapping the row opens the student
                         ),
                         SizedBox(width: 12.w),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(s.stuname, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
-                              Text('${s.stuadmno}  •  Class ${s.stuclass}', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                              Text(s.stuname, style: AppUI.label),
+                              Text(schoolTerm('${s.stuadmno}  •  Class ${s.stuclass}'), style: AppUI.muted),
                             ],
                           ),
                         ),
-                        Text(s.stumobile, style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                        Text(s.stumobile, style: AppUI.muted),
                       ],
                     ),
                   ),
@@ -511,6 +541,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final size = MediaQuery.of(context).size;
     final isDesktop = size.width > 800;
     final isTablet = size.width > 500 && size.width <= 800;
+    // Tablet width (and narrow windows): the sidebar collapses to icons on
+    // its own; menus with sub-items open them in a pop-out (see _openFlyout).
+    final autoCollapse = size.width <= 1100;
 
     // Clamp selected index if nav items changed (e.g. role-based filtering)
     if (_selectedNavIndex >= _navItems.length) {
@@ -528,13 +561,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (isDesktop || isTablet)
             AnimatedContainer(
               duration: const Duration(milliseconds: 250),
-              width: _sidebarCollapsed ? 78 : (isDesktop ? (size.width < 1100 ? 200 : size.width < 1400 ? 230 : 270) : 78),
+              width: (_sidebarCollapsed || autoCollapse) ? 78 : (isDesktop ? (size.width < 1400 ? 230 : 270) : 78),
               // Keep the sidebar out of keyboard Tab traversal so tabbing
               // through a form's fields doesn't jump into the nav menu between
               // rows. Items remain mouse-clickable.
               child: ExcludeFocus(
                 child: _buildSidebar(
-                    context, _sidebarCollapsed || isTablet),
+                    context, _sidebarCollapsed || isTablet || autoCollapse),
               ),
             ),
 
@@ -558,11 +591,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       key: ValueKey('content-$_refreshTick'),
                       child: _isFullHeightScreen()
                           ? Padding(
-                              padding: const EdgeInsets.all(16),
+                              padding: EdgeInsets.all(MediaQuery.of(context).size.width <= 1366 ? 20 : 32),
                               child: _buildDashboardContent(context, isDesktop),
                             )
                           : SingleChildScrollView(
-                              padding: const EdgeInsets.all(16),
+                              padding: EdgeInsets.all(MediaQuery.of(context).size.width <= 1366 ? 20 : 32),
                               child: _buildDashboardContent(context, isDesktop),
                             ),
                     ),
@@ -593,7 +626,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final hPad = collapsed
-        ? 12.w
+        // Fixed (non-.w) inside the fixed 78px rail — scaled units overflow it.
+        ? 10.0
         : (MediaQuery.of(context).size.width < 1100 ? 10.w : 14.w);
 
     return Container(
@@ -684,11 +718,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         _buildNavTile(context, idx, collapsed),
                       SizedBox(height: 4.h),
                     ] else ...[
-                      // Collapsible group: header toggles its items.
+                      // Collapsible group: header toggles its items. Items render
+                      // as indented, smaller sub-tiles so they read as children.
                       _buildSectionHeader(context, orderedSections[s]),
                       if (_expandedSections.contains(orderedSections[s]))
                         for (final idx in groupedIndices[orderedSections[s]]!)
-                          _buildNavTile(context, idx, collapsed),
+                          _buildNavTile(context, idx, collapsed, inSection: true),
                     ],
                   ],
                   SizedBox(height: 16.h),
@@ -793,7 +828,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12.r),
+          borderRadius: BorderRadius.circular(10),
           onTap: () => setState(() {
             if (expanded) {
               _expandedSections.remove(section);
@@ -813,7 +848,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               color: highlight
                   ? AppColors.primary
                   : (expanded ? Colors.white.withValues(alpha: 0.18) : Colors.transparent),
-              borderRadius: BorderRadius.circular(12.r),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
@@ -848,36 +883,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildNavTile(BuildContext context, int index, bool collapsed) {
+  /// Timeline rail for a sub-menu item — a continuous vertical line with a blue
+  /// dot, so an expanded section's children read as a connected list (mockup).
+  Widget _navRail(bool selected) {
+    final w = 16.w;
+    return SizedBox(
+      width: w,
+      child: Stack(children: [
+        Positioned(top: 0, bottom: 0, left: w / 2 - 1, width: 2, child: ColoredBox(color: Colors.white.withValues(alpha: 0.12))),
+        Positioned.fill(child: Center(child: Container(
+          width: 9.w, height: 9.w,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: selected ? Colors.white : AppColors.sidebarText.withValues(alpha: 0.45),
+          ),
+        ))),
+      ]),
+    );
+  }
+
+  Widget _buildNavTile(BuildContext context, int index, bool collapsed, {bool inSection = false}) {
     final item = _navItems[index];
     final isSelected = _selectedNavIndex == index;
-    final hasSubItems = item.subItems.isNotEmpty;
+    final hasSubItems = item.visibleSubItems.isNotEmpty;
     final isExpanded = !collapsed && hasSubItems && _expandedNavIndex == index;
     final badge = item.label == 'Notifications' && _unreadNotifCount > 0
         ? _unreadNotifCount.toString()
         : null;
+    // A tile shown under an expanded section header is a child: indent it,
+    // shrink it, and dim it so it reads as a sub-menu, not a top-level menu.
+    final sub = inSection && !collapsed;
 
     const selectedBg = AppColors.primary;
     const selectedFg = AppColors.textOnPrimary;
     // Navy sidebar — light foreground reads cleanest on it.
-    const unselectedFg = AppColors.sidebarText;
+    final unselectedFg = sub ? AppColors.sidebarText.withValues(alpha: 0.92) : AppColors.sidebarText;
 
-    final iconSize =
-        MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp;
+    final iconSize = (MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp) - (sub ? 3 : 0);
 
-    final tile = Padding(
-      padding: EdgeInsets.only(bottom: 10.h),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Material(
+    final content = Builder(builder: (tileCtx) => Material(
             color: Colors.transparent,
             child: InkWell(
               // Mouse-only: never take keyboard focus, so Tab in a form never
               // lands on a nav item.
               canRequestFocus: false,
               onTap: () {
+                // Icon-only sidebar: a menu with sub-items opens them in a
+                // pop-out beside the icon instead of an accordion.
+                if (collapsed && hasSubItems) {
+                  _openFlyout(tileCtx, index, item);
+                  return;
+                }
                 setState(() {
+                  if (_selectedNavIndex != index) _selectedSubIndex = 0;
                   _selectedNavIndex = index;
                   if (hasSubItems && !collapsed) {
                     _expandedNavIndex = isExpanded ? null : index;
@@ -887,98 +945,112 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 });
                 _loadUnreadNotifCount();
               },
-              borderRadius: BorderRadius.circular(12.r),
+              borderRadius: BorderRadius.circular(10),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 padding: EdgeInsets.symmetric(
-                  horizontal: collapsed ? 12.w : 14.w,
-                  vertical: 11.h,
+                  // Fixed inside the 78px rail (see hPad note) so it never overflows.
+                  horizontal: collapsed ? 8.0 : (sub ? 7.w : 10.w),
+                  vertical: sub ? 6.h : 8.h,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? selectedBg : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12.r),
+                  // Active top-level tile = solid accent pill;
+                  // active sub-item = flat tinted highlight.
+                  color: isSelected ? (sub ? selectedBg.withValues(alpha: 0.18) : selectedBg) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(sub ? 8 : 10),
                 ),
                 child: Row(
                   children: [
-                    AppIcon(
-                      isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
-                      style: isSelected
-                          ? AppIconStyle.bold
-                          : AppIconStyle.linear,
-                      color: isSelected ? selectedFg : unselectedFg,
-                      size: iconSize,
+                    // Rounded icon chip (mockup style). Sub-items get a smaller,
+                    // borderless chip so they read as children.
+                    Container(
+                      // Fixed size when collapsed so the icon chip + padding
+                      // always fit the fixed 78px rail (avoids a RenderFlex overflow).
+                      width: collapsed ? 36.0 : (sub ? 25.w : 34.w),
+                      height: collapsed ? 36.0 : (sub ? 25.w : 34.w),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? Colors.white.withValues(alpha: sub ? 0.18 : 0.22)
+                            : Colors.white.withValues(alpha: sub ? 0.12 : 0.08),
+                        borderRadius: BorderRadius.circular(sub ? 6 : 8),
+                        border: Border.all(color: Colors.white.withValues(alpha: isSelected ? 0.30 : 0.16)),
+                      ),
+                      child: AppIcon(
+                        isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
+                        style: isSelected ? AppIconStyle.bold : AppIconStyle.linear,
+                        color: isSelected ? selectedFg : unselectedFg,
+                        size: iconSize,
+                      ),
                     ),
                     if (!collapsed) ...[
-                      SizedBox(width: 12.w),
+                      SizedBox(width: sub ? 8.w : 12.w),
                       Expanded(
                         child: Text(
-                          item.label,
+                          item.navTitle,
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                           style: TextStyle(
-                            fontSize: 13.sp,
+                            fontSize: sub ? 11.5.sp : 13.5.sp,
                             color: isSelected ? selectedFg : unselectedFg,
-                            fontWeight: isSelected
-                                ? FontWeight.w700
-                                : FontWeight.w600,
+                            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
                           ),
                         ),
                       ),
-                      if (badge != null)
-                        Text(
-                          badge,
-                          style: TextStyle(
-                            fontSize: 12.sp,
-                            color: isSelected
-                                ? Colors.white.withValues(alpha: 0.7)
-                                : unselectedFg,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      if (hasSubItems)
+                      if (badge != null) ...[
                         Container(
-                          width: 20.w,
-                          height: 20.w,
-                          alignment: Alignment.center,
+                          padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
                           decoration: BoxDecoration(
-                            color: isSelected
-                                ? Colors.white.withValues(alpha: 0.18)
-                                : unselectedFg.withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(5.r),
-                            border: Border.all(
-                              color: isSelected
-                                  ? Colors.white.withValues(alpha: 0.30)
-                                  : unselectedFg.withValues(alpha: 0.30),
-                              width: 1,
-                            ),
+                            color: isSelected ? Colors.white.withValues(alpha: 0.20) : AppColors.error,
+                            borderRadius: BorderRadius.circular(999),
                           ),
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 180),
-                            transitionBuilder: (child, anim) =>
-                                ScaleTransition(scale: anim, child: child),
-                            child: AppIcon(
-                              isExpanded ? 'Remove_Minus' : 'Add_Plus',
-                              key: ValueKey(isExpanded),
-                              style: AppIconStyle.bold,
-                              size: 15.sp,
-                              color: isSelected ? selectedFg : unselectedFg,
-                            ),
-                          ),
+                          child: Text(badge,
+                              style: TextStyle(fontSize: 11.sp, color: Colors.white, fontWeight: FontWeight.w700)),
                         ),
+                        SizedBox(width: 6.w),
+                      ],
+                      // Trailing affordance: expandable → rotating chevron;
+                      // navigable → a right chevron.
+                      if (hasSubItems)
+                        AnimatedRotation(
+                          turns: isExpanded ? 0.5 : 0,
+                          duration: const Duration(milliseconds: 180),
+                          child: Icon(Icons.keyboard_arrow_down, size: 20.sp, color: (isSelected ? selectedFg : unselectedFg).withValues(alpha: 0.9)),
+                        )
+                      else if (!sub)
+                        Icon(Icons.chevron_right, size: 18.sp, color: (isSelected ? selectedFg : unselectedFg).withValues(alpha: isSelected ? 0.95 : 0.5)),
                     ],
                   ],
                 ),
               ),
             ),
-          ),
-          if (isExpanded) _buildSubMenu(context, index, item),
-        ],
-      ),
+          ));
+    final tile = Padding(
+      padding: EdgeInsets.only(bottom: sub ? 3.h : 10.h, left: sub ? 2.w : 0),
+      child: sub
+          // A section child can itself have sub-items (Setup > Fee Master >
+          // Fee Group). The submenu sits OUTSIDE the IntrinsicHeight — that
+          // only needs to size the tile row against its nav rail, and giving it
+          // a growing child to measure is what breaks IntrinsicHeight layouts.
+          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              IntrinsicHeight(
+                child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  _navRail(isSelected),
+                  SizedBox(width: 2.w),
+                  Expanded(child: content),
+                ]),
+              ),
+              if (isExpanded) _buildSubMenu(context, index, item),
+            ])
+          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              content,
+              if (isExpanded) _buildSubMenu(context, index, item),
+            ]),
     );
     // Collapsed sidebar hides labels, so surface each item's name on hover.
     return collapsed
         ? Tooltip(
-            message: item.label,
+            message: item.navTitle,
             waitDuration: const Duration(milliseconds: 300),
             // Push clear of the fixed 78px sidebar so the pill sits to the
             // right of the icon rather than overlapping the rail.
@@ -1006,6 +1078,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : tile;
   }
 
+  /// Collapsed (icon-only) sidebar: the sub-items of [item] in a pop-out to
+  /// the right of its icon. Picking one opens it, as the accordion does.
+  Future<void> _openFlyout(BuildContext tileCtx, int index, AppNavItem item) async {
+    final box = tileCtx.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(tileCtx).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final at = box.localToGlobal(Offset(box.size.width + 14, 0), ancestor: overlay);
+    final picked = await showMenu<int>(
+      context: tileCtx,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, overlay.size.width - at.dx, 0),
+      constraints: const BoxConstraints(minWidth: 220, maxWidth: 300),
+      items: [
+        PopupMenuItem<int>(
+          enabled: false,
+          height: 34,
+          child: Text(item.navTitle.toUpperCase(), style: AppUI.caps),
+        ),
+        for (var s = 0; s < item.visibleSubItems.length; s++)
+          PopupMenuItem<int>(
+            value: s,
+            height: 42,
+            child: Builder(builder: (_) {
+              final sub = item.visibleSubItems[s];
+              final on = _selectedNavIndex == index && _selectedSubIndex == s;
+              return Row(children: [
+                AppIcon(sub.icon,
+                    size: 17,
+                    style: on ? AppIconStyle.bold : AppIconStyle.linear,
+                    color: on ? AppColors.primary : AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(schoolTerm(sub.label),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: on ? FontWeight.w800 : FontWeight.w600,
+                          color: on ? AppColors.primary : AppColors.textPrimary)),
+                ),
+              ]);
+            }),
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _selectedNavIndex = index;
+      _selectedSubIndex = picked;
+      _expandedNavIndex = null;
+    });
+    _loadUnreadNotifCount();
+  }
+
   Widget _buildSubMenu(BuildContext context, int parentIndex, AppNavItem item) {
     // Selected sub-item mirrors a selected main nav item (Admission Master):
     // a filled blue pill with white icon/text; unselected is light on navy.
@@ -1018,9 +1142,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (var s = 0; s < item.subItems.length; s++) ...[
+          for (var s = 0; s < item.visibleSubItems.length; s++) ...[
             Builder(builder: (context) {
-              final sub = item.subItems[s];
+              final sub = item.visibleSubItems[s];
               final selected = isParentSelected && _selectedSubIndex == s;
               return Material(
                 color: Colors.transparent,
@@ -1032,13 +1156,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _selectedSubIndex = s;
                     });
                   },
-                  borderRadius: BorderRadius.circular(8.r),
+                  borderRadius: BorderRadius.circular(8),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
                     padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
                     decoration: BoxDecoration(
                       color: selected ? AppColors.primary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10.r),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
@@ -1051,10 +1175,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         SizedBox(width: 10.w),
                         Expanded(
                           child: Text(
-                            sub.label,
+                            schoolTerm(sub.label),
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
-                            style: GoogleFonts.plusJakartaSans(
+                            style: TextStyle(
                               fontSize: 12.5.sp,
                               color: selected ? selectedFg : unselectedFg,
                               fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
@@ -1067,7 +1191,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               );
             }),
-            if (s < item.subItems.length - 1) SizedBox(height: 2.h),
+            if (s < item.visibleSubItems.length - 1) SizedBox(height: 2.h),
           ],
         ],
       ),
@@ -1083,7 +1207,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+        border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
       ),
       child: Row(
         children: [
@@ -1105,8 +1229,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                _navItems[_selectedNavIndex].label,
-                style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: -0.2, height: 1.1),
+                _navItems[_selectedNavIndex].navTitle,
+                style: TextStyle(fontSize: 26.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3, height: 1.1),
               ),
               if (_academicYear.isNotEmpty) ...[
                 SizedBox(height: 5.h),
@@ -1155,20 +1279,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           AppIcon('teacher', size: 48.sp, color: AppColors.accent),
                         SizedBox(width: 14.w),
                         Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (auth.insName != null)
                               Text(
                                 auth.insName!,
+                                textAlign: TextAlign.center,
                                 style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3, height: 1.1),
                               ),
                             if (auth.insAddress != null) ...[
                               SizedBox(height: 2.h),
                               Text(
                                 auth.insAddress!,
-                                style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
-                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: AppUI.muted,
                               ),
                             ],
                           ],
@@ -1227,13 +1352,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             tooltip: 'Profile options',
             position: PopupMenuPosition.under,
             offset: Offset(0, 8.h),
-            color: Colors.white,
-            elevation: 10,
-            surfaceTintColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12.r),
-              side: const BorderSide(color: AppColors.border),
-            ),
             menuPadding: EdgeInsets.symmetric(vertical: 6.h),
             padding: EdgeInsets.zero,
             onSelected: (value) async {
@@ -1269,11 +1387,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     return CircleAvatar(
                       radius: compact ? 18 : 26,
-                      backgroundColor: AppColors.accent.withValues(alpha: 0.18),
+                      backgroundColor: AppColors.primaryLight,
                       child: Text(
                         (auth.userName ?? 'U')[0].toUpperCase(),
                         style: TextStyle(
-                          color: AppColors.accent,
+                          color: AppColors.primary,
                           fontWeight: FontWeight.w800,
                           fontSize: compact ? 16.sp : 20.sp,
                         ),
@@ -1301,7 +1419,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           auth.userEmail ?? (auth.userRole ?? 'Staff'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w500, height: 1.15),
+                          style: AppUI.muted.copyWith(height: 1.15),
                         ),
                       ],
                     ),
@@ -1332,7 +1450,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final compact = MediaQuery.of(context).size.width <= 1366;
     final size = compact ? 36.0 : 44.0;
     final iconSize = compact ? 22.0 : 28.0;
-    final radius = compact ? 10.0 : 12.0;
+    const radius = AppUI.controlRadius;
     Widget iconWidget = iconLinear
         ? AppIcon.linear(icon, size: iconSize, color: fg)
         : AppIcon(icon, size: iconSize, color: fg);
@@ -1366,7 +1484,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Screens that manage their own scroll and need full bounded height
   bool _isFullHeightScreen() {
     final label = _navItems[_selectedNavIndex].label;
-    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Fee Refund' || label == 'Fee Collection Import' || label == 'Roles & Access';
+    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Demand Import' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Daily Collection' || label == 'Pending Payment' || label == 'Pending Details' || label == 'Consolidated Status' || label == 'Consolidated Summary' || label == 'TC Certificate' || label == 'TC Approval' || label == 'TC Print' || label == 'TC Format' || label == 'DCB Register' || label == 'Advance Register' || label == 'Admission Register' || label == 'TC Report' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Course Transfer' || label == 'Transfer Certificate' || label == 'New Roll Number' || label == 'EMIS / UMIS' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Fee Refund' || label == 'Fee Cancel Receipt' || label == 'Misc Collection' || label == 'Advance Collection' || label == 'Advance Fee Collection' || label == 'Advance Adjustment' || label == 'Year End Process' || label == 'Fee Collection Import' || label == 'Roles & Access' || label == kSequenceMenu;
+  }
+
+  /// Which tab a sidebar sub-item opens, resolved by LABEL.
+  ///
+  /// This used to be positional -- sub-item N opened tab N -- which held only
+  /// while every tab had a sub-item, in the same order. Sequence Master took
+  /// five tabs out of Fee Master's sub-list while leaving the tabs themselves
+  /// in place, so position no longer lines up and "Class Fee Demand" would
+  /// have opened "Demand No". Matching on the label means the sub-item list
+  /// and the tab list are free to differ in order and length.
+  int _subTab(List<String> tabLabels) {
+    final items = _navItems[_selectedNavIndex].visibleSubItems;
+    if (_selectedSubIndex >= 0 && _selectedSubIndex < items.length) {
+      final i = tabLabels.indexOf(items[_selectedSubIndex].label);
+      if (i >= 0) return i;
+    }
+    return 0;
+  }
+
+  /// The label of the selected sub-item, or '' when there is none.
+  String get _subLabel {
+    final items = _navItems[_selectedNavIndex].visibleSubItems;
+    return (_selectedSubIndex >= 0 && _selectedSubIndex < items.length)
+        ? items[_selectedSubIndex].label
+        : '';
   }
 
   Widget _buildDashboardContent(BuildContext context, bool isDesktop) {
@@ -1379,6 +1522,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Fee Demand') {
       return const FeeDemandScreen();
     }
+    if (selectedMenu == 'Fee Demand Import') {
+      return const FeeDemandImportScreen();
+    }
     if (selectedMenu == 'Fee Collection') {
       return StudentFeeCollectionScreen(
         onNavigateToTransactions: () {
@@ -1387,14 +1533,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
         },
       );
     }
+    if (selectedMenu == 'Misc Collection') {
+      return const MiscCollectionScreen();
+    }
+    if (selectedMenu == 'Advance Collection') {
+      return const AdvanceCollectionScreen();
+    }
+    if (selectedMenu == 'Advance Fee Collection') {
+      return const AdvanceFeeCollectionScreen();
+    }
+    if (selectedMenu == 'Advance Adjustment') {
+      // School: last year's advance fees reconciled against this year's demands.
+      return isSchool ? const AdvanceReconcileScreen() : const AdvanceAdjustmentScreen();
+    }
     if (selectedMenu == 'Fee Collection Import') {
       // Reuses the master-import card layout; opens directly at the (hidden) Fee
       // Collection tab so it looks exactly like the other import screens.
       return const MasterImportScreen(initialTabIndex: 10, showInternalTabs: false);
     }
-    if (selectedMenu == 'Student Ledger') {
-      return const StudentLedgerScreen();
+    // Reports are now individual sidebar submenus, each opening the Reports
+    // screen at its tab with the in-screen tab bar hidden.
+    const reportTabs = {
+      'Daily Collection': 0,
+      'Student Ledger': 1,
+      'Pending Payment': 2,
+      'Pending Details': 3,
+      'Consolidated Status': 4,
+      'DCB Register': 5,
+      'Advance Register': 6,
+    };
+    if (reportTabs.containsKey(selectedMenu)) {
+      return ReportsScreen(initialTab: reportTabs[selectedMenu]!, showTabBar: false);
     }
+    // Its own screen rather than a Reports tab: the register is admission
+    // data with its own filters and field chooser, and reports_screen.dart is
+    // already the largest file in the app.
+    if (selectedMenu == 'Admission Register') {
+      return const AdmissionRegisterScreen();
+    }
+    if (selectedMenu == 'TC Report') {
+      return const TcReportScreen();
+    }
+    if (selectedMenu == 'Consolidated Summary') {
+      return const ConsolidatedSummaryScreen();
+    }
+    if (selectedMenu == 'TC Certificate') return const TcCertificateScreen();
+    if (selectedMenu == 'TC Approval') return const TcApprovalScreen();
+    if (selectedMenu == 'TC Print') return const TcPrintScreen();
+    if (selectedMenu == 'TC Format') return const TcFormatScreen();
     if (selectedMenu == 'Transactions') {
       return const FailedTransactionsScreen();
     }
@@ -1413,8 +1599,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Notifications') {
       return NotificationScreen(onReadChanged: _loadUnreadNotifCount);
     }
+    // Master Data / Admission Master / Fee Master keep their tabs as sidebar
+    // SUB-ITEMS, so the sidebar is the tab selector and the in-screen pill bar
+    // is hidden. _selectedSubIndex is the chosen tab.
     if (selectedMenu == 'Master Data') {
-      return const MasterDataScreen();
+      final t = _subTab(MasterDataScreen.tabLabels);
+      return MasterDataScreen(
+          key: ValueKey('masterdata-$t'), initialTab: t, showTabBar: false);
     }
     if (selectedMenu == 'Bank Accounts') {
       return const BankDetailsScreen();
@@ -1432,13 +1623,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return const FastAdmissionScreen();
     }
     if (selectedMenu == 'Class Allocation') {
-      return const ClassAllocationTabsScreen();
+      return const ClassAllocationScreen();
+    }
+    if (selectedMenu == 'Course Transfer') {
+      return const InterimPromotionScreen();
+    }
+    if (selectedMenu == 'Transfer Certificate') {
+      return const TransferCertificateScreen();
+    }
+    if (selectedMenu == 'New Roll Number') {
+      return const NewRollNoScreen();
+    }
+    if (selectedMenu == 'EMIS / UMIS') {
+      return const EmisUmisScreen();
     }
     if (selectedMenu == 'Admission Master') {
-      return const AdmissionMasterScreen();
+      final t = _subTab(AdmissionMasterScreen.tabLabels);
+      return AdmissionMasterScreen(
+          key: ValueKey('admmaster-$t'), initialTab: t, showTabBar: false);
     }
     if (selectedMenu == 'Fee Master') {
-      return const FeeMasterScreen();
+      final t = _subTab(FeeMasterScreen.tabLabels);
+      return FeeMasterScreen(
+          key: ValueKey('feemaster-$t'), initialTab: t, showTabBar: false);
+    }
+    // Sequence Master shows tabs that belong to two OTHER screens, so it picks
+    // the screen from the label rather than opening one of its own.
+    if (selectedMenu == kSequenceMenu) {
+      final label = _subLabel;
+      final ai = AdmissionMasterScreen.tabLabels.indexOf(label);
+      if (ai >= 0) {
+        return AdmissionMasterScreen(
+            key: ValueKey('seq-adm-$ai'), initialTab: ai, showTabBar: false);
+      }
+      final fi = FeeMasterScreen.tabLabels.indexOf(label);
+      return FeeMasterScreen(
+          key: ValueKey('seq-fee-$fi'),
+          initialTab: fi < 0 ? 0 : fi,
+          showTabBar: false);
     }
     if (selectedMenu == 'Fee Concession') {
       return const FeeConcessionScreen();
@@ -1446,11 +1668,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Fee Refund') {
       return const FeeRefundScreen();
     }
+    if (selectedMenu == 'Fee Cancel Receipt') {
+      return const FeeCancelScreen();
+    }
     if (selectedMenu == 'Utilities') {
       return const UtilitiesScreen();
     }
-    // Dashboard landing page: the class-wise / date-wise collection summary.
-    return const FeeCollectionScreen();
+    if (selectedMenu == 'Year End Process') {
+      return const YearEndScreen();
+    }
+    // Dashboard landing page: the institution overview (KPIs, collection chart,
+    // students-by-class, recent payments, quick actions, today summary).
+    return DashboardOverviewScreen(
+      allowedMenus: _navItems.map((i) => i.label).toSet(),
+      // The RAW grant set, not the nav labels above: it carries the dash:
+      // tile keys too, and the overview needs those to know which cards and
+      // panels this role may see.
+      allowedTiles: _allowedMenus,
+      onNavigate: (label) {
+        final idx = _navItems.indexWhere((i) => i.label == label);
+        if (idx < 0) return;
+        setState(() {
+          _selectedNavIndex = idx;
+          _expandedSections
+            ..clear()
+            ..add(_navItems[idx].section);
+        });
+      },
+    );
   }
 
 }

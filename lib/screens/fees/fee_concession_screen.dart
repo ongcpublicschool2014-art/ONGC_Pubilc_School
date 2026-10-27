@@ -3,14 +3,25 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/formatters.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
+import 'class_concession_panel.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/empty_state.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/student_avatar.dart';
+import '../../utils/school_terms.dart';
 
-/// Fee Concession — per-student concession entry. Look up a student, see every
-/// unpaid fee demand, enter a concession per fee type (balance updates live),
-/// then Save to write conamount + balancedue back to feedemand.
+/// Fee Concession — two views:
+///   • LIST   : every persisted concession record across the institution, with
+///              KPI totals, Course/Class/Student filters and pagination.
+///   • DETAIL : pick a student and their fee demands (from feedemand) list by
+///              semester with the concession editable inline; Save persists a
+///              voucher (concession + concessiondetail) via process_concession
+///              and re-applies each line onto feedemand.
 class FeeConcessionScreen extends StatefulWidget {
   const FeeConcessionScreen({super.key});
 
@@ -18,28 +29,48 @@ class FeeConcessionScreen extends StatefulWidget {
   State<FeeConcessionScreen> createState() => _FeeConcessionScreenState();
 }
 
+/// One editable fee-demand line.
 class _ConRow {
   final int demId;
   final String feeType;
   final String term;
   final String section;
+  /// 'ARREAR' for a carried-forward demand, 'REGULAR' otherwise — read from
+  /// feedemand.demseqtype, same rule as Fee Collection.
+  final String seqType;
+  final String feeYear;
   final double feeAmount;
   final double paidAmount;
+  final double appliedAmount; // concession already on the demand at load → locks the row
   final TextEditingController conCtrl;
   _ConRow({
     required this.demId,
     required this.feeType,
     required this.term,
     required this.section,
+    required this.seqType,
+    required this.feeYear,
     required this.feeAmount,
     required this.paidAmount,
     required double concession,
-  }) : conCtrl = TextEditingController(text: concession > 0 ? concession.toStringAsFixed(0) : '');
+  })  : appliedAmount = concession,
+        conCtrl = TextEditingController(text: concession > 0 ? concession.toStringAsFixed(0) : '');
+
+  // A concession already applied is locked (can't be edited/re-applied → no
+  // duplicate voucher). Editable only when it's collectible with an unpaid
+  // balance and nothing has been applied yet.
+  bool get isApplied => appliedAmount > 0.009;
+  bool get editable => (feeAmount - paidAmount) > 0.009 && !isApplied;
 
   double get concession {
     final c = double.tryParse(conCtrl.text.trim()) ?? 0;
+    // Cap at the unpaid balance -- but floor that cap at 0. When paid EXCEEDS
+    // the fee (an over-payment awaiting refund) the cap went negative and this
+    // returned a NEGATIVE concession, which silently subtracted from the
+    // screen totals: three lines carrying 3000 / 0 / 0 summed to 500.
     final max = feeAmount - paidAmount;
-    return c < 0 ? 0 : (c > max ? max : c);
+    if (c <= 0 || max <= 0) return 0;
+    return c > max ? max : c;
   }
 
   double get balance {
@@ -51,28 +82,74 @@ class _ConRow {
 }
 
 class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
-  final _searchCtrl = TextEditingController();
-  Map<String, dynamic>? _student;
-  List<_ConRow> _rows = [];
-  List<Map<String, dynamic>> _suggestions = []; // floating popup from typing
-  List<Map<String, dynamic>> _filteredStudents = []; // dropdown list from standard/section filter
-  List<Map<String, dynamic>> _conTypes = [];
-  String? _conTypeId;
-  bool _searching = false, _loading = false, _saving = false;
+  // School: 'student' (one student, below) or 'section' (old product's
+  // section-wise concession -- ClassConcessionPanel).
+  String _mode = 'student';
+  // view: 'list' (all records) | 'detail' (one student)
+  String _view = 'list';
   String? _error;
 
-  // Filter-by-class state. Both lists are loaded once from public masters; the
-  // class list is derived from the chosen Course.
-  List<Map<String, dynamic>> _courseList = []; // {cour_id, courname}
-  List<Map<String, dynamic>> _classList = [];  // {claname, cour_id}
+  // concession categories (concessioncategory master)
+  List<Map<String, dynamic>> _conTypes = [];
+
+  // course/class filter masters
+  List<Map<String, dynamic>> _courseList = [];
+  List<Map<String, dynamic>> _classList = [];
   String? _selectedCourse;
   String? _selectedClass;
+  List<Map<String, dynamic>> _filteredStudents = [];
+  /// Every active student — the Student search falls back to this when no
+  /// Course/Class filter is set.
+  List<Map<String, dynamic>> _allStudents = [];
+
+  // ── list view ──
+  List<Map<String, dynamic>> _allCon = [];
+  bool _listLoading = false;
+  int _page = 0;
+  final int _pageSize = 10;
+
+  // ── detail view (editable fee-demand list) ──
+  Map<String, dynamic>? _student;
+  // The open student's photo (students.stuphoto). Kept apart from _student
+  // because a concession record opened from the list carries no photo, so it
+  // is fetched separately -- and must not leak into the saved row.
+  String? _studentPhoto;
+  List<_ConRow> _demandRows = [];
+  bool _demandLoading = false;
+  bool _detailSaving = false;
+  String? _dSem, _dFeeType; // Step-2 filters
+  final TextEditingController _pctCtrl = TextEditingController(); // concession %
+  String? _dConType; // Step-2 Concession Type = the category applied on Save
 
   @override
   void initState() {
     super.initState();
     _loadConTypes();
     _loadCoursesClasses();
+    _loadList();
+  }
+
+  @override
+  void dispose() {
+    for (final r in _demandRows) {
+      r.dispose();
+    }
+    _pctCtrl.dispose();
+    super.dispose();
+  }
+
+  int get _insId => context.read<AuthProvider>().insId ?? 1;
+
+  // ── masters / loads ───────────────────────────────────────────────────────
+  Future<void> _loadConTypes() async {
+    try {
+      final res = await SupabaseService.fromSchema('concessioncategory')
+          .select('con_id, condesc')
+          .eq('ins_id', _insId)
+          .eq('activestatus', 1)
+          .order('condesc', ascending: true);
+      if (mounted) setState(() => _conTypes = List<Map<String, dynamic>>.from(res as List));
+    } catch (_) {}
   }
 
   Future<void> _loadCoursesClasses() async {
@@ -89,26 +166,51 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     } catch (_) {}
   }
 
+  /// All persisted concession voucher headers for the institution.
+  Future<void> _loadList() async {
+    setState(() => _listLoading = true);
+    try {
+      final rows = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('concession')
+          .select('con_hdr_id, doc_no, condate, stu_id, stuadmno, stuname, stuclass, courname, con_id, contype, totalfee, totalconcession, totalbalance, createdby')
+          .eq('ins_id', _insId)
+          .eq('activestatus', 1)
+          .order('con_hdr_id', ascending: false));
+      if (mounted) setState(() { _allCon = rows; _listLoading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _listLoading = false; _error = friendlyError(e); });
+    }
+    // Every active student, so the Student box can be searched without first
+    // picking a Course/Class. fetchAll: a plain select stops at 1000 rows.
+    try {
+      final studs = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('students')
+          .select('stu_id, stuname, stuadmno, stuclass, courname, stuphoto')
+          .eq('ins_id', _insId)
+          .eq('activestatus', 1)
+          .eq('preadmission', 0));  // next year's intake: advance screens only
+      studs.sort((a, b) => (a['stuname'] ?? '').toString().compareTo((b['stuname'] ?? '').toString()));
+      if (mounted) setState(() => _allStudents = studs);
+    } catch (_) {}
+  }
+
   List<String> get _courseNames =>
-      (_courseList.map((e) => e['courname']?.toString().trim() ?? '')
-          .where((s) => s.isNotEmpty).toSet().toList());
+      (_courseList.map((e) => e['courname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList());
 
   List<String> _classNamesFor(String? courseName) {
     Iterable<Map<String, dynamic>> src = _classList;
     if (courseName != null && courseName.trim().isNotEmpty) {
-      final std = _courseList.firstWhere(
-        (c) => (c['courname']?.toString().trim() ?? '') == courseName.trim(),
-        orElse: () => const {},
-      );
-      final cgrpId = std['cour_id'];
-      src = cgrpId == null ? const <Map<String, dynamic>>[] : _classList.where((cl) => cl['cour_id'] == cgrpId);
+      final std = _courseList.firstWhere((c) => (c['courname']?.toString().trim() ?? '') == courseName.trim(), orElse: () => const {});
+      final id = std['cour_id'];
+      src = id == null ? const <Map<String, dynamic>>[] : _classList.where((cl) => cl['cour_id'] == id);
     }
-    return (src.map((e) => e['claname']?.toString().trim() ?? '')
-        .where((s) => s.isNotEmpty).toSet().toList());
+    // Keeps the master's own order within each group and sends the TC
+    // batches to the foot of the list (utils/class_sort.dart).
+    return classGroupPartition(
+        src.map((e) => e['claname']?.toString().trim() ?? '')
+            .where((s) => s.isNotEmpty).toSet(),
+        (s) => s);
   }
 
-  /// Fetch students matching the Course / Class filter into the
-  /// suggestions list (same widget used by the name/admno search).
   Future<void> _loadFromFilter() async {
     if (_selectedCourse == null && _selectedClass == null) {
       if (mounted) setState(() => _filteredStudents = []);
@@ -116,685 +218,911 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     }
     try {
       var query = SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
+          .select('stu_id, stuname, stuadmno, stuclass, courname, stuphoto')
           .eq('ins_id', _insId)
-          .eq('activestatus', 1);
-      if (_selectedCourse != null) {
-        query = query.eq('courname', _selectedCourse!);
-      }
-      if (_selectedClass != null) {
-        query = query.eq('stuclass', _selectedClass!);
-      }
+          .eq('activestatus', 1)
+          .eq('preadmission', 0);  // next year's intake: advance screens only
+      if (_selectedCourse != null) query = query.eq('courname', _selectedCourse!);
+      if (_selectedClass != null) query = query.eq('stuclass', _selectedClass!);
       final rows = await query.order('stuname', ascending: true).limit(500);
-      if (mounted) setState(() => _filteredStudents = List<Map<String, dynamic>>.from(rows));
-    } catch (_) {}
-  }
-
-  Future<void> _loadConTypes() async {
-    try {
-      final res = await SupabaseService.fromSchema('concessioncategory')
-          .select('con_id, condesc')
-          .eq('ins_id', _insId)
-          .eq('activestatus', 1)
-          .order('condesc', ascending: true);
-      if (mounted) setState(() => _conTypes = List<Map<String, dynamic>>.from(res as List));
-    } catch (_) {}
-  }
-
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    for (final r in _rows) {
-      r.dispose();
-    }
-    super.dispose();
-  }
-
-  int get _insId => context.read<AuthProvider>().insId ?? 1;
-
-  Future<void> _suggest(String q) async {
-    final term = q.trim();
-    if (term.length < 2) {
-      setState(() => _suggestions = []);
-      return;
-    }
-    try {
-      final rows = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
-          .eq('ins_id', _insId)
-          .eq('activestatus', 1)
-          .or('stuadmno.ilike.$term%,stuname.ilike.%$term%')
-          .order('stuname', ascending: true)
-          .limit(200);
-      if (mounted) setState(() => _suggestions = List<Map<String, dynamic>>.from(rows));
-    } catch (_) {}
-  }
-
-  void _pick(Map<String, dynamic> s) {
-    _searchCtrl.text = s['stuadmno']?.toString() ?? '';
-    setState(() => _suggestions = []);
-    _load(s);
-  }
-
-  Future<void> _search() async {
-    final q = _searchCtrl.text.trim();
-    if (q.isEmpty) return;
-    setState(() {
-      _searching = true;
-      _error = null;
-      _suggestions = [];
-    });
-    try {
-      var rows = await SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname')
-          .eq('ins_id', _insId)
-          .eq('stuadmno', q)
-          .eq('activestatus', 1)
-          .limit(1);
-      if ((rows as List).isEmpty) {
-        rows = await SupabaseService.fromSchema('students')
-            .select('stu_id, stuname, stuadmno, stuclass, courname')
-            .eq('ins_id', _insId)
-            .eq('activestatus', 1)
-            .ilike('stuname', '%$q%')
-            .limit(1);
+      final seen = <String>{};
+      final deduped = <Map<String, dynamic>>[];
+      for (final s in List<Map<String, dynamic>>.from(rows)) {
+        if (seen.add(s['stu_id']?.toString() ?? '')) deduped.add(s);
       }
-      if ((rows as List).isEmpty) {
-        setState(() {
-          _error = 'No student found matching "$q"';
-          _searching = false;
-          _student = null;
-        });
-        return;
-      }
-      await _load(Map<String, dynamic>.from(rows.first as Map));
-    } catch (e) {
-      setState(() {
-        _error = friendlyError(e);
-        _searching = false;
-      });
-    }
+      if (mounted) setState(() => _filteredStudents = deduped);
+    } catch (_) {}
   }
 
-  Future<void> _load(Map<String, dynamic> student) async {
+  // ── detail view: load the student's fee demands (editable) ────────────────
+  Future<void> _openDetail(Map<String, dynamic> student) async {
     setState(() {
-      _searching = false;
-      _loading = true;
+      _view = 'detail';
       _student = student;
-      for (final r in _rows) {
-        r.dispose();
-      }
-      _rows = [];
+      for (final r in _demandRows) { r.dispose(); }
+      _demandRows = [];
+      _demandLoading = true;
+      _dSem = _dFeeType = _dConType = null;
+      _error = null;
+      _studentPhoto = student['stuphoto']?.toString();
     });
+    if (!student.containsKey('stuphoto')) _loadStudentPhoto(student['stu_id']);
+    await _loadDemands();
+  }
+
+  /// A record opened from the concession list has no stuphoto column; look it
+  /// up for that one student. A failure just leaves the initial showing.
+  Future<void> _loadStudentPhoto(dynamic stuId) async {
+    if (stuId == null) return;
     try {
-      final admno = student['stuadmno']?.toString() ?? '';
+      final row = await SupabaseService.fromSchema('students')
+          .select('stuphoto')
+          .eq('stu_id', stuId)
+          .maybeSingle();
+      if (!mounted || _student?['stu_id']?.toString() != stuId.toString()) return;
+      setState(() => _studentPhoto = row?['stuphoto']?.toString());
+    } catch (_) {}
+  }
+
+  Future<void> _loadDemands() async {
+    final admno = _student?['stuadmno']?.toString() ?? '';
+    if (admno.isEmpty) { setState(() => _demandLoading = false); return; }
+    setState(() => _demandLoading = true);
+    try {
       final res = await SupabaseService.fromSchema('feedemand')
-          .select('dem_id, stuclass, demfeeterm, demfeetype, feeamount, conamount, paidamount, balancedue, con_id')
+          .select('dem_id, stuclass, demfeeterm, demfeetype, feeamount, conamount, paidamount, con_id, collectible, demseqtype, demfeeyear')
           .eq('ins_id', _insId)
           .eq('stuadmno', admno)
           .eq('activestatus', 1)
-          // KCET: only unpaid demands can take a concession — editing a paid
-          // demand's balance would desync it from the payment already taken.
-          .eq('paidstatus', 'U')
-          .eq('paidstatus', 'U')
           .order('demfeeterm', ascending: true)
           .order('demfeetype', ascending: true);
-      final list = (res as List).map((e) {
+      // Concession only applies to collectible fees — a non-collectible demand
+      // isn't billed, so exclude collectible=false (keep true / unset).
+      final list = (res as List).where((e) => (e as Map)['collectible'] != false).map((e) {
         final m = e as Map<String, dynamic>;
         return _ConRow(
           demId: m['dem_id'] is int ? m['dem_id'] as int : int.tryParse(m['dem_id'].toString()) ?? 0,
           feeType: m['demfeetype']?.toString() ?? '',
           term: m['demfeeterm']?.toString() ?? '',
           section: m['stuclass']?.toString() ?? '',
+          seqType: (m['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR'
+              ? 'ARREAR'
+              : 'REGULAR',
+          feeYear: m['demfeeyear']?.toString() ?? '',
           feeAmount: (m['feeamount'] as num?)?.toDouble() ?? 0,
           paidAmount: (m['paidamount'] as num?)?.toDouble() ?? 0,
           concession: (m['conamount'] as num?)?.toDouble() ?? 0,
         );
       }).toList();
-      // Pre-select the concession type already on the student's demands (if any).
-      String? existingConId;
+      // Preselect the category already on the demands (if any).
+      String? existing;
       for (final e in res) {
         final cid = (e as Map)['con_id'];
-        if (cid != null) {
-          existingConId = cid.toString();
-          break;
-        }
+        if (cid != null) { existing = cid.toString(); break; }
       }
       if (!mounted) return;
       setState(() {
-        _rows = list;
-        if (existingConId != null && _conTypes.any((t) => t['con_id'].toString() == existingConId)) {
-          _conTypeId = existingConId;
-        }
-        _loading = false;
+        _demandRows = list;
+        if (existing != null && _conTypes.any((t) => t['con_id'].toString() == existing)) _dConType = existing;
+        _demandLoading = false;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = friendlyError(e);
-        });
-      }
+      if (mounted) setState(() { _demandLoading = false; _error = friendlyError(e); });
     }
   }
 
-  double get _totalCon => _rows.fold(0.0, (s, r) => s + r.concession);
-  double get _totalBal => _rows.fold(0.0, (s, r) => s + r.balance);
-  double get _totalDef => _rows.fold(0.0, (s, r) => s + r.feeAmount);
+  void _backToList() {
+    setState(() {
+      _view = 'list';
+      _student = null;
+      for (final r in _demandRows) { r.dispose(); }
+      _demandRows = [];
+      _error = null;
+    });
+    _loadList();
+  }
 
-  Future<void> _save() async {
-    if (_rows.isEmpty) return;
-    // A concession category must be chosen before any concession amount can be
-    // applied — the amount is meaningless without the category it belongs to.
-    final hasConcession = _rows.any((r) => r.concession > 0);
-    if (hasConcession && (_conTypeId == null || _conTypeId!.isEmpty)) {
-      _popup('Concession Category Required', 'Select a concession category first.', AppColors.warning, Icons.warning_amber_rounded);
+  void _clearFilters() {
+    setState(() {
+      _selectedCourse = null;
+      _selectedClass = null;
+      _filteredStudents = [];
+      _page = 0;
+      _error = null;
+      if (_view == 'detail') { _dSem = _dFeeType = null; }
+    });
+  }
+
+  // ── list filtering + KPIs ─────────────────────────────────────────────────
+  List<Map<String, dynamic>> get _filteredList {
+    return _allCon.where((r) {
+      if (_selectedCourse != null && (r['courname']?.toString() != _selectedCourse)) return false;
+      if (_selectedClass != null && (r['stuclass']?.toString() != _selectedClass)) return false;
+      return true;
+    }).toList();
+  }
+
+  /// Students offered by the Student search. Course/Class narrow it when set,
+  /// but an empty filter still searches everyone.
+  List<Map<String, dynamic>> get _studentPool {
+    if (_filteredStudents.isNotEmpty) return _filteredStudents;
+    return _allStudents;
+  }
+
+  double _sum(List<Map<String, dynamic>> rows, String key) =>
+      rows.fold(0.0, (s, r) => s + ((r[key] as num?)?.toDouble() ?? 0));
+
+  // ── detail filtering + distincts ──────────────────────────────────────────
+  /// Concession by PERCENTAGE: every editable line on screen (Term / Fee Type
+  /// filters respected) gets that share of its fee, capped at what is still
+  /// unpaid. Lines can still be changed by hand afterwards.
+  void _applyPercent() {
+    final pct = double.tryParse(_pctCtrl.text.trim()) ?? 0;
+    if (pct <= 0 || pct > 100) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a percentage between 1 and 100.'), backgroundColor: AppColors.warning));
       return;
     }
-    setState(() => _saving = true);
+    setState(() {
+      for (final r in _filteredDemands.where((r) => r.editable)) {
+        var v = (r.feeAmount * pct / 100);
+        final max = r.feeAmount - r.paidAmount;
+        if (v > max) v = max;
+        r.conCtrl.text = v <= 0 ? '' : (v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2));
+      }
+    });
+  }
+
+  List<_ConRow> get _filteredDemands => _demandRows.where((r) {
+        if (_dSem != null && r.term != _dSem) return false;
+        if (_dFeeType != null && r.feeType != _dFeeType) return false;
+        return true;
+      }).toList();
+
+  List<String> get _terms => (_demandRows.map((r) => r.term).where((s) => s.isNotEmpty).toSet().toList()..sort());
+  List<String> get _feeTypes => (_demandRows.map((r) => r.feeType).where((s) => s.isNotEmpty).toSet().toList()..sort());
+
+  // ── save ──────────────────────────────────────────────────────────────────
+  // True if a numbering sequence with this actname (e.g. CONNO) is configured.
+  Future<bool> _hasSequence(String actname) async {
     try {
-      final conId = _conTypeId != null ? int.tryParse(_conTypeId!) : null;
-      final token = context.read<AuthProvider>().sessionToken;
-      for (final r in _rows) {
-        await SupabaseService.applyConcession(
-          token: token, demId: r.demId,
-          conId: r.concession > 0 ? conId : null,
-          conamount: r.concession, balancedue: r.balance);
+      final r = await SupabaseService.fromSchema('sequence')
+          .select('seq_id').eq('ins_id', _insId).eq('actname', actname).eq('activestatus', 1).limit(1).maybeSingle();
+      return r != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _saveConcession() async {
+    if (_student == null) return;
+    final lines = _demandRows.where((r) => r.editable && r.concession > 0).toList();
+    if (lines.isEmpty) {
+      _popup('Nothing to Apply', 'Enter a concession amount on at least one unpaid fee line.', AppColors.warning, Icons.warning_amber_rounded);
+      return;
+    }
+    if (_dConType == null || _dConType!.isEmpty) {
+      _popup('Concession Type Required', 'Pick a Concession Type under "Filter Concession" first — it is the category applied to these lines.', AppColors.warning, Icons.warning_amber_rounded);
+      return;
+    }
+    if (!await _hasSequence('CONNO')) {
+      _popup('Sequence Required', 'Create a Concession No sequence in Setup → Fee Master → Concession No first.', AppColors.warning, Icons.warning_amber_rounded);
+      return;
+    }
+    setState(() => _detailSaving = true);
+    try {
+      final auth = context.read<AuthProvider>();
+      final conId = int.tryParse(_dConType!);
+      final contype = _conTypes.firstWhere((t) => t['con_id'].toString() == _dConType, orElse: () => const {})['condesc']?.toString();
+      final token = auth.sessionToken;
+
+      // Regular and arrear are separate money, so each gets its OWN voucher —
+      // its own doc_no off the CONNO sequence — rather than one mixed document
+      // that can't be reconciled back to either.
+      final byType = <String, List<_ConRow>>{};
+      for (final r in lines) {
+        byType.putIfAbsent(r.seqType, () => []).add(r);
+      }
+      // Regular first so the numbering reads in the order the screen shows it.
+      final types = byType.keys.toList()
+        ..sort((a, b) => a == b ? 0 : (a == 'REGULAR' ? -1 : 1));
+
+      for (final type in types) {
+        final group = byType[type]!;
+        final totalFee = group.fold(0.0, (s, r) => s + r.feeAmount);
+        final totalCon = group.fold(0.0, (s, r) => s + r.concession);
+        final totalBal = group.fold(0.0, (s, r) => s + r.balance);
+        final header = <String, dynamic>{
+          // doc_no is assigned by process_concession from the CONNO sequence;
+          // it is the concession's only document number (receiptno was retired).
+          'ins_id': _insId,
+          'inscode': auth.inscode,
+          'yrlabel': auth.yearLabel,
+          'condate': DateTime.now().toIso8601String().split('T').first,
+          'stu_id': _student!['stu_id'],
+          'stuadmno': _student!['stuadmno'],
+          'stuname': _student!['stuname'],
+          'stuclass': _student!['stuclass'],
+          'courname': _student!['courname'],
+          'con_id': conId,
+          'contype': contype,
+          'totalfee': totalFee,
+          'totalconcession': totalCon,
+          'totalbalance': totalBal,
+          'createdby': auth.userName,
+          // ARREAR -> the arrear concession series (ARRCONNO, AC26/0001) on school
+          'seqtype': type,
+        };
+        final detailLines = group
+            .map((r) => {
+                  'dem_id': r.demId,
+                  'demfeeterm': r.term,
+                  'demfeetype': r.feeType,
+                  'feeamount': r.feeAmount,
+                  'conamount': r.concession,
+                  'balancedue': r.balance,
+                })
+            .toList();
+
+        if (token != null && token.isNotEmpty) {
+          await SupabaseService.client.rpc('process_concession', params: {
+            'p_token': token, 'p_header': header, 'p_lines': detailLines,
+          });
+        } else {
+          for (final r in group) {
+            await SupabaseService.applyConcession(
+                demId: r.demId, conId: conId, conamount: r.concession, balancedue: r.balance);
+          }
+        }
       }
       if (!mounted) return;
-      setState(() => _saving = false);
-      _snack('Concession saved.', AppColors.success);
+      setState(() => _detailSaving = false);
+      _snack(
+          types.length > 1
+              ? 'Concession saved for ${_student!['stuname']} — separate vouchers for Regular and Arrear.'
+              : 'Concession saved for ${_student!['stuname']}.',
+          AppColors.success);
+      await _loadDemands();
+      // the list on the left shows the new voucher straight away
+      _loadList();
     } catch (e) {
       if (mounted) {
-        setState(() => _saving = false);
+        setState(() => _detailSaving = false);
         _popup('Save Failed', friendlyError(e), AppColors.error, Icons.error_outline);
       }
     }
   }
 
-  void _clear() {
-    setState(() {
-      _searchCtrl.clear();
-      _student = null;
-      for (final r in _rows) {
-        r.dispose();
-      }
-      _rows = [];
-      _suggestions = [];
-      _selectedCourse = null;
-      _selectedClass = null;
-      _error = null;
-    });
-  }
-
+  // ── UI helpers ────────────────────────────────────────────────────────────
   void _snack(String m, Color c) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
   }
 
-  /// Modal popup for errors / warnings (more prominent than a bottom snackbar).
   void _popup(String title, String message, Color color, IconData icon) {
     if (!mounted) return;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Row(
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(width: 10),
-            Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
-          ],
-        ),
-        content: Text(message, style: const TextStyle(fontSize: 14)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            style: TextButton.styleFrom(foregroundColor: color),
-            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.w700)),
-          ),
-        ],
+        title: Row(children: [Icon(icon, color: color, size: 22), const SizedBox(width: 10), Expanded(child: Text(title, style: AppUI.cardTitle))]),
+        content: Text(message, style: AppUI.body),
+        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK'))],
       ),
     );
   }
 
-  // ── Form field helpers — match Class Fee Demand / Create New User style ───
-  InputDecoration _fieldDec(String hint, {Widget? prefixIcon, Widget? suffixIcon}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      prefixIcon: prefixIcon,
-      suffixIcon: suffixIcon,
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: const BorderSide(color: AppColors.border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: const BorderSide(color: AppColors.border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius),
-        borderSide: const BorderSide(color: AppColors.accent),
-      ),
-      filled: true,
-      fillColor: Colors.white,
-    );
+  InputDecoration _fieldDec(String hint) => AppUI.field(context, hint);
+
+  TextStyle _fieldTextStyle() => AppUI.fieldText(context);
+
+  // Concession category is a label, not a status: one neutral/info pill for
+  // every category (the text carries the meaning).
+  Widget _typeBadge(String type) =>
+      AppUI.chip(type.isEmpty ? '—' : type, type.trim().isEmpty ? AppStatus.neutral : AppStatus.info);
+
+  Widget _kpiCard({required String icon, required Color tint, required String value, required String label, String? sub}) =>
+      AppUI.kpi(icon: icon, label: label, value: value, sub: sub, tint: tint);
+
+  Widget _stepBadge(int n, String title) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 20.w, height: 20.w, alignment: Alignment.center, decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle), child: Text('$n', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w800, color: Colors.white))),
+        SizedBox(width: 8.w),
+        Text(title, style: AppUI.label),
+      ]);
+
+  // Indian grouping is last-3 then 2s (1,15,824.00). The old local regex
+  // grouped by 2 all the way (11,58,24.00), so every concession figure on this
+  // screen read wrong by an order of magnitude at a glance.
+  String _inr(num v) => '₹${formatIndianNumber(v)}';
+  String _date(dynamic v) {
+    final s = v?.toString() ?? '';
+    if (s.length < 10) return s;
+    final p = s.substring(0, 10).split('-');
+    return p.length == 3 ? '${p[2]}/${p[1]}/${p[0]}' : s;
   }
 
-  TextStyle _fieldTextStyle() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    return TextStyle(
-      fontWeight: FontWeight.w500,
-      fontSize: compact ? 11 : 14,
-      color: AppColors.textPrimary,
-    );
-  }
-
+  // ── build ─────────────────────────────────────────────────────────────────
+  // Single Student: master-detail -- concession records + student search on
+  // the left, the picked student's demand lines + concession entry on the
+  // right. Whole Section keeps the ClassConcessionPanel as before.
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(clipBehavior: Clip.antiAlias, decoration: AppUI.card(), child: _header()),
+      SizedBox(height: AppUI.gap),
+      Expanded(
+        child: _mode == 'section'
+            ? Container(clipBehavior: Clip.antiAlias, decoration: AppUI.card(), child: const ClassConcessionPanel())
+            : _masterDetail(),
       ),
-      child: Stack(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _header(),
-              _lookup(),
-              if (_student != null) ...[
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 8.h),
-                    child: Container(
-                      clipBehavior: Clip.antiAlias,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8.r),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: _grid(),
-                    ),
-                  ),
-                ),
-                _footer(),
-              ] else
-                Expanded(
-                  child: Center(
-                    child: Text(_error ?? 'Search a student by Admission No or Name',
-                        style: TextStyle(fontSize: 13.sp, color: _error != null ? AppColors.error : AppColors.textSecondary)),
-                  ),
-                ),
-            ],
-          ),
-          if (_suggestions.isNotEmpty) _suggestionsOverlay(),
-        ],
-      ),
-    );
+    ]);
   }
 
   Widget _header() => Padding(
-        padding: EdgeInsets.fromLTRB(18.w, 14.h, 18.w, 10.h),
+        padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 14.h),
         child: Row(children: [
-          const AppIcon('receipt-discount', size: 20, color: AppColors.primary),
-          SizedBox(width: 10.w),
-          Text('Fee Concession', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-          SizedBox(width: 10.w),
-          Text("apply concession against a student's fee demands",
-              style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
-          const Spacer(),
-          SizedBox(
-            width: 280.w,
-            child: TextField(
-              controller: _searchCtrl,
-              style: _fieldTextStyle(),
-              decoration: _fieldDec(
-                'Admission No or Student Name',
-                prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
-                suffixIcon: _searchCtrl.text.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close, size: 16, color: AppColors.textLight),
-                        splashRadius: 14,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          setState(() => _suggestions = []);
-                        },
-                      ),
-              ),
-              onChanged: _suggest,
-              onSubmitted: (_) => _search(),
-            ),
+          AppUI.iconTile('receipt-discount'),
+          SizedBox(width: 12.w),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('Fee Concession', style: AppUI.cardTitle),
+              SizedBox(height: 2.h),
+              Text(_mode == 'section'
+                      ? schoolTerm('Concession for every student of a class with a concession category')
+                      : "Apply concession against a student's fee demands",
+                  style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ]),
           ),
-          SizedBox(width: 10.w),
-          SizedBox(
-            width: 200.w,
-            child: DropdownButtonFormField<String>(
-              initialValue: _conTypeId,
-              isExpanded: true,
-              dropdownColor: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              elevation: 6,
-              style: _fieldTextStyle(),
-              decoration: _fieldDec('Select Concession'),
-              items: _conTypes
-                  .map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis)))
-                  .toList(),
-              onChanged: (v) => setState(() => _conTypeId = v),
+          if (isSchool)
+            SegmentedButton<String>(
+              segments: [
+                const ButtonSegment(value: 'student', label: Text('Single Student'), icon: Icon(Icons.person_outline, size: 16)),
+                ButtonSegment(value: 'section', label: Text(schoolTerm('Whole Class')), icon: const Icon(Icons.groups_outlined, size: 16)),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (v) => setState(() => _mode = v.first),
             ),
-          ),
-          SizedBox(width: 10.w),
-          Builder(builder: (context) {
-            final compact = MediaQuery.of(context).size.width <= 1366;
-            final btnHeight = compact ? 30.0 : 40.0;
-            final iconSize = compact ? 12.0 : 16.0;
-            final hPad = compact ? 10.0 : 18.0;
-            final radius = compact ? 6.0 : 10.0;
-            final textSize = compact ? 11.0 : 13.0;
-            return SizedBox(
-              height: btnHeight,
-              child: ElevatedButton.icon(
-                onPressed: _searching ? null : () {
-                  _clear();
-                  _loadFromFilter();
-                },
-                icon: AppIcon('refresh', size: iconSize, color: Colors.white),
-                label: const Text('Clear'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: EdgeInsets.symmetric(horizontal: hPad),
-                  textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-                ),
-              ),
-            );
-          }),
         ]),
       );
 
-  Widget _lookup() {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(18.w, 0, 18.w, 12.h),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            SizedBox(
-              width: 200.w,
-              child: DropdownButtonFormField<String>(
-                initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(),
-                decoration: _fieldDec('Select Course'),
-                items: _courseNames
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))
-                    .toList(),
-                onChanged: (v) => setState(() {
-                  _selectedCourse = v;
-                  if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) {
-                    _selectedClass = null;
-                  }
-                  _loadFromFilter();
-                }),
-              ),
-            ),
-            SizedBox(width: 10.w),
-            SizedBox(
-              width: 180.w,
-              child: DropdownButtonFormField<String>(
-                initialValue: _classNamesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(),
-                decoration: _fieldDec('Select Class'),
-                items: _classNamesFor(_selectedCourse)
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))
-                    .toList(),
-                onChanged: (v) => setState(() {
-                  _selectedClass = v;
-                  _loadFromFilter();
-                }),
-              ),
-            ),
-            SizedBox(width: 10.w),
-            SizedBox(
-              width: 220.w,
-              child: DropdownButtonFormField<String>(
-                initialValue: () {
-                  final id = _student?['stu_id']?.toString();
-                  return _filteredStudents.any((s) => s['stu_id']?.toString() == id) ? id : null;
-                }(),
-                isExpanded: true,
-                dropdownColor: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 6,
-                style: _fieldTextStyle(),
-                decoration: _fieldDec('Select Student'),
-                items: _filteredStudents
-                    .map((s) => DropdownMenuItem(
-                          value: s['stu_id']?.toString(),
-                          child: Text('${s['stuname']} • ${s['stuadmno']}', overflow: TextOverflow.ellipsis),
-                        ))
-                    .toList(),
-                onChanged: _filteredStudents.isEmpty
-                    ? null
-                    : (v) {
-                        if (v == null) return;
-                        final picked = _filteredStudents.firstWhere((e) => e['stu_id']?.toString() == v, orElse: () => const {});
-                        if (picked.isNotEmpty) _pick(picked);
-                      },
-              ),
-            ),
-            const Spacer(),
-            if (_student != null) _studentChip(),
-          ]),
-        ],
-      ),
+  Widget _masterDetail() {
+    final filtered = _filteredList;
+    final picked = _view == 'detail' && _student != null;
+    return AppMasterDetail(
+      listTitle: 'Concessions',
+      listIcon: 'discount-shape',
+      listSubtitle: 'Search a student to apply a new one',
+      listActions: [
+        TextButton.icon(
+          onPressed: _clearFilters,
+          icon: const AppIcon('refresh', size: 14, color: AppColors.primary),
+          label: const Text('Clear'),
+        ),
+      ],
+      search: _studentSearch(),
+      filters: [_courseClassFilters()],
+      list: _recordList(filtered),
+      footer: _recordFooter(filtered.length),
+      detail: picked ? _detailBody() : null,
+      emptyDetail: _overview(filtered),
+      showDetail: picked,
+      onBack: _backToList,
     );
   }
 
-  /// Floating suggestion popup — positioned below the search field as an
-  /// overlay so it doesn't push the form rows or table down.
-  Widget _suggestionsOverlay() {
-    return Positioned(
-      top: 56.h,
-      right: 350.w,
-      width: 280.w,
-      child: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(8.r),
-        child: Container(
-          constraints: BoxConstraints(maxHeight: 420.h),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8.r),
-            border: Border.all(color: AppColors.border),
+  // ══════════════════════════════ LIST PANE ═════════════════════════════════
+  // Typeable: search by admission no or name across EVERY student, not just
+  // the ones inside the Course/Class filter -- looking a student up by number
+  // shouldn't depend on knowing their course first.
+  Widget _studentSearch() => LayoutBuilder(
+        builder: (context, box) => Autocomplete<Map<String, dynamic>>(
+          displayStringForOption: (o) => '${o['stuadmno']} • ${o['stuname']}',
+          optionsBuilder: (v) {
+            final q = v.text.trim().toLowerCase();
+            final pool = _studentPool;
+            if (q.isEmpty) return pool.take(20);
+            return pool
+                .where((s) => '${s['stuadmno']} ${s['stuname']}'.toLowerCase().contains(q))
+                .take(30);
+          },
+          onSelected: (s) => _openDetail(s),
+          fieldViewBuilder: (context, ctrl, focus, onSubmit) => TextField(
+            controller: ctrl,
+            focusNode: focus,
+            style: _fieldTextStyle(),
+            decoration: AppUI.field(context, 'Type admission no / name', leadingIcon: 'search-normal-1').copyWith(
+              suffixIcon: ctrl.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear',
+                      icon: Icon(Icons.close, size: 15.sp, color: AppColors.textSecondary),
+                      onPressed: () => setState(ctrl.clear),
+                    ),
+            ),
+            onChanged: (_) => setState(() {}),
           ),
-          child: Scrollbar(
-            thumbVisibility: true,
-            child: ListView.builder(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              itemCount: _suggestions.length,
-              itemBuilder: (_, i) {
-                final s = _suggestions[i];
-                return InkWell(
-                  onTap: () => _pick(s),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                    child: Row(children: [
-                      Expanded(child: Text('${s['stuname']} • ${s['stuadmno']}',
-                          overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary))),
-                      Text(s['stuclass']?.toString() ?? '', style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
-                    ]),
-                  ),
-                );
-              },
+          optionsViewBuilder: (context, onSelected, options) => Align(
+            alignment: Alignment.topLeft,
+            child: Material(
+              elevation: 6,
+              borderRadius: BorderRadius.circular(10.r),
+              child: SizedBox(
+                width: box.maxWidth,
+                height: options.length > 8 ? 320.h : null,
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: options.length <= 8,
+                  itemCount: options.length,
+                  itemBuilder: (_, i) {
+                    final o = options.elementAt(i);
+                    return ListTile(
+                      dense: true,
+                      title: Text('${o['stuadmno']} • ${o['stuname']}',
+                          style: AppUI.cell.copyWith(fontWeight: FontWeight.w600)),
+                      subtitle: Text('${o['courname'] ?? ''} • ${o['stuclass'] ?? ''}',
+                          style: AppUI.muted),
+                      onTap: () => onSelected(o),
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
-      ),
-    );
-  }
+      );
 
-  Widget _studentChip() {
-    final s = _student!;
-    final name = s['stuname']?.toString() ?? '';
-    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 32.w,
-          height: 32.w,
-          decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(8.r)),
-          alignment: Alignment.center,
-          child: Text(initial, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.white)),
+  Widget _courseClassFilters() => Row(children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
+            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('Select Course')),
+            items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            onChanged: (v) => setState(() { _selectedCourse = v; if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) _selectedClass = null; _page = 0; _loadFromFilter(); }),
+          ),
         ),
         SizedBox(width: 10.w),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-            SizedBox(height: 2.h),
-            Text('Adm No: ${s['stuadmno']}  •  ${s['stuclass'] ?? ''}',
-                style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
-          ],
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: _classNamesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
+            isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('Select Class')),
+            items: _classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            onChanged: (v) => setState(() { _selectedClass = v; _page = 0; _loadFromFilter(); }),
+          ),
+        ),
+      ]);
+
+  Widget _filterCol(String label, Widget child, {bool required = false}) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        AppUI.fieldLabel(label, required: required),
+        child,
+      ]);
+
+  Widget _recordList(List<Map<String, dynamic>> filtered) {
+    if (_listLoading) return const AppLoading(label: 'Loading concessions…');
+    if (filtered.isEmpty) {
+      return Center(
+        child: SingleChildScrollView(
+          child: EmptyState(icon: 'receipt-discount', title: 'No concession records', subtitle: _error ?? 'Search a student above to apply a concession', action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text('Reset Filters'))),
+        ),
+      );
+    }
+    final pageCount = (filtered.length / _pageSize).ceil();
+    if (_page >= pageCount) _page = pageCount - 1;
+    final start = _page * _pageSize;
+    final pageRows = filtered.sublist(start, (start + _pageSize).clamp(0, filtered.length));
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: pageRows.length,
+      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+      itemBuilder: (_, i) => _recordTile(pageRows[i]),
+    );
+  }
+
+  /// One concession record: student + class on the left, amount + category on
+  /// the right. Tapping it opens that student on the right (what the old eye
+  /// button did).
+  Widget _recordTile(Map<String, dynamic> r) {
+    final sel = _view == 'detail' && _student != null && _student!['stu_id']?.toString() == r['stu_id']?.toString();
+    final cls = [r['courname'], r['stuclass']].map((e) => e?.toString().trim() ?? '').where((s) => s.isNotEmpty).join(' / ');
+    final by = r['createdby']?.toString() ?? '';
+    final when = _date(r['condate']);
+    return Material(
+      color: sel ? AppColors.primaryLight : Colors.white,
+      child: InkWell(
+        onTap: () => _openDetail(r),
+        hoverColor: AppColors.primaryLight.withValues(alpha: 0.6),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 10.h),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(r['stuname']?.toString() ?? '', style: AppUI.label.copyWith(color: sel ? AppColors.primary : AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                SizedBox(height: 2.h),
+                Text('${r['stuadmno'] ?? ''}${cls.isEmpty ? '' : '  ·  $cls'}', style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+                SizedBox(height: 2.h),
+                Text(by.isEmpty ? when : '$when  ·  by $by', style: AppUI.muted.copyWith(fontSize: 12.sp), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ]),
+            ),
+            SizedBox(width: 10.w),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text(((r['totalconcession'] as num?)?.toDouble() ?? 0).toStringAsFixed(2), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: sel ? AppColors.primary : AppColors.textPrimary)),
+              SizedBox(height: 6.h),
+              ConstrainedBox(constraints: BoxConstraints(maxWidth: 130.w), child: _typeBadge(r['contype']?.toString() ?? '')),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _recordFooter(int total) {
+    final pageCount = total == 0 ? 0 : (total / _pageSize).ceil();
+    final start = total == 0 ? 0 : _page * _pageSize + 1;
+    final end = ((_page + 1) * _pageSize).clamp(0, total);
+    return Row(children: [
+      Expanded(child: Text(AppUI.showing(start, end, total), style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis)),
+      if (pageCount > 1) ...[
+        _pageBtn(Icons.chevron_left, _page > 0 ? () => setState(() => _page--) : null),
+        Padding(padding: EdgeInsets.symmetric(horizontal: 8.w), child: Text('${_page + 1} / $pageCount', style: AppUI.label)),
+        _pageBtn(Icons.chevron_right, _page < pageCount - 1 ? () => setState(() => _page++) : null),
+      ],
+    ]);
+  }
+
+  Widget _pageBtn(IconData icon, VoidCallback? onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(7.r),
+        child: Container(width: 30.w, height: 30.w, alignment: Alignment.center, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(7.r), border: Border.all(color: AppColors.border)), child: Icon(icon, size: 18, color: onTap == null ? AppColors.textLight : AppColors.textPrimary)),
+      );
+
+  /// 4 KPI tiles in one row, or 2x2 when the pane is narrow.
+  Widget _kpiGrid(List<Widget> tiles) => LayoutBuilder(builder: (context, c) {
+        final perRow = c.maxWidth < 760 ? 2 : 4;
+        final rows = <Widget>[];
+        for (var i = 0; i < tiles.length; i += perRow) {
+          final chunk = tiles.sublist(i, (i + perRow).clamp(0, tiles.length));
+          rows.add(Row(children: [
+            for (var j = 0; j < chunk.length; j++) ...[if (j > 0) SizedBox(width: 12.w), Expanded(child: chunk[j])],
+          ]));
+        }
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          for (var k = 0; k < rows.length; k++) ...[if (k > 0) SizedBox(height: 12.h), rows[k]],
+        ]);
+      });
+
+  /// Right pane before a student is picked: the list's KPI totals + what to do.
+  Widget _overview(List<Map<String, dynamic>> filtered) {
+    final students = filtered.map((e) => e['stu_id']?.toString() ?? '').where((s) => s.isNotEmpty).toSet().length;
+    final totalAmt = _sum(filtered, 'totalconcession');
+    final avg = students == 0 ? 0.0 : totalAmt / students;
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(AppUI.cardPad),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        AppUI.sectionLabel('Overview'),
+        _kpiGrid([
+          _kpiCard(icon: 'discount-shape', tint: AppColors.primary, value: '${filtered.length}', label: 'Total Concessions', sub: 'This Year'),
+          _kpiCard(icon: 'wallet-money', tint: AppColors.success, value: _inr(totalAmt), label: 'Total Amount', sub: 'This Year'),
+          _kpiCard(icon: 'people', tint: AppColors.demand, value: '$students', label: 'Total Students', sub: 'This Year'),
+          _kpiCard(icon: 'chart-1', tint: AppColors.warning, value: _inr(avg), label: 'Avg. Concession', sub: 'Per Student'),
+        ]),
+        SizedBox(height: 40.h),
+        AppUI.empty(
+          icon: 'receipt-discount',
+          title: 'Select a student',
+          why: 'Pick a concession on the left, or search a student by admission no / name, to see their fee demands and apply a concession.',
         ),
       ]),
     );
   }
 
-  Widget _grid() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_rows.isEmpty) {
-      return Center(child: Text('No unpaid fee demands for this student',
-          style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)));
-    }
-    TextStyle h() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-    TextStyle c() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
-    return Column(
-      children: [
-        Container(
-          color: AppColors.tableHeadBg,
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-          child: Row(children: [
-            SizedBox(width: 80.w, child: Text('TERM', style: h())),
-            Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
-            SizedBox(width: 110.w, child: Padding(padding: EdgeInsets.only(right: 4.w), child: Text('FEE DEF', textAlign: TextAlign.right, style: h()))),
-            // CONCESSION column input is right-padded by 12.w inside the cell —
-            // mirror that so the header sits over the input's right edge, not
-            // the SizedBox's right edge.
-            SizedBox(width: 130.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('CONCESSION', textAlign: TextAlign.right, style: h()))),
-            SizedBox(width: 110.w, child: Padding(padding: EdgeInsets.only(right: 4.w), child: Text('BALANCE', textAlign: TextAlign.right, style: h()))),
+  // ══════════════════════════════ DETAIL VIEW ═══════════════════════════════
+  Widget _detailBody() {
+    final rows = _filteredDemands;
+    final totalFee = rows.fold(0.0, (s, r) => s + r.feeAmount);
+    final totalPaid = rows.fold(0.0, (s, r) => s + r.paidAmount);
+    final totalCon = rows.fold(0.0, (s, r) => s + r.concession);
+    // Net Payable = Fee − Paid − Concession (the sum of the Balance column), so
+    // the four cards tally: Fee − Paid − Concession = Net Payable.
+    final netPayable = rows.fold(0.0, (s, r) => s + r.balance);
+
+    // Regular / arrear split for the card sub-lines. Only shown when the
+    // student actually has both — otherwise the headline figure IS the split.
+    final reg = rows.where((r) => r.seqType != 'ARREAR').toList();
+    final arr = rows.where((r) => r.seqType == 'ARREAR').toList();
+    final mixed = reg.isNotEmpty && arr.isNotEmpty;
+    String? split(double Function(_ConRow) f) => !mixed
+        ? null
+        : 'Reg ${reg.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}'
+            '  •  Arr ${arr.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}';
+    // Keyed by student so switching students straight from the list starts a
+    // fresh detail (as opening it from the old list view did).
+    return KeyedSubtree(
+      key: ValueKey('con-detail-${_student?['stu_id']}'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(child: SingleChildScrollView(padding: EdgeInsets.fromLTRB(AppUI.cardPad, AppUI.cardPad, AppUI.cardPad, 12.h), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _detailFilterCard(),
+          SizedBox(height: AppUI.gap),
+          _kpiGrid([
+            _kpiCard(icon: 'receipt-1', tint: AppColors.primary, value: _inr(totalFee), label: 'Total Fee Amount', sub: split((r) => r.feeAmount)),
+            _kpiCard(icon: 'money-recive', tint: AppColors.today, value: _inr(totalPaid), label: 'Total Paid', sub: split((r) => r.paidAmount)),
+            _kpiCard(icon: 'discount-shape', tint: AppColors.success, value: _inr(totalCon), label: 'Total Concession', sub: split((r) => r.concession)),
+            _kpiCard(icon: 'wallet-money', tint: AppColors.warning, value: _inr(netPayable), label: 'Net Payable', sub: split((r) => r.balance)),
           ]),
-        ),
-        Expanded(
-          child: ListView.separated(
-            itemCount: _rows.length,
-            separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border.withValues(alpha: 0.5)),
-            itemBuilder: (_, i) {
-              final r = _rows[i];
-              return Container(
-                color: i.isEven ? Colors.white : AppColors.surface,
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
-                child: Row(children: [
-                  SizedBox(width: 80.w, child: Text(r.term, style: c())),
-                  Expanded(flex: 3, child: Text(r.feeType, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary))),
-                  SizedBox(width: 110.w, child: Text(r.feeAmount.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
-                  SizedBox(
-                    width: 130.w,
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12.w),
-                      child: TextField(
-                        controller: r.conCtrl,
-                        textAlign: TextAlign.right,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                        style: TextStyle(fontSize: 12.sp, color: AppColors.textPrimary),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 6.h),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6.r)),
-                        ),
-                        onChanged: (val) {
-                          // Concession must never exceed the unpaid portion of
-                          // the fee — auto-clamp the field so the user sees
-                          // the cap immediately instead of typing past it.
-                          final entered = double.tryParse(val.trim());
-                          final max = r.feeAmount - r.paidAmount;
-                          if (entered != null && entered > max) {
-                            final clamped = max.toStringAsFixed(0);
-                            r.conCtrl.text = clamped;
-                            r.conCtrl.selection = TextSelection.collapsed(offset: clamped.length);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Concession can\'t exceed fee amount (${max.toStringAsFixed(0)}).'),
-                                backgroundColor: AppColors.warning,
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                          setState(() {});
-                        },
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: 110.w, child: Text(r.balance.toStringAsFixed(2), textAlign: TextAlign.right, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
-                ]),
-              );
-            },
-          ),
-        ),
-      ],
+          SizedBox(height: AppUI.gap),
+          Row(children: [
+            _stepBadge(3, schoolTerm('Fee Demands by Semester')),
+            SizedBox(width: 12.w),
+            Expanded(child: Text('Enter a concession against any unpaid line', textAlign: TextAlign.right, style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          ]),
+          SizedBox(height: 10.h),
+          _demandGrid(rows),
+        ]))),
+        _detailFooter(totalFee, totalPaid, totalCon, netPayable),
+      ]),
     );
   }
 
-  Widget _footer() {
-    Widget tot(String label, double v, Color color) => Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('$label  ', style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
-          Text(v.toStringAsFixed(2), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: color)),
-        ]);
+  Widget _detailFilterCard() {
+    final s = _student!;
+    final name = s['stuname']?.toString() ?? '';
+    final termDrop = _filterCol((isSchool ? 'Term' : 'Semester / Term'), DropdownButtonFormField<String>(
+      initialValue: _dSem, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('All Terms'),
+      items: [const DropdownMenuItem<String>(value: null, child: Text('All Terms')), ..._terms.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
+      onChanged: (v) => setState(() => _dSem = v),
+    ));
+    final feeTypeDrop = _filterCol('Fee Type', DropdownButtonFormField<String>(
+      initialValue: _dFeeType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('All Fee Types'),
+      items: [const DropdownMenuItem<String>(value: null, child: Text('All Fee Types')), ..._feeTypes.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
+      onChanged: (v) => setState(() => _dFeeType = v),
+    ));
+    // Required: Save refuses without it ("Concession Type Required").
+    final conTypeDrop = _filterCol('Concession Type', DropdownButtonFormField<String>(
+      initialValue: _dConType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('Select Type'),
+      items: _conTypes.map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
+      onChanged: (v) => setState(() => _dConType = v),
+    ), required: true);
+    final pctBox = _filterCol('Concession %', Row(children: [
+      Expanded(
+        child: TextField(
+          controller: _pctCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d{0,3}\.?\d{0,2}'))],
+          style: _fieldTextStyle(),
+          decoration: _fieldDec('%'),
+          onSubmitted: (_) => _applyPercent(),
+        ),
+      ),
+      SizedBox(width: 6.w),
+      Tooltip(
+        message: 'Fill every line shown with this % of its fee',
+        child: OutlinedButton(
+          onPressed: _applyPercent,
+          style: OutlinedButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 10.w)),
+          child: const Text('Apply %'),
+        ),
+      ),
+    ]));
+    return Container(
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Step 1: student
+        Align(alignment: Alignment.centerLeft, child: _stepBadge(1, 'Select Student')),
+        SizedBox(height: 10.h),
+        AppUI.fieldLabel('Student', required: true),
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.primary.withValues(alpha: 0.55))),
+          child: Row(children: [
+            StudentAvatar(photoUrl: _studentPhoto, name: name, size: 44),
+            SizedBox(width: 10.w),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(name, style: AppUI.label, overflow: TextOverflow.ellipsis),
+              SizedBox(height: 2.h),
+              Text(schoolTerm('Adm No: ${s['stuadmno']}  |  Class: ${s['stuclass'] ?? ''}'), style: AppUI.muted, overflow: TextOverflow.ellipsis),
+            ])),
+            Tooltip(
+              message: 'Close',
+              child: InkWell(onTap: _backToList, borderRadius: BorderRadius.circular(6.r), child: Padding(padding: EdgeInsets.all(4.w), child: const Icon(Icons.close, size: 16, color: AppColors.textLight))),
+            ),
+          ]),
+        ),
+        SizedBox(height: 18.h),
+        // Step 2: filters + apply category (one row when wide, 2x2 when narrow)
+        Align(alignment: Alignment.centerLeft, child: _stepBadge(2, 'Filter Concession')),
+        SizedBox(height: 10.h),
+        LayoutBuilder(builder: (context, c) {
+          if (c.maxWidth >= 760) {
+            return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Expanded(child: termDrop),
+              SizedBox(width: 10.w),
+              Expanded(child: feeTypeDrop),
+              SizedBox(width: 10.w),
+              Expanded(child: conTypeDrop),
+              SizedBox(width: 10.w),
+              SizedBox(width: 190.w, child: pctBox),
+            ]);
+          }
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Expanded(child: termDrop),
+              SizedBox(width: 10.w),
+              Expanded(child: feeTypeDrop),
+            ]),
+            SizedBox(height: 12.h),
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Expanded(child: conTypeDrop),
+              SizedBox(width: 10.w),
+              SizedBox(width: 190.w, child: pctBox),
+            ]),
+          ]);
+        }),
+      ]),
+    );
+  }
+
+  /// The student's demands grouped by semester/term, each concession editable.
+  Widget _demandGrid(List<_ConRow> rows) {
+    if (_demandLoading) return SizedBox(height: 240.h, child: const AppLoading(label: 'Loading fee demands…'));
+    if (rows.isEmpty) {
+      return Container(constraints: BoxConstraints(minHeight: 220.h), alignment: Alignment.center, padding: EdgeInsets.symmetric(vertical: 24.h),
+          child: EmptyState(icon: 'receipt-discount', title: 'No fee demands', subtitle: _error ?? 'This student has no active fee demands to apply a concession on'));
+    }
+    // Regular and arrear are different money and are collected on separate
+    // receipts, so they get their own blocks rather than being mixed by term.
+    final regular = rows.where((r) => r.seqType != 'ARREAR').toList();
+    final arrear = rows.where((r) => r.seqType == 'ARREAR').toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // Only badge the blocks when both exist — a student with regular fees
+      // only shouldn't grow an extra header for no reason.
+      if (regular.isNotEmpty) ...[
+        if (arrear.isNotEmpty) _seqTypeHeader('REGULAR', regular),
+        ..._termBlocks(regular),
+      ],
+      if (arrear.isNotEmpty) ...[
+        _seqTypeHeader('ARREAR', arrear),
+        ..._termBlocks(arrear),
+      ],
+    ]);
+  }
+
+  /// Term sections for one sequence type.
+  List<Widget> _termBlocks(List<_ConRow> rows) {
+    final byTerm = <String, List<_ConRow>>{};
+    for (final r in rows) {
+      byTerm.putIfAbsent(r.term.isEmpty ? '—' : r.term, () => []).add(r);
+    }
+    final terms = byTerm.keys.toList()..sort();
+    return [
+      for (final term in terms) ...[
+        _termSection(term, byTerm[term]!),
+        SizedBox(height: 12.h),
+      ],
+    ];
+  }
+
+  /// REGULAR / ARREAR band above a group, with its own fee + concession tally.
+  Widget _seqTypeHeader(String type, List<_ConRow> rows) {
+    final isArrear = type == 'ARREAR';
+    final fee = rows.fold(0.0, (s, r) => s + r.feeAmount);
+    final con = rows.fold(0.0, (s, r) => s + r.concession);
+    // Arrear demands can span years; name them so it's clear what is included.
+    final years = rows.map((r) => r.feeYear).where((y) => y.isNotEmpty).toSet().toList()..sort();
     return Padding(
-      padding: EdgeInsets.all(14.w),
+      padding: EdgeInsets.only(bottom: 8.h),
       child: Row(children: [
-        tot('Total Fee:', _totalDef, AppColors.textPrimary),
-        SizedBox(width: 24.w),
-        tot('Concession:', _totalCon, AppColors.accentDark),
-        SizedBox(width: 24.w),
-        tot('Balance:', _totalBal, AppColors.primary),
+        AppUI.chip(type, isArrear ? AppStatus.warning : AppStatus.info),
+        if (isArrear && years.isNotEmpty) ...[
+          SizedBox(width: 8.w),
+          Text(years.join(', '), style: AppUI.muted),
+        ],
         const Spacer(),
+        Text('Fee ${fee.toStringAsFixed(0)}  •  Concession ${con.toStringAsFixed(0)}', style: AppUI.muted),
+      ]),
+    );
+  }
+
+  Widget _termSection(String term, List<_ConRow> rows) {
+    final termFee = rows.fold(0.0, (s, r) => s + r.feeAmount);
+    final termCon = rows.fold(0.0, (s, r) => s + r.concession);
+    TextStyle h() => AppUI.tableHead;
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: AppUI.card(),
+      child: Column(children: [
+        // term header
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+          decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppColors.divider))),
+          child: Row(children: [
+            const AppIcon.linear('calendar-1', size: 16, color: AppColors.primary),
+            SizedBox(width: 8.w),
+            Text(term, style: AppUI.label),
+            const Spacer(),
+            Text('Fee ${termFee.toStringAsFixed(0)}   •   Concession ${termCon.toStringAsFixed(0)}', style: AppUI.muted),
+          ]),
+        ),
+        // column header
+        Container(color: AppColors.tableHeadBg, padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 9.h), child: Row(children: [
+          Expanded(flex: 3, child: Text('FEE TYPE', style: h())),
+          SizedBox(width: 120.w, child: Text('FEE AMOUNT', textAlign: TextAlign.right, style: h())),
+          SizedBox(width: 90.w, child: Text('PAID', textAlign: TextAlign.right, style: h())),
+          SizedBox(width: 150.w, child: Padding(padding: EdgeInsets.only(right: 12.w), child: Text('CONCESSION', textAlign: TextAlign.right, style: h()))),
+          SizedBox(width: 120.w, child: Text('BALANCE', textAlign: TextAlign.right, style: h())),
+        ])),
+        ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: rows.length,
+          separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+          itemBuilder: (_, i) {
+            final r = rows[i];
+            final c = AppUI.money.copyWith(fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+            return Container(color: Colors.white, padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 5.h), child: Row(children: [
+              Expanded(flex: 3, child: Text(r.feeType, style: AppUI.cell)),
+              SizedBox(width: 120.w, child: Text(r.feeAmount.toStringAsFixed(2), textAlign: TextAlign.right, style: c)),
+              SizedBox(width: 90.w, child: Text(r.paidAmount.toStringAsFixed(2), textAlign: TextAlign.right, style: c)),
+              SizedBox(width: 150.w, child: Padding(padding: EdgeInsets.symmetric(horizontal: 10.w), child: r.editable
+                  ? TextField(
+                      controller: r.conCtrl,
+                      textAlign: TextAlign.right,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                      style: AppUI.fieldText(context, filled: r.concession > 0),
+                      decoration: AppUI.field(context, '0', filled: r.concession > 0, dense: true),
+                      onChanged: (val) {
+                        final entered = double.tryParse(val.trim());
+                        final max = r.feeAmount - r.paidAmount;
+                        if (entered != null && entered > max) {
+                          final clamped = max.toStringAsFixed(0);
+                          r.conCtrl.text = clamped;
+                          r.conCtrl.selection = TextSelection.collapsed(offset: clamped.length);
+                          _snack('Concession can\'t exceed the unpaid amount (${max.toStringAsFixed(0)}).', AppColors.warning);
+                        }
+                        setState(() {});
+                      },
+                    )
+                  : r.isApplied
+                      ? Row(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.lock, size: 12.sp, color: AppColors.textLight),
+                          SizedBox(width: 5.w),
+                          Text(r.appliedAmount.toStringAsFixed(2), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: AppColors.success)),
+                        ])
+                      : Text('0.00', textAlign: TextAlign.right, style: AppUI.cell.copyWith(color: AppColors.textLight)),
+              )),
+              SizedBox(width: 120.w, child: Text(r.balance.toStringAsFixed(2), textAlign: TextAlign.right, style: AppUI.money)),
+            ]));
+          },
+        ),
+      ]),
+    );
+  }
+
+  Widget _detailFooter(double totalFee, double totalPaid, double totalCon, double netPayable) {
+    Widget tot(String label, double v, Color color) => Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: AppUI.muted),
+          SizedBox(height: 2.h),
+          Text(_inr(v), style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: color)),
+        ]);
+    // Footer bar: running totals (wrap when the pane is narrow), then Cancel
+    // (= close this student, as the old Back arrow did) + Save.
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
+      decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.divider))),
+      child: Row(children: [
+        Expanded(
+          child: Wrap(spacing: 26.w, runSpacing: 8.h, children: [
+            tot('Total Fee Amount', totalFee, AppColors.textPrimary),
+            tot('Total Paid', totalPaid, AppColors.today),
+            tot('Total Concession', totalCon, AppColors.success),
+            tot('Net Payable', netPayable, AppColors.primary),
+          ]),
+        ),
+        SizedBox(width: 12.w),
+        OutlinedButton(onPressed: _detailSaving ? null : _backToList, child: const Text('Cancel')),
+        SizedBox(width: 10.w),
         ElevatedButton.icon(
-          onPressed: _saving ? null : _save,
-          icon: _saving
-              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Icon(Icons.save, size: 16),
+          onPressed: _detailSaving ? null : _saveConcession,
+          icon: _detailSaving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 16, color: Colors.white),
           label: const Text('Save Concession'),
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
         ),
       ]),
     );

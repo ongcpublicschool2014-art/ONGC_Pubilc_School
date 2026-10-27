@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../config/supabase_config.dart';
+
 /// One available update, parsed from the hosted `latest.json` manifest.
 class UpdateInfo {
   final String version; // e.g. "1.1.0"
@@ -21,9 +23,18 @@ class UpdateInfo {
 class UpdateService {
   /// Public Supabase Storage object. Bucket `app-updates`, file `latest.json`.
   static const String manifestUrl =
-      'https://ohbjbiwrjykdugbrimxe.supabase.co/storage/v1/object/public/app-updates/latest.json';
+      'https://exasnbapvgfeooxyxjas.supabase.co/storage/v1/object/public/app-updates/latest.json';
 
   static Future<UpdateInfo?> checkForUpdate() async {
+    // A build pointed at some project OTHER than production never updates
+    // itself. [manifestUrl] is a fixed LIVE address -- it does not follow
+    // config.json -- so without this a TEST machine would be offered, and
+    // with "mandatory" forced, the live installer. That is the opposite of
+    // what a test machine is for: it must stay on the build being tested.
+    //
+    // Same switch that gates the device-activation bypass, so "this build is
+    // not production" is decided in exactly one place.
+    if (!SupabaseConfig.isDefaultProject) return null;
     try {
       // Cache-bust so a freshly-published manifest is seen immediately.
       final uri = Uri.parse('$manifestUrl?t=${DateTime.now().millisecondsSinceEpoch}');

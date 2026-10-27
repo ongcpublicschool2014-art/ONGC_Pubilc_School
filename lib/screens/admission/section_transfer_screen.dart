@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
+import '../../widgets/app_ui.dart';
 
 /// Section Transfer — move active students between sections (within or across
 /// class groups). Pick source standard + section, choose a target section per
@@ -24,13 +27,13 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
 
   String? _srcStandard;
   String? _srcSection;
-  String _orderBy = 'Admission No';
+  String _orderBy = 'Reg No';
   final Map<int, String?> _rowTarget = {};
 
   bool _loading = true;
   bool _saving = false;
 
-  static const _orderOptions = ['Admission No', 'Student Name', 'Gender + Student Name'];
+  static const _orderOptions = ['Reg No', 'Student Name', 'Gender + Student Name'];
 
   @override
   void initState() {
@@ -101,6 +104,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
           .select('stu_id, stuadmno, stuname, stugender, courname, stuclass')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
+          .eq('preadmission', 0)  // next year's intake: advance screens only
           .order('stu_id', ascending: true)
           .range(offset, offset + batchSize - 1);
       final list = (batch as List).cast<Map<String, dynamic>>();
@@ -125,8 +129,12 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       final courId = std['cour_id'];
       src = courId == null ? const <Map<String, dynamic>>[] : _sectionList.where((cl) => cl['cour_id'] == courId);
     }
-    return src.map((e) => e['claname']?.toString().trim() ?? '')
-        .where((s) => s.isNotEmpty).toSet().toList();
+    // Keeps the master's own order within each group and sends the TC
+    // batches to the foot of the list (utils/class_sort.dart).
+    return classGroupPartition(
+        src.map((e) => e['claname']?.toString().trim() ?? '')
+            .where((s) => s.isNotEmpty).toSet(),
+        (s) => s);
   }
 
   /// Classes students are ACTUALLY in for the selected course, taken from the
@@ -190,7 +198,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   Future<void> _autoFill() async {
     final options = _sectionNamesFor(_srcStandard).where((s) => s != _srcSection).toList();
     if (options.isEmpty) {
-      _snack('No target classes available.', AppColors.warning);
+      _snack(schoolTerm('No target classes available.'), AppColors.warning);
       return;
     }
     String? picked = options.length == 1 ? options.first : null;
@@ -198,18 +206,19 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('Auto Fill target class'),
+          title: Text(schoolTerm('Auto Fill target class')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Apply one target class to all ${_rows.length} student(s).',
-                  style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+              Text(schoolTerm('Apply one target class to all ${_rows.length} student(s).'),
+                  style: AppUI.muted),
               SizedBox(height: 14.h),
               DropdownButtonFormField<String>(
                 initialValue: picked,
                 isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Target Class'),
+                style: AppUI.fieldText(ctx, filled: picked != null),
+                decoration: AppUI.field(ctx, '', label: schoolTerm('Target Class')),
                 items: options.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                 onChanged: (v) => setLocal(() => picked = v),
               ),
@@ -239,7 +248,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       return t.isNotEmpty && t != (r['stuclass']?.toString().trim() ?? '');
     }).toList();
     if (toTransfer.isEmpty) {
-      _snack('Pick a different target class for at least one student.', AppColors.warning);
+      _snack(schoolTerm('Pick a different target class for at least one student.'), AppColors.warning);
       return;
     }
     setState(() => _saving = true);
@@ -307,22 +316,18 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       children: [
         Expanded(
           child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(),
             child: Column(
               children: [
                 _header(),
                 Expanded(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 8.h),
+                    padding: EdgeInsets.fromLTRB(AppUI.cardPad, 4.h, AppUI.cardPad, 8.h),
                     child: Container(
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8.r),
-                        border: Border.all(color: AppColors.border),
+                        borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                        border: Border.all(color: AppColors.cardBorder),
                       ),
                       child: Column(
                         children: [
@@ -343,14 +348,8 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   }
 
   Widget _header() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final btnHeight = compact ? 30.0 : 40.0;
-    final btnIcon = compact ? 12.0 : 16.0;
-    final btnHPad = compact ? 10.0 : 18.0;
-    final btnRadius = compact ? 6.0 : 10.0;
-    final btnText = compact ? 11.0 : 13.0;
     return Padding(
-      padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
+      padding: EdgeInsets.fromLTRB(AppUI.cardPad, 16.h, AppUI.cardPad, 14.h),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -360,23 +359,10 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
           SizedBox(width: 10.w),
           Expanded(child: _orderDropdown()),
           SizedBox(width: 10.w),
-          SizedBox(
-            height: btnHeight,
-            child: ElevatedButton.icon(
-              onPressed: (_srcStandard == null || _rows.isEmpty) ? null : _autoFill,
-              icon: Icon(Icons.auto_fix_high, size: btnIcon, color: Colors.white),
-              label: const Text('Auto Fill'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: AppColors.border,
-                disabledForegroundColor: AppColors.textSecondary,
-                elevation: 0,
-                padding: EdgeInsets.symmetric(horizontal: btnHPad),
-                textStyle: TextStyle(fontSize: btnText, fontWeight: FontWeight.w600),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(btnRadius)),
-              ),
-            ),
+          ElevatedButton.icon(
+            onPressed: (_srcStandard == null || _rows.isEmpty) ? null : _autoFill,
+            icon: Icon(Icons.auto_fix_high, size: AppBtn.iconSize(context)),
+            label: const Text('Auto Fill'),
           ),
         ],
       ),
@@ -390,8 +376,8 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       dropdownColor: Colors.white,
       borderRadius: BorderRadius.circular(12),
       elevation: 6,
-      style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-      decoration: _dec(hint: 'Course'),
+      style: AppUI.fieldText(context, filled: _srcStandard != null),
+      decoration: _dec(hint: schoolTerm('Course')),
       items: _standardNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: (v) => setState(() {
         _srcStandard = v;
@@ -409,8 +395,8 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       dropdownColor: Colors.white,
       borderRadius: BorderRadius.circular(12),
       elevation: 6,
-      style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
-      decoration: _dec(hint: 'Class'),
+      style: AppUI.fieldText(context, filled: options.contains(_srcSection)),
+      decoration: _dec(hint: schoolTerm('Class')),
       items: options.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: _srcStandard == null ? null : (v) => setState(() {
         _srcSection = v;
@@ -426,24 +412,24 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       dropdownColor: Colors.white,
       borderRadius: BorderRadius.circular(12),
       elevation: 6,
-      style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
+      style: AppUI.fieldText(context),
       decoration: _dec(hint: 'Order By'),
-      items: _orderOptions.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-      onChanged: (v) => setState(() => _orderBy = v ?? 'Admission No'),
+      items: _orderOptions.map((e) => DropdownMenuItem(value: e, child: Text(schoolTerm(e)))).toList(),
+      onChanged: (v) => setState(() => _orderBy = v ?? 'Reg No'),
     );
   }
 
   Widget _tableHeader() {
-    TextStyle s() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+    TextStyle s() => AppUI.tableHead;
     return Container(
-      color: AppColors.tableHeadBg,
+      decoration: AppUI.tableHeadBar,
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
       child: Row(
         children: [
           Expanded(child: Text('ADMISSION NO', style: s())),
           Expanded(child: Text('STUDENT NAME', style: s())),
           Expanded(child: Text('GENDER', style: s())),
-          Expanded(child: Text('CURRENT CLASS', style: s())),
+          Expanded(child: Text(schoolTerm('CURRENT CLASS'), style: s())),
           Expanded(child: Text('TRANSFER TO', style: s())),
         ],
       ),
@@ -453,17 +439,18 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_srcStandard == null) {
-      return Center(
-        child: Text('Pick a Course to list students',
-            style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+      return AppUI.empty(
+        title: schoolTerm('Pick a Course to list students'),
+        icon: 'people',
       );
     }
     final rows = _rows;
     if (rows.isEmpty) {
       final scope = _srcSection?.isNotEmpty == true ? '$_srcStandard / $_srcSection' : '$_srcStandard';
-      return Center(
-        child: Text('No active students in $scope',
-            style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+      return AppUI.empty(
+        title: 'No active students in $scope',
+        why: schoolTerm('Pick another Course or Class above.'),
+        icon: 'people',
       );
     }
     // Transfer targets: the class master's classes for the course, unioned with
@@ -474,7 +461,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
     }.toList()..sort();
     return ListView.separated(
       itemCount: rows.length,
-      separatorBuilder: (_, __) => Divider(height: 1.h, color: AppColors.border),
+      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) => _row(rows[i], targetOptions),
     );
   }
@@ -487,10 +474,10 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
       child: Row(
         children: [
-          Expanded(child: Text((r['stuadmno'] ?? '').toString(), style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary))),
-          Expanded(child: Text((r['stuname'] ?? '').toString(), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
-          Expanded(child: Text(genderLabel, style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
-          Expanded(child: Text((r['stuclass'] ?? '—').toString(), style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary))),
+          Expanded(child: Text((r['stuadmno'] ?? '').toString(), style: AppUI.cell)),
+          Expanded(child: Text((r['stuname'] ?? '').toString(), style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
+          Expanded(child: Text(genderLabel, style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+          Expanded(child: Text((r['stuclass'] ?? '—').toString(), style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
           Expanded(
             child: Padding(
               padding: EdgeInsets.only(right: 8.w),
@@ -498,8 +485,9 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
                 initialValue: options.contains(_rowTarget[stuId]) ? _rowTarget[stuId] : null,
                 isExpanded: true,
                 isDense: true,
+                style: AppUI.fieldText(context, filled: options.contains(_rowTarget[stuId])),
                 decoration: _dec(),
-                hint: Text('Select class', style: TextStyle(fontSize: 12.sp, color: AppColors.textLight)),
+                hint: Text(schoolTerm('Select class'), style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                 items: options.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (v) => setState(() => _rowTarget[stuId] = v),
               ),
@@ -516,12 +504,11 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       return t.isNotEmpty && t != (r['stuclass']?.toString().trim() ?? '');
     }).length;
     return Padding(
-      padding: EdgeInsets.all(14.w),
+      padding: EdgeInsets.fromLTRB(AppUI.cardPad, 8.h, AppUI.cardPad, 16.h),
       child: Row(
         children: [
           if (count > 0)
-            Text('$count selected for transfer',
-                style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary)),
+            Text('$count selected for transfer', style: AppUI.muted),
           const Spacer(),
           ElevatedButton.icon(
             onPressed: _saving || count == 0 ? null : _save,
@@ -529,28 +516,11 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.save, size: 16),
             label: Text(_saving ? 'Transferring…' : 'Save Transfer'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
           ),
         ],
       ),
     );
   }
 
-  InputDecoration _dec({String? hint}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      filled: true,
-      fillColor: Colors.white,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.border)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent)),
-    );
-  }
+  InputDecoration _dec({String? hint}) => AppUI.field(context, hint ?? '');
 }

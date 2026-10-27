@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/classic_h_scrollbar.dart';
@@ -22,21 +25,18 @@ import '../../services/supabase_service.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/receipt_widget.dart';
 import '../../utils/formatters.dart';
+import '../../utils/class_sort.dart';
+import '../../utils/school_terms.dart';
 
 /// Signals when a drilldown view is active inside the Fee Collection tab.
 /// Parent screen listens to hide the tabs row while drilled in.
 final ValueNotifier<bool> _feeCollectionDrilldownActive = ValueNotifier(false);
 
-const _classOrder = ['PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-
-int _classIndex(String c) {
-  final idx = _classOrder.indexOf(c.toUpperCase());
-  return idx >= 0 ? idx : _classOrder.length;
-}
-
-int _compareClass(String a, String b) {
-  return _classIndex(a).compareTo(_classIndex(b));
-}
+// Class ordering lives in utils/class_sort.dart. The local list this replaced
+// only matched bare school grades ("I", "II", ...), so every college class --
+// "B.E CSE -I", "CSE TC 25" -- ranked the same and the dropdowns fell back to
+// database insertion order. classCompare also groups TC batches last.
+int _compareClass(String a, String b) => classCompare(a, b);
 
 class FeeCollectionScreen extends StatefulWidget {
   const FeeCollectionScreen({super.key});
@@ -85,7 +85,7 @@ class _FeeCollectionScreenState extends State<FeeCollectionScreen> with SingleTi
                         for (var i = 0; i < tabLabels.length; i++) ...[
                           PillTab(
                             icon: tabIcons[i],
-                            label: tabLabels[i],
+                            label: schoolTerm(tabLabels[i]),
                             selected: selected == i,
                             onTap: () => _tabController.animateTo(i),
                           ),
@@ -401,31 +401,20 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
 
     setState(() => _isLoading = true);
 
-    // Stage 1: Fast - payments + fee group map + fee totals (single RPCs).
-    // The 4th call fetches ALL-TIME payments so Pending Approval matches Bank
-    // Reconciliation (both all-time), independent of the date range that scopes
-    // the date-wise view. 2000-01-01 is a safe lower bound for any real data.
+    // Stage 1: Fast — date-range payments + fee group map + fee totals (single
+    // RPCs). The heavy ALL-TIME payment fetch (for the Pending Approval card +
+    // the all-time drilldowns) is deferred to Stage 2 below, off the critical
+    // path, so the screen renders immediately instead of blocking on the whole
+    // payment history.
     final fastResults = await Future.wait([
       SupabaseService.getPaymentsByDateRange(insId, fromDate: _fromDate, toDate: _toDate),
       SupabaseService.getFeeGroupMaps(insId),
       SupabaseService.getFeeTotals(insId),
-      SupabaseService.getPaymentsByDateRange(insId, fromDate: DateTime(2000, 1, 1), toDate: DateTime.now()),
     ]);
 
     final payments = fastResults[0] as List<Map<String, dynamic>>;
     final feeGroupMaps = fastResults[1] as Map<String, Map>;
     final feeTotals = fastResults[2] as Map<String, double>;
-    // All payments ever (paystatus='C'), normalised. Drives the all-time
-    // drilldowns so the Total Collection / Pending Approval cards match what
-    // opens when you click them (both cards are all-time, not date-scoped).
-    final allTimePayments = fastResults[3] as List<Map<String, dynamic>>;
-    final pendingPayments = allTimePayments
-        .where((p) => (p['recon_status']?.toString() ?? 'P') == 'P')
-        .toList();
-    double pendingApprovalAmt = 0;
-    for (final p in pendingPayments) {
-      pendingApprovalAmt += (p['transtotalamount'] as num?)?.toDouble() ?? 0;
-    }
 
     final today = DateTime.now();
     final todayStr = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
@@ -468,8 +457,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final Map<int, double> payFineMap = {};
     final payIds = <int>{
       for (final p in payments) if (p['pay_id'] is int) p['pay_id'] as int,
-      // Include pending receipts so the drilldown's fine column is correct.
-      for (final p in pendingPayments) if (p['pay_id'] is int) p['pay_id'] as int,
+      // Pending receipts' fines are added in Stage 2 (deferred all-time fetch).
     }.toList();
     for (var i = 0; i < payIds.length; i += 500) {
       final chunk = payIds.sublist(i, (i + 500).clamp(0, payIds.length));
@@ -518,8 +506,9 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     if (mounted) {
       setState(() {
         _payments = payments;
-        _pendingPayments = pendingPayments;
-        _allTimePayments = allTimePayments;
+        // Pending Approval + the all-time drilldown data are loaded in Stage 2.
+        _pendingPayments = const <Map<String, dynamic>>[];
+        _allTimePayments = const <Map<String, dynamic>>[];
         _dateGroups = dateGroups;
         _payFineMap = payFineMap;
         // Headline includes fine so the four cards tally:
@@ -536,14 +525,69 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
         _totalFine = feeTotals['totalFine'] ?? totalFineFromPayments;
         _totalCollectionPending = totalCollectionPending;
         _todayCollectionPending = todayCollectionPending;
-        _pendingApproval = pendingApprovalAmt;
+        _pendingApproval = 0; // filled by Stage 2
         _pendingFees = feeTotals['totalPending'] ?? 0;
         _isLoading = false;
       });
+      // Stage 2 (off the critical path): the heavy all-time payment fetch →
+      // Pending Approval total + the all-time collection drilldown data.
+      unawaited(_loadAllTimeApprovals(insId));
     }
 
     // Stage 2: Deferred - load demands only when needed (Class-wise tab or Pending click)
     // This reduces startup DB load significantly
+  }
+
+  /// Stage 2 of the fee-collection load: the heavy ALL-TIME payment fetch, done
+  /// off the critical path so opening the screen is fast. Fills the Pending
+  /// Approval card total, the pending list, the all-time collection drilldown
+  /// data, and adds pending receipts' fines to the fine map.
+  Future<void> _loadAllTimeApprovals(int insId) async {
+    try {
+      final allTimePayments = await SupabaseService.getPaymentsByDateRange(
+          insId, fromDate: DateTime(2000, 1, 1), toDate: DateTime.now());
+      final pendingPayments = allTimePayments
+          .where((p) => (p['recon_status']?.toString() ?? 'P') == 'P')
+          .toList();
+      double pendingApprovalAmt = 0;
+      for (final p in pendingPayments) {
+        pendingApprovalAmt += (p['transtotalamount'] as num?)?.toDouble() ?? 0;
+      }
+
+      // Add pending receipts' fines to the fine map (so the pending drilldown's
+      // fine column is correct), skipping pay_ids we already have.
+      final fineMap = Map<int, double>.from(_payFineMap);
+      final pendingPayIds = <int>{
+        for (final p in pendingPayments)
+          if (p['pay_id'] is int && !fineMap.containsKey(p['pay_id'])) p['pay_id'] as int,
+      }.toList();
+      for (var i = 0; i < pendingPayIds.length; i += 500) {
+        final chunk = pendingPayIds.sublist(i, (i + 500).clamp(0, pendingPayIds.length));
+        try {
+          final rows = await SupabaseService.fetchAll(() => SupabaseService
+              .fromSchema('feedemand')
+              .select('pay_id, fineamount')
+              .eq('ins_id', insId)
+              .inFilter('pay_id', chunk)
+              .gt('fineamount', 0));
+          for (final r in (rows as List)) {
+            final pid = r['pay_id'] as int?;
+            final amt = (r['fineamount'] as num?)?.toDouble() ?? 0;
+            if (pid != null) fineMap[pid] = (fineMap[pid] ?? 0) + amt;
+          }
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _allTimePayments = allTimePayments;
+        _pendingPayments = pendingPayments;
+        _pendingApproval = pendingApprovalAmt;
+        _payFineMap = fineMap;
+      });
+    } catch (e) {
+      debugPrint('Stage 2 (all-time approvals) load error: $e');
+    }
   }
 
   bool _demandsLoaded = false;
@@ -671,8 +715,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
         padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -702,50 +746,27 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
   }
 
   Widget _buildSummaryCard(String icon, Color iconColor, String value, String label) {
-    // Matches the Total / Today Collection cards (_buildClickableSummaryCard):
-    // tinted wash, white icon chip, big value + plain title-case label. No
-    // chevron/breakdown/shadow since these are plain summary cards.
+    // AppUI.kpi, composed locally so a long rupee figure can still shrink to
+    // fit (FittedBox) instead of being cut off with an ellipsis.
     return Expanded(
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 14.h),
-        decoration: BoxDecoration(
-          // Opaque tint (the 8% wash composited over white) so nothing behind
-          // the card can bleed through — a translucent fill let table content
-          // show through and read as overlapping colour.
-          color: Color.alphaBlend(iconColor.withValues(alpha: 0.08), Colors.white),
-          borderRadius: BorderRadius.circular(12.r),
-          border: Border.all(color: iconColor.withValues(alpha: 0.3)),
-        ),
+        padding: EdgeInsets.all(16.w),
+        decoration: AppUI.card(),
         child: Row(
           children: [
-            Container(
-              padding: EdgeInsets.all(10.w),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10.r),
-                border: Border.all(color: iconColor.withValues(alpha: 0.22)),
-              ),
-              child: AppIcon(icon, color: iconColor, size: 24),
-            ),
+            AppUI.iconTile(icon, color: iconColor),
             SizedBox(width: 12.w),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // FittedBox so large currency values shrink to fit instead
-                  // of clipping with an ellipsis.
+                  Text(label.toUpperCase(), style: AppUI.caps, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  SizedBox(height: 4.h),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
-                  ),
-                  SizedBox(height: 2.h),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
                   ),
                 ],
               ),
@@ -888,7 +909,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               ],
             ),
             ),
-            SizedBox(height: 16.h),
+            SizedBox(height: AppUI.gap),
             ],
             // Show drilldown or date list based on selection
             if (_showTotalCollection)
@@ -1026,11 +1047,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
         // Back + breadcrumb - white card
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
-          ),
+          decoration: AppUI.card(),
           child: Row(
           children: [
             InkWell(
@@ -1045,8 +1062,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               child: Builder(builder: (context) {
                 final compact = MediaQuery.of(context).size.width <= 1366;
                 final hPad = compact ? 10.0 : 14.0;
-                final radius = compact ? 6.0 : 10.0;
-                final textSize = compact ? 11.0 : 13.0;
+                const radius = AppUI.controlRadius;
+                final textSize = compact ? 12.5 : 14.0;
                 final innerGap = compact ? 4.0 : 6.0;
                 return Container(
                   height: AppBtn.height(context),
@@ -1060,7 +1077,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     children: [
                       AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                       SizedBox(width: innerGap),
-                      Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                      Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                     ],
                   ),
                 );
@@ -1082,10 +1099,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withValues(alpha: 0.1),
+                  color: AppColors.infoBg,
                   borderRadius: BorderRadius.circular(12.r),
                 ),
-                child: Text(todayStr, style: TextStyle(fontSize: 13.sp, color: Colors.blue, fontWeight: FontWeight.w500)),
+                child: Text(todayStr, style: TextStyle(fontSize: 13.sp, color: AppColors.info, fontWeight: FontWeight.w500)),
               ),
             ],
             const Spacer(),
@@ -1093,8 +1110,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             Builder(builder: (context) {
               final compact = MediaQuery.of(context).size.width <= 1366;
               final hPad = compact ? 10.0 : 14.0;
-              final radius = compact ? 6.0 : 10.0;
-              final textSize = compact ? 11.0 : 13.0;
+              const radius = AppUI.controlRadius;
+              final textSize = compact ? 12.5 : 14.0;
               return SizedBox(
                 height: AppBtn.height(context),
                 child: DropdownButtonHideUnderline(
@@ -1103,7 +1120,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(radius),
-                      border: Border.all(color: _collectionMethodFilter != null ? AppColors.accent : AppColors.border, width: 1.5),
+                      border: Border.all(color: _collectionMethodFilter != null ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                     ),
                     child: DropdownButton<String?>(
                       value: _collectionMethodFilter,
@@ -1139,35 +1156,26 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 onPressed: filtered.isNotEmpty ? () => _exportCollectionSummaryExcel(filtered) : null,
                 icon: AppIcon('document-download', size: AppBtn.iconSize(context), color: Colors.white),
                 label: const Text('Export'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                ),
               ),
             ),
           ],
           ),
         ),
-        SizedBox(height: 12.h),
+        SizedBox(height: AppUI.gap),
         // Summary row
         Row(
           children: [
             _buildSummaryCard('receipt-2', AppColors.accent, '$totalCount', 'Transactions'),
             SizedBox(width: 12.w),
-            _buildSummaryCard('people', Colors.blue, '${allStuIds.length}', 'Students'),
+            _buildSummaryCard('people', AppColors.info, '${allStuIds.length}', 'Students'),
             SizedBox(width: 12.w),
             _buildSummaryCard('indianrupeesign.circle.fill', AppColors.success, _formatCurrency(total), 'Total Amount'),
           ],
         ),
-        SizedBox(height: 12.h),
+        SizedBox(height: AppUI.gap),
         // Payment method-wise table
         Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
-          ),
+          decoration: AppUI.card(),
           child: Column(
             children: [
               Padding(
@@ -1181,7 +1189,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 ),
               ),
               if (methodKeys.isEmpty)
-                const Padding(padding: EdgeInsets.all(40), child: Center(child: Text('No collections found', style: TextStyle(color: AppColors.textSecondary))))
+                const Padding(padding: EdgeInsets.all(40), child: EmptyState(icon: 'wallet-money', title: 'No collections found', subtitle: 'No fees collected for the selected filters.'))
               else
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1189,8 +1197,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                      border: Border.all(color: AppColors.cardBorder),
                     ),
                     child: Builder(builder: (context) {
                       const flexes = <int>[1, 3, 2, 2, 2];
@@ -1198,11 +1206,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         'S No.', 'PAYMENT METHOD', 'TRANSACTIONS',
                         'STUDENTS', 'AMOUNT',
                       ];
-                      final hStyle = TextStyle(
-                          fontSize: 12.sp,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                          letterSpacing: 0.3);
+                      final hStyle = AppUI.tableHead;
                       Widget cell(int i, Widget child) => Expanded(
                             flex: flexes[i],
                             child: Align(
@@ -1226,7 +1230,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                             for (int i = 0; i < headers.length; i++)
                               cell(i, Text(headers[i], style: hStyle)),
                           ]),
-                          Container(height: 1, color: AppColors.border),
+                          Container(height: 1, color: AppColors.divider),
                           ...methodKeys.asMap().entries.map((entry) {
                             final idx = entry.key;
                             final method = entry.value;
@@ -1279,7 +1283,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                                   AppColors.success))),
                                 ]);
                           }),
-                          Container(height: 1, color: AppColors.border),
+                          Container(height: 1, color: AppColors.divider),
                           // Grand total.
                           rowWrap(AppColors.tableHeadBg, [
                             cell(0, const SizedBox()),
@@ -1320,15 +1324,11 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             ],
           ),
         ),
-        SizedBox(height: 16.h),
+        SizedBox(height: AppUI.gap),
         // Category-wise Summary (Regular vs Arrear) — replaces the per-receipt
         // Payment Details list.
         Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
-          ),
+          decoration: AppUI.card(),
           child: Column(
             children: [
               Padding(
@@ -1342,7 +1342,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 ),
               ),
               if (!_demandsLoaded || _isLoadingDemands)
-                const Padding(padding: EdgeInsets.all(28), child: Center(child: Text('Loading category split…', style: TextStyle(color: AppColors.textSecondary))))
+                Padding(padding: const EdgeInsets.all(28), child: Center(child: Text('Loading category split…', style: AppUI.muted)))
               else
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1350,13 +1350,13 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                    border: Border.all(color: AppColors.cardBorder),
                   ),
                   child: Builder(builder: (context) {
                     const flexes = <int>[1, 3, 2, 2, 2];
                     const headers = <String>['S No.', 'CATEGORY', 'TRANSACTIONS', 'STUDENTS', 'AMOUNT'];
-                    final hStyle = TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
+                    final hStyle = AppUI.tableHead;
                     Widget cell(int i, Widget child) => Expanded(
                           flex: flexes[i],
                           child: Align(alignment: i >= 2 ? Alignment.centerRight : Alignment.centerLeft, child: child),
@@ -1371,7 +1371,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         rowWrap(AppColors.tableHeadBg, [
                           for (int i = 0; i < headers.length; i++) cell(i, Text(headers[i], style: hStyle)),
                         ]),
-                        Container(height: 1, color: AppColors.border),
+                        Container(height: 1, color: AppColors.divider),
                         ...categoryRows.asMap().entries.map((entry) {
                           final idx = entry.key;
                           final label = entry.value.key;
@@ -1391,7 +1391,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                             cell(4, Text(_formatCurrency(cTotal), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.success))),
                           ]);
                         }),
-                        Container(height: 1, color: AppColors.border),
+                        Container(height: 1, color: AppColors.divider),
                         rowWrap(AppColors.tableHeadBg, [
                           cell(0, const SizedBox()),
                           cell(1, Text('GRAND TOTAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary))),
@@ -1437,121 +1437,115 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final showBreakdown = feeAmount != null || fineAmount != null;
     return Expanded(
       child: _HoverLift(
-        builder: (hovered) => AnimatedContainer(
+        // Hover-independent content, built once. The identical widget instance
+        // is handed back to `builder` on each hover toggle, so Flutter skips
+        // rebuilding this (heavy) subtree — only the wrapper repaints.
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: hasDrilldown ? onTap : null,
+            borderRadius: BorderRadius.circular(AppUI.cardRadius),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Top half - icon chip + large value + label
+                Padding(
+                  padding: EdgeInsets.all(16.w),
+                  child: Row(
+                    children: [
+                      AppUI.iconTile(icon, color: iconColor),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(label.toUpperCase(), style: AppUI.caps, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            SizedBox(height: 4.h),
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(value, style: TextStyle(fontSize: 22.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3)),
+                            ),
+                            if (!showBreakdown && subtitle != null) ...[
+                              SizedBox(height: 4.h),
+                              Text(subtitle, style: TextStyle(fontSize: 11.sp, color: AppColors.warning, fontWeight: FontWeight.w600)),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (hasDrilldown) ...[
+                        SizedBox(width: 6.w),
+                        Container(
+                          padding: EdgeInsets.all(5.w),
+                          decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(8.r)),
+                          child: AppIcon.linear('Chevron Right', size: 15, color: iconColor),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                // Bottom half - split bar with FEE (green tint) + FINE (orange tint)
+                if (showBreakdown)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: AppColors.successBg,
+                            border: Border(top: BorderSide(color: AppColors.divider)),
+                          ),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                          child: Row(
+                            children: [
+                              Text('$feeLabel: ', style: TextStyle(fontSize: 11.sp, color: AppColors.success, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+                              Flexible(child: Text(feeAmount ?? '-', style: TextStyle(fontSize: 13.sp, color: AppColors.success, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: AppColors.warningBg,
+                            border: Border(top: BorderSide(color: AppColors.divider)),
+                          ),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                          child: Row(
+                            children: [
+                              Text('$fineLabel: ', style: TextStyle(fontSize: 11.sp, color: AppColors.warning, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+                              Flexible(child: Text(fineAmount ?? '-', style: TextStyle(fontSize: 13.sp, color: AppColors.warning, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+        builder: (hovered, child) => AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
           transform: hovered ? (Matrix4.identity()..translate(0.0, -3.0)) : Matrix4.identity(),
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            // Even light tint of the metric's hue across the whole card, with a
-            // white icon chip (colored icon) — the flat, soft look requested.
-            color: iconColor.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(14.r),
-            border: Border.all(color: iconColor.withValues(alpha: hovered ? 0.45 : 0.30)),
+            // White card (AppUI.card) with the metric's hue on the icon tile;
+            // the hue only reaches the edge on hover, to say "this opens".
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(AppUI.cardRadius),
+            border: Border.all(color: hovered ? iconColor.withValues(alpha: 0.45) : AppColors.cardBorder),
             boxShadow: [
               BoxShadow(
-                color: iconColor.withValues(alpha: hovered ? 0.18 : 0.08),
-                offset: const Offset(0, 6),
-                blurRadius: hovered ? 20 : 12,
-                spreadRadius: -8,
+                color: hovered ? iconColor.withValues(alpha: 0.16) : const Color.fromRGBO(16, 24, 40, 0.04),
+                offset: Offset(0, hovered ? 6 : 1),
+                blurRadius: hovered ? 20 : 2,
+                spreadRadius: hovered ? -8 : 0,
               ),
             ],
           ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              onTap: hasDrilldown ? onTap : null,
-              borderRadius: BorderRadius.circular(14.r),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Top half - gradient icon chip + large value + label
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 14.h),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: EdgeInsets.all(11.w),
-                          decoration: BoxDecoration(
-                            // White chip with the metric-coloured icon.
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12.r),
-                            border: Border.all(color: iconColor.withValues(alpha: 0.22)),
-                          ),
-                          child: AppIcon(icon, color: iconColor, size: 24),
-                        ),
-                        SizedBox(width: 12.w),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              FittedBox(
-                                fit: BoxFit.scaleDown,
-                                alignment: Alignment.centerLeft,
-                                child: Text(value, style: TextStyle(fontSize: 22.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.5)),
-                              ),
-                              SizedBox(height: 2.h),
-                              Text(label, style: TextStyle(fontSize: 12.sp, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-                              if (!showBreakdown && subtitle != null) ...[
-                                SizedBox(height: 4.h),
-                                Text(subtitle, style: TextStyle(fontSize: 10.sp, color: Colors.orange.shade700, fontWeight: FontWeight.w600)),
-                              ],
-                            ],
-                          ),
-                        ),
-                        if (hasDrilldown) ...[
-                          SizedBox(width: 6.w),
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            padding: EdgeInsets.all(5.w),
-                            decoration: BoxDecoration(color: iconColor.withValues(alpha: hovered ? 0.22 : 0.14), borderRadius: BorderRadius.circular(8.r)),
-                            child: AppIcon.linear('Chevron Right', size: 15, color: iconColor),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  // Bottom half - split bar with FEE (green tint) + FINE (orange tint)
-                  if (showBreakdown)
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: AppColors.success.withValues(alpha: 0.08),
-                          border: Border(top: BorderSide(color: AppColors.success.withValues(alpha: 0.2))),
-                        ),
-                        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
-                        child: Row(
-                          children: [
-                            Text('$feeLabel: ', style: TextStyle(fontSize: 11.sp, color: AppColors.success, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-                            Flexible(child: Text(feeAmount ?? '-', style: TextStyle(fontSize: 13.sp, color: AppColors.success, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withValues(alpha: 0.08),
-                          border: Border(top: BorderSide(color: Colors.orange.withValues(alpha: 0.2))),
-                        ),
-                        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
-                        child: Row(
-                          children: [
-                            Text('$fineLabel: ', style: TextStyle(fontSize: 11.sp, color: Colors.orange.shade800, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-                            Flexible(child: Text(fineAmount ?? '-', style: TextStyle(fontSize: 13.sp, color: Colors.orange.shade800, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-              ),
-            ),
-          ),
+          child: child,
         ),
       ),
     );
@@ -1655,8 +1649,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               child: Builder(builder: (context) {
                 final compact = MediaQuery.of(context).size.width <= 1366;
                 final hPad = compact ? 10.0 : 14.0;
-                final radius = compact ? 6.0 : 10.0;
-                final textSize = compact ? 11.0 : 13.0;
+                const radius = AppUI.controlRadius;
+                final textSize = compact ? 12.5 : 14.0;
                 final innerGap = compact ? 4.0 : 6.0;
                 return Container(
                   height: AppBtn.height(context),
@@ -1665,7 +1659,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                     SizedBox(width: innerGap),
-                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                   ]),
                 );
               }),
@@ -1680,7 +1674,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             Text('Pending Fees', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
           ],
         ),
-        SizedBox(height: 12.h),
+        SizedBox(height: AppUI.gap),
         // Summary row
         Row(
           children: [
@@ -1699,8 +1693,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+            border: Border.all(color: AppColors.cardBorder),
           ),
           child: Builder(builder: (context) {
             const flexes = <int>[1, 3, 2, 2, 2, 2, 2];
@@ -1708,11 +1702,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               'S No.', 'CATEGORY', 'STUDENTS', 'TOTAL DEMAND',
               'PAID', 'FINE', 'BALANCE',
             ];
-            final hStyle = TextStyle(
-                fontSize: 12.sp,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
-                letterSpacing: 0.3);
+            final hStyle = AppUI.tableHead;
             Widget cell(int i, Widget child) => Expanded(
                   flex: flexes[i],
                   child: Align(
@@ -1738,13 +1728,12 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     for (int i = 0; i < headers.length; i++)
                       cell(i, Text(headers[i], style: hStyle)),
                   ]),
-                  Container(height: 1, color: AppColors.border),
+                  Container(height: 1, color: AppColors.divider),
                   if (groupKeys.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(28),
-                      child: Text('No pending fees found',
-                          style: TextStyle(
-                              color: AppColors.textSecondary)),
+                    AppUI.empty(
+                      title: 'No pending fees found',
+                      why: 'Nothing is outstanding for the current filters.',
+                      icon: 'tick-circle',
                     )
                   else
                     Flexible(
@@ -1825,7 +1814,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                             : '-',
                                         style: TextStyle(
                                             color: gFine > 0
-                                                ? Colors.orange
+                                                ? AppColors.warning
                                                 : AppColors
                                                     .textSecondary))),
                                 cell(
@@ -1833,14 +1822,14 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                     Text(_formatCurrency(gBalance),
                                         style: const TextStyle(
                                             fontWeight: FontWeight.w600,
-                                            color: Colors.orange))),
+                                            color: AppColors.warning))),
                               ]),
                             );
                         },
                       ),
                     ),
                   if (groupKeys.isNotEmpty) ...[
-                    Container(height: 1, color: AppColors.border),
+                    Container(height: 1, color: AppColors.divider),
                     headerOrTotal(AppColors.tableHeadBg, [
                       cell(0, const SizedBox()),
                       cell(
@@ -1932,18 +1921,18 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       final balance = (d['reconbalancedue'] as num?)?.toDouble() ?? (d['balancedue'] as num?)?.toDouble() ?? 0;
       final paid = ((amount - con) - balance).clamp(0.0, double.infinity);
       final statusLabel = balance <= 0 ? 'Paid' : paid > 0 ? 'Partial' : 'Unpaid';
-      final statusColor = balance <= 0 ? AppColors.success : paid > 0 ? AppColors.warning : Colors.red;
+      final statusColor = balance <= 0 ? AppColors.success : paid > 0 ? AppColors.warning : AppColors.error;
       return DataRow(color: WidgetStateProperty.all(even ? Colors.white : AppColors.surface), cells: [
         DataCell(Text('$serial')),
         DataCell(Text(term)),
         DataCell(Text(feeGroupName, style: const TextStyle(fontWeight: FontWeight.w500))),
         DataCell(Text(_formatCurrency(amount))),
         DataCell(Text(_formatCurrency(paid), style: const TextStyle(color: AppColors.success))),
-        DataCell(Text(_formatCurrency(balance), style: TextStyle(fontWeight: FontWeight.w600, color: balance > 0 ? Colors.orange : AppColors.textSecondary))),
+        DataCell(Text(_formatCurrency(balance), style: TextStyle(fontWeight: FontWeight.w600, color: balance > 0 ? AppColors.warning : AppColors.textSecondary))),
         DataCell(Container(
           padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-          decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8.r)),
-          child: Text(statusLabel, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: statusColor)),
+          decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(999)),
+          child: Text(statusLabel, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: statusColor)),
         )),
       ]);
     }
@@ -2015,8 +2004,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               child: Builder(builder: (context) {
                 final compact = MediaQuery.of(context).size.width <= 1366;
                 final hPad = compact ? 10.0 : 14.0;
-                final radius = compact ? 6.0 : 10.0;
-                final textSize = compact ? 11.0 : 13.0;
+                const radius = AppUI.controlRadius;
+                final textSize = compact ? 12.5 : 14.0;
                 final innerGap = compact ? 4.0 : 6.0;
                 return Container(
                   height: AppBtn.height(context),
@@ -2025,7 +2014,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                     SizedBox(width: innerGap),
-                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                   ]),
                 );
               }),
@@ -2050,7 +2039,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             SizedBox(width: 12.w),
             _buildSummaryCard('tick-circle', AppColors.success, _formatCurrency(totalPaid), 'Total Paid'),
             SizedBox(width: 12.w),
-            _buildSummaryCard('clock', Colors.orange, _formatCurrency(totalBalance), 'Balance Due'),
+            _buildSummaryCard('clock', AppColors.warning, _formatCurrency(totalBalance), 'Balance Due'),
           ],
         ),
         SizedBox(height: 12.h),
@@ -2064,17 +2053,17 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             child: DataTable(dividerThickness: 1,
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-              headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+              headingTextStyle: AppUI.tableHead,
               dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-              columns: const [
-                DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('SEMESTER')),
-                DataColumn(label: Text('FEE TYPE')),
-                DataColumn(label: Text('FEE AMOUNT'), numeric: true),
-                DataColumn(label: Text('PAID'), numeric: true),
-                DataColumn(label: Text('BALANCE'), numeric: true),
-                DataColumn(label: Text('STATUS')),
+              columns: [
+                const DataColumn(label: Text('S No.')),
+                DataColumn(label: Text(schoolTerm('SEMESTER'))),
+                const DataColumn(label: Text('FEE TYPE')),
+                const DataColumn(label: Text('FEE AMOUNT'), numeric: true),
+                const DataColumn(label: Text('PAID'), numeric: true),
+                const DataColumn(label: Text('BALANCE'), numeric: true),
+                const DataColumn(label: Text('STATUS')),
               ],
               rows: tableRows,
             ),
@@ -2162,8 +2151,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               child: Builder(builder: (context) {
                 final compact = MediaQuery.of(context).size.width <= 1366;
                 final hPad = compact ? 10.0 : 14.0;
-                final radius = compact ? 6.0 : 10.0;
-                final textSize = compact ? 11.0 : 13.0;
+                const radius = AppUI.controlRadius;
+                final textSize = compact ? 12.5 : 14.0;
                 final innerGap = compact ? 4.0 : 6.0;
                 return Container(
                   height: AppBtn.height(context),
@@ -2172,7 +2161,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                     SizedBox(width: innerGap),
-                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                    Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                   ]),
                 );
               }),
@@ -2199,19 +2188,19 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               dividerThickness: 1,
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-              headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+              headingTextStyle: AppUI.tableHead,
               dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-              columns: const [
-                DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('COURSE')),
-                DataColumn(label: Text('CLASS')),
-                DataColumn(label: Text('STUDENTS'), numeric: true),
-                DataColumn(label: Text('TOTAL DEMAND'), numeric: true),
-                DataColumn(label: Text('PAID'), numeric: true),
-                DataColumn(label: Text('FINE'), numeric: true),
-                DataColumn(label: Text('BALANCE'), numeric: true),
-                DataColumn(label: Expanded(child: Text('ACTION', textAlign: TextAlign.right))),
+              columns: [
+                const DataColumn(label: Text('S No.')),
+                DataColumn(label: Text(schoolTerm('COURSE'))),
+                DataColumn(label: Text(schoolTerm('CLASS'))),
+                const DataColumn(label: Text('STUDENTS'), numeric: true),
+                const DataColumn(label: Text('TOTAL DEMAND'), numeric: true),
+                const DataColumn(label: Text('PAID'), numeric: true),
+                const DataColumn(label: Text('FINE'), numeric: true),
+                const DataColumn(label: Text('BALANCE'), numeric: true),
+                const DataColumn(label: Expanded(child: Text('ACTION', textAlign: TextAlign.right))),
               ],
               rows: groupRows.isEmpty ? [
                 const DataRow(cells: [
@@ -2232,8 +2221,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       DataCell(Text('${r['students']}')),
                       DataCell(Text(_formatCurrency(r['demand'] as double))),
                       DataCell(Text(_formatCurrency(r['paid'] as double), style: const TextStyle(color: AppColors.success))),
-                      DataCell(Text((r['fine'] as double) > 0 ? _formatCurrency(r['fine'] as double) : '-', style: TextStyle(color: (r['fine'] as double) > 0 ? Colors.orange : AppColors.textSecondary))),
-                      DataCell(Text(_formatCurrency(r['balance'] as double), style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.orange))),
+                      DataCell(Text((r['fine'] as double) > 0 ? _formatCurrency(r['fine'] as double) : '-', style: TextStyle(color: (r['fine'] as double) > 0 ? AppColors.warning : AppColors.textSecondary))),
+                      DataCell(Text(_formatCurrency(r['balance'] as double), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.warning))),
                       DataCell(Align(
                         alignment: Alignment.centerRight,
                         child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary),
@@ -2354,7 +2343,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 _pendingStudentSearch = '';
                 _pendingPage = 0;
               }),
-              tooltip: 'Back to Courses',
+              tooltip: schoolTerm('Back to Courses'),
             ),
             SizedBox(width: 4.w),
             AppIcon('folder-2', size: 18, color: AppColors.accent),
@@ -2384,7 +2373,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             // Search field
             AppSearchField(
               controller: _pendingStudentSearchController,
-              hintText: 'Search student / roll no...',
+              hintText: schoolTerm('Search student / roll no...'),
               onChanged: (v) => setState(() {
                 _pendingStudentSearch = v;
                 _pendingPage = 0;
@@ -2412,8 +2401,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             Builder(builder: (context) {
               final compact = MediaQuery.of(context).size.width <= 1366;
               final hPad = compact ? 10.0 : 14.0;
-              final radius = compact ? 6.0 : 10.0;
-              final textSize = compact ? 11.0 : 13.0;
+              const radius = AppUI.controlRadius;
+              final textSize = compact ? 12.5 : 14.0;
               final ftFilled = feeTypes.contains(_pendingFeeTypeFilter);
               return SizedBox(
                 height: AppBtn.height(context),
@@ -2422,7 +2411,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(radius),
-                    border: Border.all(color: ftFilled ? AppColors.accent : AppColors.border, width: 1.5),
+                    border: Border.all(color: ftFilled ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String?>(
@@ -2453,8 +2442,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             Builder(builder: (context) {
               final compact = MediaQuery.of(context).size.width <= 1366;
               final hPad = compact ? 10.0 : 14.0;
-              final radius = compact ? 6.0 : 10.0;
-              final textSize = compact ? 11.0 : 13.0;
+              const radius = AppUI.controlRadius;
+              final textSize = compact ? 12.5 : 14.0;
               final clsFilled = classes.contains(_pendingClassFilter);
               return SizedBox(
                 height: AppBtn.height(context),
@@ -2463,12 +2452,12 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(radius),
-                    border: Border.all(color: clsFilled ? AppColors.accent : AppColors.border, width: 1.5),
+                    border: Border.all(color: clsFilled ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String?>(
                       value: classes.contains(_pendingClassFilter) ? _pendingClassFilter : null,
-                      hint: Text('All Classes', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                      hint: Text(schoolTerm('All Classes'), style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                       isDense: true,
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -2476,11 +2465,11 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
                       icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                       items: [
-                        const DropdownMenuItem<String?>(value: null, child: Text('All Classes')),
+                        DropdownMenuItem<String?>(value: null, child: Text(schoolTerm('All Classes'))),
                         ...classes.map((c) => DropdownMenuItem<String?>(value: c, child: Text(c))),
                       ],
                       selectedItemBuilder: (context) => [
-                        Text('All Classes', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                        Text(schoolTerm('All Classes'), style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                         ...classes.map((c) => Text(c, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: AppColors.accent))),
                       ],
                       onChanged: (v) => setState(() { _pendingClassFilter = v; _pendingPage = 0; }),
@@ -2491,17 +2480,17 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             }),
           ],
         ),
-        SizedBox(height: 12.h),
+        SizedBox(height: AppUI.gap),
         // Summary row
         Row(
           children: [
-            _buildSummaryCard('people', Colors.blue, '$totalStudents', 'Students'),
+            _buildSummaryCard('people', AppColors.info, '$totalStudents', 'Students'),
             SizedBox(width: 12.w),
             _buildSummaryCard('wallet-1', AppColors.accent, _formatCurrency(totalDemand), 'Total Demand'),
             SizedBox(width: 12.w),
             _buildSummaryCard('tick-circle', AppColors.success, _formatCurrency(totalPaid), 'Total Paid'),
             SizedBox(width: 12.w),
-            _buildSummaryCard('clock', Colors.orange, _formatCurrency(totalBalance), 'Balance Due'),
+            _buildSummaryCard('clock', AppColors.warning, _formatCurrency(totalBalance), 'Balance Due'),
           ],
         ),
         SizedBox(height: 12.h),
@@ -2515,20 +2504,20 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             child: DataTable(dividerThickness: 1,
               showCheckboxColumn: false,
               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-              headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+              headingTextStyle: AppUI.tableHead,
               dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
               columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-              columns: const [
-                DataColumn(label: Text('S No.')),
-                DataColumn(label: Text('ROLL NO')),
-                DataColumn(label: Text('STUDENT NAME')),
-                DataColumn(label: Text('COURSE')),
-                DataColumn(label: Text('CLASS')),
-                DataColumn(label: Text('FEE AMOUNT'), numeric: true),
-                DataColumn(label: Text('PAID'), numeric: true),
-                DataColumn(label: Text('FINE'), numeric: true),
-                DataColumn(label: Text('BALANCE'), numeric: true),
-                DataColumn(label: Text('STATUS')),
+              columns: [
+                const DataColumn(label: Text('S No.')),
+                DataColumn(label: Text(schoolTerm('ROLL NO'))),
+                const DataColumn(label: Text('STUDENT NAME')),
+                DataColumn(label: Text(schoolTerm('COURSE'))),
+                DataColumn(label: Text(schoolTerm('CLASS'))),
+                const DataColumn(label: Text('FEE AMOUNT'), numeric: true),
+                const DataColumn(label: Text('PAID'), numeric: true),
+                const DataColumn(label: Text('FINE'), numeric: true),
+                const DataColumn(label: Text('BALANCE'), numeric: true),
+                const DataColumn(label: Text('STATUS')),
               ],
               rows: pagedKeys.isEmpty ? [
                 const DataRow(cells: [
@@ -2559,7 +2548,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     sBalance += recBal;
                   }
                   final statusLabel = sBalance <= 0 ? 'Paid' : sPaid > 0 ? 'Partial' : 'Unpaid';
-                  final statusColor = sBalance <= 0 ? AppColors.success : sPaid > 0 ? AppColors.warning : Colors.red;
+                  final statusColor = sBalance <= 0 ? AppColors.success : sPaid > 0 ? AppColors.warning : AppColors.error;
                   return DataRow(
                     color: WidgetStateProperty.all(idx.isEven ? Colors.white : AppColors.surface),
                     onSelectChanged: (_) => setState(() {
@@ -2574,15 +2563,15 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       DataCell(Text(stuClass)),
                       DataCell(Text(_formatCurrency(sDemand))),
                       DataCell(Text(_formatCurrency(sPaid), style: const TextStyle(color: AppColors.success))),
-                      DataCell(Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(color: sFine > 0 ? Colors.orange : AppColors.textSecondary))),
-                      DataCell(Text(_formatCurrency(sBalance), style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.orange))),
+                      DataCell(Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(color: sFine > 0 ? AppColors.warning : AppColors.textSecondary))),
+                      DataCell(Text(_formatCurrency(sBalance), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.warning))),
                       DataCell(Container(
                         padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
                         decoration: BoxDecoration(
                           color: statusColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8.r),
+                          borderRadius: BorderRadius.circular(999),
                         ),
-                        child: Text(statusLabel, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: statusColor)),
+                        child: Text(statusLabel, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: statusColor)),
                       )),
                     ],
                   );
@@ -2773,7 +2762,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
                   border: Border.all(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -2781,25 +2770,21 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     const AppIcon.linear('calendar', size: 14, color: AppColors.textSecondary),
                     const SizedBox(width: 8),
                     Text('${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}',
-                        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary)),
+                        style: AppUI.fieldText(context)),
                   ],
                 ),
               ),
             );
           }
 
-          Widget sectionLabel(String text) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(text, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.3)),
-              );
+          Widget sectionLabel(String text) => AppUI.sectionLabel(text);
 
           return AlertDialog(
             backgroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
             title: Row(
               children: [
-                Text('Filters', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
+                Text('Filters', style: AppUI.cardTitle),
                 const Spacer(),
                 IconButton(
                   onPressed: () => Navigator.pop(ctx),
@@ -2857,14 +2842,9 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   to = DateTime(now.year, now.month, now.day);
                   methods.clear();
                 }),
-                child: Text('Clear', style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp, fontWeight: FontWeight.w600)),
+                child: const Text('Clear'),
               ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                ),
                 onPressed: () {
                   setState(() {
                     _fromDate = from;
@@ -2891,33 +2871,25 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final int grandTransactions = _dateGroups.fold(0, (s, g) => s + g.payments.length);
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(16, 12, 16, 8.h),
             child: Row(
               children: [
-                AppIcon.linear('document-text', size: 18, color: AppColors.accent),
+                AppUI.iconTile('document-text', size: 18),
+                SizedBox(width: 12.w),
+                Text('Date-wise Collection Summary', style: AppUI.cardTitle),
                 SizedBox(width: 8.w),
-                Text('Date-wise Collection Summary', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600)),
-                SizedBox(width: 8.w),
-                Text('${_dateGroups.length} days', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                Text('${_dateGroups.length} days', style: AppUI.muted),
                 const Spacer(),
                 SizedBox(
                   height: AppBtn.height(context),
                   child: OutlinedButton.icon(
                     onPressed: _openDateMethodFilter,
-                    icon: AppIcon.linear('calendar-1', size: AppBtn.iconSize(context), color: AppColors.textPrimary),
-                    label: Text('Date', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.border),
-                      padding: EdgeInsets.symmetric(horizontal: 14.w),
-                    ),
+                    icon: AppIcon.linear('calendar-1', size: AppBtn.iconSize(context), color: AppColors.primary),
+                    label: const Text('Date'),
                   ),
                 ),
                 SizedBox(width: AppBtn.gap(context)),
@@ -2927,11 +2899,6 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     onPressed: _fetchData,
                     icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: Colors.white),
                     label: const Text('Refresh'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                    ),
                   ),
                 ),
               ],
@@ -2943,17 +2910,10 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               child: Center(child: CircularProgressIndicator()),
             )
           else if (_dateGroups.isEmpty)
-            Padding(
-              padding: EdgeInsets.all(48.w),
-              child: Center(
-                child: Column(
-                  children: [
-                    AppIcon.linear('search-favorite', size: 40.sp, color: AppColors.textSecondary.withValues(alpha: 0.5)),
-                    SizedBox(height: 8.h),
-                    const Text('No collections found for selected date range', style: TextStyle(color: AppColors.textSecondary)),
-                  ],
-                ),
-              ),
+            AppUI.empty(
+              title: 'No collections found for selected date range',
+              why: 'Nothing was collected between these dates. Widen the range with the Date button.',
+              icon: 'search-favorite',
             )
           else
             Builder(builder: (context) {
@@ -2971,8 +2931,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                  border: Border.all(color: AppColors.cardBorder),
                 ),
                 child: LayoutBuilder(
               builder: (context, constraints) {
@@ -2987,7 +2947,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         child: DataTable(dividerThickness: 1,
                           showCheckboxColumn: false,
                           headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                          headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+                          headingTextStyle: AppUI.tableHead,
                           dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
                           columnSpacing: 24,
                           horizontalMargin: 20,
@@ -3017,7 +2977,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                   DataCell(Text(_formatDisplayDate(group.date), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                   DataCell(Text('${group.payments.length}', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                   DataCell(Text(_formatCurrency(group.totalAmount - group.totalFine), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                  DataCell(Text(group.totalFine > 0 ? _formatCurrency(group.totalFine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: group.totalFine > 0 ? Colors.orange : AppColors.textSecondary))),
+                                  DataCell(Text(group.totalFine > 0 ? _formatCurrency(group.totalFine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: group.totalFine > 0 ? AppColors.warning : AppColors.textSecondary))),
                                   DataCell(Text(_formatCurrency(group.totalAmount), style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textSecondary))),
                                   DataCell(Align(
                                     alignment: Alignment.centerRight,
@@ -3132,11 +3092,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
 
   Widget _buildDateDrilldown(_DateGroup group) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3157,8 +3113,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Builder(builder: (context) {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     final hPad = compact ? 10.0 : 14.0;
-                    final radius = compact ? 6.0 : 10.0;
-                    final textSize = compact ? 11.0 : 13.0;
+                    const radius = AppUI.controlRadius;
+                    final textSize = compact ? 12.5 : 14.0;
                     final innerGap = compact ? 4.0 : 6.0;
                     return Container(
                       height: AppBtn.height(context),
@@ -3172,7 +3128,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         children: [
                           AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                           SizedBox(width: innerGap),
-                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                         ],
                       ),
                     );
@@ -3218,15 +3174,15 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 Builder(builder: (context) {
                   final compact = MediaQuery.of(context).size.width <= 1366;
                   final hPad = compact ? 10.0 : 14.0;
-                  final radius = compact ? 6.0 : 10.0;
-                  final textSize = compact ? 11.0 : 13.0;
+                  const radius = AppUI.controlRadius;
+                  final textSize = compact ? 12.5 : 14.0;
                   return SizedBox(
                     height: AppBtn.height(context),
                     child: DropdownButtonHideUnderline(
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: hPad),
                         decoration: BoxDecoration(
-                          border: Border.all(color: _dateDrilldownMethodFilter != null ? AppColors.accent : AppColors.border, width: 1.5),
+                          border: Border.all(color: _dateDrilldownMethodFilter != null ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                           borderRadius: BorderRadius.circular(radius),
                         ),
                         child: DropdownButton<String?>(
@@ -3293,30 +3249,30 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.border),
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                          border: Border.all(color: AppColors.cardBorder),
                         ),
                         child: SizedBox(
                     width: constraints.maxWidth,
                     child: DataTable(dividerThickness: 1,
                         showCheckboxColumn: false,
                         headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                        headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+                        headingTextStyle: AppUI.tableHead,
                         dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
                         columnSpacing: 8, horizontalMargin: 10, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-                        columns: const [
-                          DataColumn(label: Text('S No.')),
-                          DataColumn(label: Text('RECEIPT NO')),
-                          DataColumn(label: Text('TIME')),
-                          DataColumn(label: Text('ROLL NO')),
-                          DataColumn(label: Text('STUDENT NAME')),
-                          DataColumn(label: Text('COURSE')),
-                          DataColumn(label: Text('CLASS')),
-                          DataColumn(label: Text('MODE')),
-                          DataColumn(label: Text('COLLECTION'), numeric: true),
-                          DataColumn(label: Text('FINE'), numeric: true),
-                          DataColumn(label: Text('TOTAL'), numeric: true),
-                          DataColumn(label: Text('ACTION'), numeric: true),
+                        columns: [
+                          const DataColumn(label: Text('S No.')),
+                          const DataColumn(label: Text('RECEIPT NO')),
+                          const DataColumn(label: Text('TIME')),
+                          DataColumn(label: Text(schoolTerm('ROLL NO'))),
+                          const DataColumn(label: Text('STUDENT NAME')),
+                          DataColumn(label: Text(schoolTerm('COURSE'))),
+                          DataColumn(label: Text(schoolTerm('CLASS'))),
+                          const DataColumn(label: Text('MODE')),
+                          const DataColumn(label: Text('COLLECTION'), numeric: true),
+                          const DataColumn(label: Text('FINE'), numeric: true),
+                          const DataColumn(label: Text('TOTAL'), numeric: true),
+                          const DataColumn(label: Text('ACTION'), numeric: true),
                         ],
                         rows: [
                           ...List.generate(filtered.length, (i) {
@@ -3339,7 +3295,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                 DataCell(Text(student?['stuclass']?.toString() ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(p['paymethod'] ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                                 DataCell(Text(_formatCurrency(collection), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                DataCell(Text(fine > 0 ? _formatCurrency(fine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fine > 0 ? Colors.orange : AppColors.textSecondary))),
+                                DataCell(Text(fine > 0 ? _formatCurrency(fine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fine > 0 ? AppColors.warning : AppColors.textSecondary))),
                                 DataCell(Text(_formatCurrency(totalAmt), style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textSecondary))),
                                 DataCell(_receiptActionCell(p)),
                               ],
@@ -3396,6 +3352,14 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     );
   }
 
+  /// Institution settings, for the per-fee-group receipt letterhead.
+  Map<String, String> _lhSettings = const {};
+
+  /// fg_id of the group a receipt was collected under, resolved from the fee
+  /// types ON THE RECEIPT -- never from screen state, which has moved on by
+  /// the time a receipt is reopened.
+  int? _lhFg;
+
   ReceiptData _buildReceiptData(Map<String, dynamic> payment, List<Map<String, dynamic>>? feeDetails) {
     final student = payment['students'] as Map<String, dynamic>?;
     final payNo = payment['paynumber']?.toString() ?? '${payment['pay_id'] ?? '-'}';
@@ -3439,10 +3403,11 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     // Build fee details grouped by term - fine is shown as a separate line item
     List<ReceiptTermDetail> termDetails = [];
     if (feeDetails != null && feeDetails.isNotEmpty) {
-      const monthFeeTypes = ['TUITION FEES', 'TUITION FEE', 'VAN FEES', 'VAN FEE'];
       final termMap = <String, List<ReceiptFeeItem>>{};
       for (final d in feeDetails) {
-        String term = d['demfeeterm']?.toString() ?? '-';
+        final term = d['demfeeterm']?.toString().trim().isNotEmpty == true
+            ? d['demfeeterm'].toString()
+            : '-';
         final feeType = d['demfeetype']?.toString() ?? 'Fee';
         // Line amount = what was collected in THIS payment (fee portion only).
         // collectedamount comes from paymentdetails.transtotalamount and includes
@@ -3452,15 +3417,6 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
             ?? (d['feeamount'] as num?)?.toDouble() ?? 0;
         final feeOnly = (collected - fine).clamp(0, double.infinity).toDouble();
         debugPrint('RECEIPT-BUILD: dem_id=${d['dem_id']} feeType=$feeType collectedamount=${d['collectedamount']} feeamount=${d['feeamount']} fineamount=$fine -> feeOnly=$feeOnly');
-        if (monthFeeTypes.contains(feeType.toUpperCase())) {
-          final duedate = d['duedate'];
-          if (duedate != null) {
-            try {
-              final dt = DateTime.parse(duedate.toString());
-              term = months[dt.month - 1].toUpperCase();
-            } catch (_) {}
-          }
-        }
         termMap.putIfAbsent(term, () => []);
         termMap[term]!.add(ReceiptFeeItem(type: feeType, amount: feeOnly));
         if (fine > 0) {
@@ -3484,8 +3440,24 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       courseName: (student?['courname']?.toString().isNotEmpty == true)
           ? student!['courname'].toString()
           : (_stuIdToCourse[student?['stu_id'] as int?] ?? '-'),
-      schoolName: _insName ?? auth.insName ?? 'Institution',
-      schoolAddress: _insAddress ?? '-',
+      schoolName: SupabaseService.letterheadFor(
+        fgId: _lhFg,
+        settings: _lhSettings,
+        fallbackName: _insName ?? auth.insName ?? 'Institution',
+        fallbackAddress: _insAddress ?? '-',
+      ).name,
+      schoolAddress: SupabaseService.letterheadFor(
+        fgId: _lhFg,
+        settings: _lhSettings,
+        fallbackName: _insName ?? auth.insName ?? 'Institution',
+        fallbackAddress: _insAddress ?? '-',
+      ).address,
+      headerBanner: SupabaseService.letterheadFor(
+        fgId: _lhFg,
+        settings: _lhSettings,
+        fallbackName: '',
+        fallbackAddress: '',
+      ).banner,
       schoolLogoUrl: _insLogoUrl,
       schoolMobile: _insMobile,
       schoolEmail: _insEmail,
@@ -3499,7 +3471,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     );
   }
 
-  Future<pw.Document> _buildReceiptPdf(ReceiptData data) => buildReceiptPdf(data);
+  Future<pw.Document> _buildReceiptPdf(ReceiptData data, [PdfPageFormat? fmt]) =>
+      buildReceiptPdf(data, pageFormat: fmt);
 
   void _showReceiptDialog(Map<String, dynamic> payment, List<Map<String, dynamic>>? feeDetails) async {
     // Enrich student address + fetch parent's payinchargemob for receipt
@@ -3534,6 +3507,23 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
         debugPrint('Failed to enrich receipt data: $e');
       }
     }
+    // Which group this receipt belongs to, and the letterhead that follows.
+    try {
+      final insId = context.read<AuthProvider>().insId;
+      // Asked every time, not once per screen: getInstitutionSettings
+      // now serves a shared 60-second cache, so this costs nothing and a
+      // letterhead changed on another machine reaches this counter without
+      // restarting the app.
+      if (insId != null) {
+        _lhSettings = await SupabaseService.getInstitutionSettings(insId);
+      }
+      _lhFg = await SupabaseService.feeGroupOfFeeTypes([
+        for (final d in (feeDetails ?? const <Map<String, dynamic>>[]))
+          d['demfeetype']?.toString() ?? '',
+      ]);
+    } catch (e) {
+      debugPrint('receipt letterhead lookup failed: $e');
+    }
     if (!mounted) return;
     final receiptData = _buildReceiptData(payment, feeDetails);
     showDialog(
@@ -3566,7 +3556,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           if (result != null) {
                             final file = File(result);
                             await file.writeAsBytes(bytes);
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt saved successfully'), backgroundColor: Colors.green));
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt saved successfully'), backgroundColor: AppColors.success));
                           }
                         } catch (e) {
                           if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError(e)), backgroundColor: AppColors.error));
@@ -3580,12 +3570,13 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       onPressed: () async {
                         Navigator.pop(ctx);
                         try {
-                          final pdf = await _buildReceiptPdf(receiptData);
                           await Printing.layoutPdf(
-                            // Match the A5 page so the printer doesn't fall
-                            // back to A4 and clip the right edge.
+                            // Rebuild at the paper the printer actually reports
+                            // so the receipt lands centred and unclipped; A5 is
+                            // only the starting suggestion.
                             format: a5PageFormat,
-                            onLayout: (PdfPageFormat format) async => pdf.save(),
+                            onLayout: (PdfPageFormat format) async =>
+                                (await _buildReceiptPdf(receiptData, format)).save(),
                             name: 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}',
                           );
                         } catch (e) {
@@ -3594,14 +3585,6 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       },
                       icon: AppIcon('printer', size: 18),
                       label: const Text('Print'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                        padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                        elevation: 0,
-                        textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                      ),
                     ),
                     SizedBox(width: 8.w),
                     IconButton(
@@ -3646,11 +3629,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final double grandCollection = grandTotal - grandFine;
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3665,8 +3644,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Builder(builder: (context) {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     final hPad = compact ? 10.0 : 14.0;
-                    final radius = compact ? 6.0 : 10.0;
-                    final textSize = compact ? 11.0 : 13.0;
+                    const radius = AppUI.controlRadius;
+                    final textSize = compact ? 12.5 : 14.0;
                     final innerGap = compact ? 4.0 : 6.0;
                     return Container(
                       height: AppBtn.height(context),
@@ -3678,7 +3657,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
                         AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                         SizedBox(width: innerGap),
-                        Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                        Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                       ]),
                     );
                   }),
@@ -3695,11 +3674,11 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.12),
+                    color: AppColors.warningBg,
                     borderRadius: BorderRadius.circular(8.r),
                   ),
                   child: Text('${pending.length} payments',
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: Colors.orange.shade800)),
+                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.warning)),
                 ),
               ],
             ),
@@ -3714,21 +3693,19 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                    border: Border.all(color: AppColors.cardBorder),
                   ),
                   padding: EdgeInsets.symmetric(vertical: 60.h),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      AppIcon.linear('tick-circle', size: 48.sp, color: AppColors.success.withValues(alpha: 0.6)),
-                      SizedBox(height: 12.h),
-                      Text('No payments awaiting approval',
-                          style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-                      SizedBox(height: 4.h),
-                      Text('All collected payments have been reconciled.',
-                          style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                      AppUI.empty(
+                        title: 'No payments awaiting approval',
+                        why: 'All collected payments have been reconciled.',
+                        icon: 'tick-circle',
+                      ),
                     ],
                   ),
                 ),
@@ -3742,8 +3719,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           clipBehavior: Clip.antiAlias,
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: AppColors.border),
+                            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                            border: Border.all(color: AppColors.cardBorder),
                           ),
                           child: SizedBox(
                             width: constraints.maxWidth - 32,
@@ -3751,22 +3728,22 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                               dividerThickness: 1,
                               showCheckboxColumn: false,
                               headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                              headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+                              headingTextStyle: AppUI.tableHead,
                               dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
                               columnSpacing: 8, horizontalMargin: 10, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-                              columns: const [
-                                DataColumn(label: Text('S No.')),
-                                DataColumn(label: Text('RECEIPT NO')),
-                                DataColumn(label: Text('TIME')),
-                                DataColumn(label: Text('ROLL NO')),
-                                DataColumn(label: Text('STUDENT NAME')),
-                                DataColumn(label: Text('COURSE')),
-                                DataColumn(label: Text('CLASS')),
-                                DataColumn(label: Text('MODE')),
-                                DataColumn(label: Text('COLLECTION'), numeric: true),
-                                DataColumn(label: Text('FINE'), numeric: true),
-                                DataColumn(label: Text('TOTAL'), numeric: true),
-                                DataColumn(label: Text('ACTION'), numeric: true),
+                              columns: [
+                                const DataColumn(label: Text('S No.')),
+                                const DataColumn(label: Text('RECEIPT NO')),
+                                const DataColumn(label: Text('TIME')),
+                                DataColumn(label: Text(schoolTerm('ROLL NO'))),
+                                const DataColumn(label: Text('STUDENT NAME')),
+                                DataColumn(label: Text(schoolTerm('COURSE'))),
+                                DataColumn(label: Text(schoolTerm('CLASS'))),
+                                const DataColumn(label: Text('MODE')),
+                                const DataColumn(label: Text('COLLECTION'), numeric: true),
+                                const DataColumn(label: Text('FINE'), numeric: true),
+                                const DataColumn(label: Text('TOTAL'), numeric: true),
+                                const DataColumn(label: Text('ACTION'), numeric: true),
                               ],
                               rows: [
                                 ...List.generate(pending.length, (i) {
@@ -3789,7 +3766,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                                       DataCell(Text(student?['stuclass']?.toString() ?? '-', style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(p['paymethod'] ?? '-', style: const TextStyle(color: AppColors.textSecondary))),
                                       DataCell(Text(_formatCurrency(collection), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                                      DataCell(Text(fine > 0 ? _formatCurrency(fine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fine > 0 ? Colors.orange : AppColors.textSecondary))),
+                                      DataCell(Text(fine > 0 ? _formatCurrency(fine) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fine > 0 ? AppColors.warning : AppColors.textSecondary))),
                                       DataCell(Text(_formatCurrency(totalAmt), style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textSecondary))),
                                       DataCell(_receiptActionCell(p)),
                                     ],
@@ -3828,11 +3805,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final admNo = student?['stuadmno']?.toString() ?? '-';
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3850,8 +3823,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                   child: Builder(builder: (context) {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     final hPad = compact ? 10.0 : 14.0;
-                    final radius = compact ? 6.0 : 10.0;
-                    final textSize = compact ? 11.0 : 13.0;
+                    const radius = AppUI.controlRadius;
+                    final textSize = compact ? 12.5 : 14.0;
                     final innerGap = compact ? 4.0 : 6.0;
                     return Container(
                       height: AppBtn.height(context),
@@ -3865,7 +3838,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                         children: [
                           AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                           SizedBox(width: innerGap),
-                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                         ],
                       ),
                     );
@@ -3909,7 +3882,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
               if (_loadingFeeDetails)
                 const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
               else if (_feeDetails == null || _feeDetails!.isEmpty)
-                const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('No fee details found', style: TextStyle(color: AppColors.textSecondary))))
+                AppUI.empty(title: 'No fee details found', why: 'This receipt has no fee lines recorded against it.', icon: 'receipt-2')
               else
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -3917,8 +3890,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                      border: Border.all(color: AppColors.cardBorder),
                     ),
                     child: LayoutBuilder(builder: (context, constraints) {
                   return Column(mainAxisSize: MainAxisSize.min, children: [
@@ -3929,14 +3902,14 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                     child: DataTable(dividerThickness: 1,
                       showCheckboxColumn: false,
                       headingRowColor: WidgetStateProperty.all(AppColors.tableHeadBg),
-                      headingTextStyle: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3),
+                      headingTextStyle: AppUI.tableHead,
                       dataTextStyle: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary),
                       columnSpacing: 24, horizontalMargin: 20, dataRowMinHeight: 43.h, dataRowMaxHeight: 43.h, headingRowHeight: 44.h,
-                      columns: const [
-                        DataColumn(label: Text('S No.')), DataColumn(label: Text('SEMESTER')), DataColumn(label: Text('FEE TYPE')),
-                        DataColumn(label: Text('AMOUNT'), numeric: true), DataColumn(label: Text('PAID'), numeric: true),
-                        DataColumn(label: Text('FINE'), numeric: true),
-                        DataColumn(label: Text('BALANCE'), numeric: true), DataColumn(label: Text('STATUS')),
+                      columns: [
+                        const DataColumn(label: Text('S No.')), DataColumn(label: Text(schoolTerm('SEMESTER'))), const DataColumn(label: Text('FEE TYPE')),
+                        const DataColumn(label: Text('AMOUNT'), numeric: true), const DataColumn(label: Text('PAID'), numeric: true),
+                        const DataColumn(label: Text('FINE'), numeric: true),
+                        const DataColumn(label: Text('BALANCE'), numeric: true), const DataColumn(label: Text('STATUS')),
                       ],
                       rows: [
                         ...List.generate(_feeDetails!.length, (i) {
@@ -3947,20 +3920,9 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           final balance = (fd['balancedue'] as num?)?.toDouble() ?? 0;
                           final statusLabel = balance <= 0 ? 'Paid' : paid > 0 ? 'Partial' : 'Due';
                           final statusColor = balance <= 0 ? AppColors.success : paid > 0 ? AppColors.warning : AppColors.warning;
-                          // Show month name for monthly fees (TUITION/VAN), otherwise term label
-                          const _months = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
-                          const _monthFeeTypes = ['TUITION FEES', 'TUITION FEE', 'VAN FEES', 'VAN FEE'];
-                          String term = fd['demfeeterm']?.toString() ?? '-';
-                          final feeTypeUpper = (fd['demfeetype']?.toString() ?? '').toUpperCase();
-                          if (_monthFeeTypes.contains(feeTypeUpper)) {
-                            final duedate = fd['duedate'];
-                            if (duedate != null) {
-                              try {
-                                final dt = DateTime.parse(duedate.toString());
-                                term = _months[dt.month - 1];
-                              } catch (_) {}
-                            }
-                          }
+                          final term = fd['demfeeterm']?.toString().trim().isNotEmpty == true
+                              ? fd['demfeeterm'].toString()
+                              : '-';
                           final fineDisplay = (pa > 0 || fd['paidstatus'] == 'P') ? fa : 0.0;
                           return DataRow(color: WidgetStateProperty.all(i.isEven ? Colors.white : AppColors.surface), cells: [
                             DataCell(Text('${i + 1}', style: const TextStyle(color: AppColors.textSecondary))),
@@ -3968,15 +3930,15 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                             DataCell(Text(fd['demfeetype']?.toString() ?? '-', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             DataCell(Text(_formatCurrency((fd['feeamount'] as num?)?.toDouble() ?? 0), style: const TextStyle(color: AppColors.textSecondary))),
                             DataCell(Text(_formatCurrency(paid), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                            DataCell(Text(fineDisplay > 0 ? _formatCurrency(fineDisplay) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fineDisplay > 0 ? Colors.orange : AppColors.textSecondary))),
+                            DataCell(Text(fineDisplay > 0 ? _formatCurrency(fineDisplay) : '-', style: TextStyle(fontWeight: FontWeight.w600, color: fineDisplay > 0 ? AppColors.warning : AppColors.textSecondary))),
                             DataCell(Text(_formatCurrency(balance), style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                             DataCell(Container(
                               padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
                               decoration: BoxDecoration(
                                 color: statusColor.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8.r),
+                                borderRadius: BorderRadius.circular(999),
                               ),
-                              child: Text(statusLabel, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: statusColor)),
+                              child: Text(statusLabel, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: statusColor)),
                             )),
                           ]);
                         }),
@@ -4016,14 +3978,6 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                 onPressed: () => _showReceiptDialog(p, _feeDetails),
                 icon: AppIcon('document-download', size: 16),
                 label: const Text('Download PDF'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  elevation: 0,
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
             ),
           ),
@@ -4249,7 +4203,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       debugPrint('Export collection summary error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed. ${friendlyError(e)}'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Export failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -4352,7 +4306,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
-    final headers = ['Sno', 'Class', 'Roll No', 'Student Name', ...termCols, 'Total', 'Remarks'];
+    final headers = ['Sno', schoolTerm('Class'), schoolTerm('Roll No'), 'Student Name', ...termCols, 'Total', 'Remarks'];
     final totalCols = headers.length;
     int row = 0;
 
@@ -4605,7 +4559,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
         await File(path).writeAsBytes(bytes);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Exported to $path'), backgroundColor: Colors.green),
+            SnackBar(content: Text('Exported to $path'), backgroundColor: AppColors.success),
           );
         }
       }
@@ -4869,6 +4823,10 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
     }
     int classOrd(_ClassGroup g) => _classOrdid[g.className] ?? 9999;
     groups.sort((a, b) {
+      // Promotional and terminal classes first, TC batches last -- before any
+      // ordid is consulted, since a TC class carries one like any other.
+      final g = classGroupRank(a.className).compareTo(classGroupRank(b.className));
+      if (g != 0) return g;
       final c = courseOrd(a).compareTo(courseOrd(b));
       if (c != 0) return c;
       final cl = classOrd(a).compareTo(classOrd(b));
@@ -4928,11 +4886,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
         // Class-wise table card - Expanded so height is bounded
         Expanded(
           child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-            ),
+            decoration: AppUI.card(),
             child: Column(
               children: [
                   // Card header: title left, search+filter right
@@ -4940,9 +4894,9 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                     padding: EdgeInsets.fromLTRB(16, 14, 16, 8.h),
                     child: Row(
                       children: [
-                        const CardTitleBlock(icon: 'book-1', title: 'Course-Wise Fee Details', subtitle: 'fee demands grouped by course'),
+                        CardTitleBlock(icon: 'book-1', title: schoolTerm('Course-Wise Fee Details'), subtitle: schoolTerm('fee demands grouped by course')),
                         SizedBox(width: 8.w),
-                        Text('(${_classGroups.length} classes)', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                        Text(schoolTerm('(${_classGroups.length} classes)'), style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
                         const Spacer(),
                       ],
                     ),
@@ -4955,8 +4909,8 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                    border: Border.all(color: AppColors.cardBorder),
                   ),
                   child:
             _isLoading
@@ -5033,8 +4987,8 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   final classHeaderRow = cBuildRow(
                     [
                       cBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('COURSE', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                      cBuildCell('CLASS', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                      cBuildCell(schoolTerm('COURSE'), 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                      cBuildCell(schoolTerm('CLASS'), 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('STUDENTS', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('FEE TYPES', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                       cBuildCell('TOTAL DEMAND', 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -5127,7 +5081,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                               const SizedBox(width: cColSpacing),
                               SizedBox(width: cAdj[7], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPaid), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
-                              SizedBox(width: cAdj[8], child: Align(alignment: Alignment.centerRight, child: Text(g.totalFine > 0 ? _formatCurrency(g.totalFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: g.totalFine > 0 ? Colors.orange : AppColors.textSecondary)))),
+                              SizedBox(width: cAdj[8], child: Align(alignment: Alignment.centerRight, child: Text(g.totalFine > 0 ? _formatCurrency(g.totalFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: g.totalFine > 0 ? AppColors.warning : AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
                               SizedBox(width: cAdj[9], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(g.totalPending), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                               const SizedBox(width: cColSpacing),
@@ -5139,7 +5093,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                           ),
                         ),
                       ));
-                      classBodyChildren.add(const Divider(height: 1, thickness: 0.5, color: Color(0xFFE8E8E8)));
+                      classBodyChildren.add(const Divider(height: 1, thickness: 1, color: AppColors.divider));
                     }
                   }
 
@@ -5255,11 +5209,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
     final stuCourse = first?['courname']?.toString() ?? '';
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -5280,8 +5230,8 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   child: Builder(builder: (context) {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     final hPad = compact ? 10.0 : 14.0;
-                    final radius = compact ? 6.0 : 10.0;
-                    final textSize = compact ? 11.0 : 13.0;
+                    const radius = AppUI.controlRadius;
+                    final textSize = compact ? 12.5 : 14.0;
                     final innerGap = compact ? 4.0 : 6.0;
                     return Container(
                       height: AppBtn.height(context),
@@ -5295,7 +5245,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         children: [
                           AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                           SizedBox(width: innerGap),
-                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                          Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                         ],
                       ),
                     );
@@ -5309,7 +5259,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                     _selectedClass = null;
                     _drilldownAdmNo = null;
                   }),
-                  child: Text('Course-wise Demand', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                  child: Text(schoolTerm('Course-wise Demand'), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
                 ),
                 SizedBox(width: 6.w),
                 AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
@@ -5340,18 +5290,20 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                  border: Border.all(color: AppColors.cardBorder),
                 ),
                 child: LayoutBuilder(builder: (context, constraints) {
-          // Custom layout so we can give every non-S No. column the same
-          // width (S No. is the only narrow one).
+          // Custom layout: S No. and STATUS are narrow fixed columns; the six
+          // content columns (SEMESTER..BALANCE) share the remaining viewport.
+          // STATUS is kept tight so its small badge doesn't leave a large empty
+          // gutter on the right of the table.
           const double dHMargin = 16;
           const double dColSpacing = 12;
           const double dSnoW = 45;
-          // 7 equal-width columns fill the remaining viewport.
-          final double dOtherW = ((constraints.maxWidth - dHMargin * 2 - dColSpacing * 7 - dSnoW) / 7).clamp(110.0, 1000.0);
-          final List<double> dWidths = [dSnoW, dOtherW, dOtherW, dOtherW, dOtherW, dOtherW, dOtherW, dOtherW];
+          const double dStatusW = 120;
+          final double dOtherW = ((constraints.maxWidth - dHMargin * 2 - dColSpacing * 7 - dSnoW - dStatusW) / 6).clamp(90.0, 1000.0);
+          final List<double> dWidths = [dSnoW, dOtherW, dOtherW, dOtherW, dOtherW, dOtherW, dOtherW, dStatusW];
           final dTableWidth = dWidths.reduce((a, b) => a + b) + dColSpacing * 7 + dHMargin * 2;
 
           Widget dCellText(String text, int col, {FontWeight? fontWeight, double? fontSize, Color? color, TextAlign? align}) {
@@ -5393,7 +5345,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
 
           final headerRow = dRow([
             dCellText('S No.', 0, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-            dCellText('SEMESTER', 1, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+            dCellText(schoolTerm('SEMESTER'), 1, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('FEE TYPE', 2, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('AMOUNT', 3, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
             dCellText('PAID', 4, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
@@ -5435,7 +5387,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   const SizedBox(width: dColSpacing),
                   dCellText(_formatCurrencyLocal(paid), 4),
                   const SizedBox(width: dColSpacing),
-                  dCellText(fineDisplay > 0 ? _formatCurrencyLocal(fineDisplay) : '-', 5, color: fineDisplay > 0 ? Colors.orange : AppColors.textSecondary),
+                  dCellText(fineDisplay > 0 ? _formatCurrencyLocal(fineDisplay) : '-', 5, color: fineDisplay > 0 ? AppColors.warning : AppColors.textSecondary),
                   const SizedBox(width: dColSpacing),
                   dCellText(_formatCurrencyLocal(balance), 6),
                   const SizedBox(width: dColSpacing),
@@ -5447,7 +5399,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
                           color: statusColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8.r),
+                          borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(statusLabel, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: statusColor)),
                       ),
@@ -5513,7 +5465,10 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
             tableChildren.add(totalRow('Arrear Total', arrearDemands));
             tableChildren.add(totalRow('Total', demands));
           } else {
-            // Single type — flat list with one Total (unchanged look).
+            // Single type — still label it REGULAR / ARREAR so the type is
+            // always mentioned, even for a single fee.
+            final onlyArrear = arrearDemands.isNotEmpty;
+            tableChildren.add(sectionBanner(onlyArrear ? 'ARREAR FEES' : 'REGULAR FEES'));
             for (int i = 0; i < demands.length; i++) {
               tableChildren.add(demandRow(demands[i], i + 1, i.isOdd));
             }
@@ -5581,17 +5536,17 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
         if (status != _studentStatusFilter) return false;
       }
       return true;
-    }).toList();
+    }).toList()
+      // Order the student list alphabetically by name.
+      ..sort((a, b) => (byStudent[a]!.first['_stuname']?.toString() ?? '')
+          .toLowerCase()
+          .compareTo((byStudent[b]!.first['_stuname']?.toString() ?? '').toLowerCase()));
     final totalStudents = studentKeys.length;
 
     return Column(
       children: [
         Expanded(child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
-          ),
+          decoration: AppUI.card(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -5610,8 +5565,8 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                       child: Builder(builder: (context) {
                         final compact = MediaQuery.of(context).size.width <= 1366;
                         final hPad = compact ? 10.0 : 14.0;
-                        final radius = compact ? 6.0 : 10.0;
-                        final textSize = compact ? 11.0 : 13.0;
+                        const radius = AppUI.controlRadius;
+                        final textSize = compact ? 12.5 : 14.0;
                         final innerGap = compact ? 4.0 : 6.0;
                         return Container(
                           height: AppBtn.height(context),
@@ -5625,7 +5580,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                             children: [
                               AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                               SizedBox(width: innerGap),
-                              Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                              Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w700, color: Colors.white)),
                             ],
                           ),
                         );
@@ -5641,7 +5596,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         _studentSearchQuery = '';
                         _studentStatusFilter = null;
                       }),
-                      child: Text('Course-wise Demand', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                      child: Text(schoolTerm('Course-wise Demand'), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
                     ),
                     SizedBox(width: 6.w),
                     AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
@@ -5675,7 +5630,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         child: Container(
                           padding: EdgeInsets.symmetric(horizontal: 14.w),
                           decoration: BoxDecoration(
-                            border: Border.all(color: _studentStatusFilter != null ? AppColors.accent : AppColors.border, width: 1.5),
+                            border: Border.all(color: _studentStatusFilter != null ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border),
                             borderRadius: BorderRadius.circular(10.r),
                           ),
                           child: DropdownButton<String?>(
@@ -5716,8 +5671,8 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                      border: Border.all(color: AppColors.cardBorder),
                     ),
                     child: LayoutBuilder(builder: (context, constraints) {
                 // Compute totals for grand total row
@@ -5766,7 +5721,9 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                   return SizedBox(
                     width: sAdj[colIndex],
                     child: child ?? Align(
-                      alignment: colIndex >= 3 && colIndex <= 7 ? Alignment.centerRight : colIndex == 9 ? Alignment.centerRight : Alignment.centerLeft,
+                      // STATUS (col 8) centred so its badge clears the
+                      // right-aligned BALANCE column instead of hugging it.
+                      alignment: colIndex >= 3 && colIndex <= 7 ? Alignment.centerRight : colIndex == 8 ? Alignment.center : colIndex == 9 ? Alignment.centerRight : Alignment.centerLeft,
                       child: Text(text, style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: effectiveWeight, color: effectiveColor)),
                     ),
                   );
@@ -5792,7 +5749,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                 final stuHeaderRow = sBuildRow(
                   [
                     sBuildCell('S No.', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                    sBuildCell('ROLL NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                    sBuildCell(schoolTerm('ROLL NO'), 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('STUDENT NAME', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('FEE AMOUNT', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                     sBuildCell('CONCESSION', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
@@ -5865,20 +5822,14 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                             const SizedBox(width: sColSpacing),
                             SizedBox(width: sAdj[5], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sPaid), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
-                            SizedBox(width: sAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: sFine > 0 ? Colors.orange : AppColors.textSecondary)))),
+                            SizedBox(width: sAdj[6], child: Align(alignment: Alignment.centerRight, child: Text(sFine > 0 ? _formatCurrency(sFine) : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: sFine > 0 ? AppColors.warning : AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
                             SizedBox(width: sAdj[7], child: Align(alignment: Alignment.centerRight, child: Text(_formatCurrency(sBalance), style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)))),
                             const SizedBox(width: sColSpacing),
                             SizedBox(width: sAdj[8], child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: allPaid ? AppColors.success.withValues(alpha: 0.1) : anyPaid ? AppColors.warning.withValues(alpha: 0.1) : AppColors.error.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(8.r),
-                                ),
-                                child: Text(allPaid ? 'Paid' : anyPaid ? 'Partial' : 'Unpaid', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: allPaid ? AppColors.success : anyPaid ? AppColors.warning : AppColors.error)),
-                              ),
+                              alignment: Alignment.center,
+                              child: AppUI.chip(allPaid ? 'Paid' : anyPaid ? 'Partial' : 'Unpaid',
+                                  allPaid ? AppStatus.success : anyPaid ? AppStatus.warning : AppStatus.danger),
                             )),
                             const SizedBox(width: sColSpacing),
                             SizedBox(width: sAdj[9], child: Align(
@@ -5889,7 +5840,7 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
                         ),
                       ),
                     ));
-                    stuBodyChildren.add(const Divider(height: 1, thickness: 0.5, color: Color(0xFFE8E8E8)));
+                    stuBodyChildren.add(const Divider(height: 1, thickness: 1, color: AppColors.divider));
                   }
                 }
 
@@ -5960,58 +5911,27 @@ class _ClassWiseDemandTabState extends State<_ClassWiseDemandTab> with Automatic
   }
 
   Widget _buildSummaryCard(String icon, Color iconColor, String value, String label) {
+    // AppUI.kpi, composed locally so a long rupee figure can still shrink to
+    // fit (FittedBox) instead of being cut off with an ellipsis.
     return Expanded(
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 16.h),
-        decoration: BoxDecoration(
-          // Light tinted card: each metric carries a wash of its own accent
-          // colour so the four read apart at a glance. Kept at a low alpha so
-          // the dark value text stays well above AA contrast.
-          // Opaque tint (the 8% wash composited over white) so nothing behind
-          // the card can bleed through — a translucent fill let table content
-          // show through and read as overlapping colour.
-          color: Color.alphaBlend(iconColor.withValues(alpha: 0.08), Colors.white),
-          borderRadius: BorderRadius.circular(14.r),
-          border: Border.all(color: iconColor.withValues(alpha: 0.28)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color.fromRGBO(15, 23, 42, 0.04),
-              offset: Offset(0, 3),
-              blurRadius: 12,
-            ),
-          ],
-        ),
+        padding: EdgeInsets.all(16.w),
+        decoration: AppUI.card(),
         child: Row(
           children: [
-            Container(
-              padding: EdgeInsets.all(10.w),
-              decoration: BoxDecoration(
-                // Solid white chip so the icon still separates from the tint.
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: iconColor.withValues(alpha: 0.22)),
-              ),
-              child: AppIcon(icon, color: iconColor, size: 20),
-            ),
+            AppUI.iconTile(icon, color: iconColor),
             SizedBox(width: 12.w),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // FittedBox so large currency values shrink to fit instead
-                  // of clipping with an ellipsis.
+                  Text(label.toUpperCase(), style: AppUI.caps, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  SizedBox(height: 4.h),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: Text(value, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.2)),
-                  ),
-                  SizedBox(height: 3.h),
-                  Text(
-                    label.toUpperCase(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary, letterSpacing: 0.4),
+                    child: Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
                   ),
                 ],
               ),
@@ -6126,7 +6046,9 @@ class _DateWiseTab extends StatefulWidget {
 }
 
 class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClientMixin {
-  DateTime _fromDate = DateTime(2020);
+  // Default to the current calendar year (the active institution-year schema
+  // already scopes the data), instead of an all-time 2020 start.
+  DateTime _fromDate = DateTime(DateTime.now().year, 1, 1);
   DateTime _toDate = DateTime.now().add(const Duration(days: 365));
   bool _isLoading = false;
   List<Map<String, dynamic>> _allDemands = [];
@@ -6213,28 +6135,68 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     setState(() => _isLoading = true);
 
     try {
-      // Stage 1: fetch demands, totals, and feetype master in parallel.
-      // feetype master lets the column header show feeshort instead of feedesc.
+      // Read from the SAME source as Reports > Daily Collection
+      // (get_daily_collection_report, via getDailyCollectionRows) so the two
+      // screens reconcile exactly. That RPC returns one row per
+      // (receipt x semester) with fees_json (demfeetype -> amount, computed from
+      // paymentdetails), fine and total. getFeeTotals still drives the KPI cards;
+      // the feetype master maps feedesc -> feeshort for the column headers.
       final results = await Future.wait([
-        SupabaseService.getPaidFeeDemands(insId),
+        SupabaseService.getDailyCollectionRows(insId, _fromDate, _toDate),
         SupabaseService.getFeeTotals(insId),
         SupabaseService.fromSchema('feetype')
             .select('feedesc, feeshort')
             .eq('ins_id', insId)
             .eq('activestatus', 1),
       ]);
-      final demands = results[0] as List<Map<String, dynamic>>;
+      final rpcRows = results[0] as List<Map<String, dynamic>>;
       final feeTotals = results[1] as Map<String, double>;
       final feeTypeMaster = results[2] as List;
 
-      // Stage 2: fetch pay numbers (needs pay_ids from demands)
-      final payIds = demands
-          .map((d) => d['pay_id'] as int?)
-          .where((id) => id != null)
-          .cast<int>()
-          .toSet()
-          .toList();
-      final payNumberMap = await SupabaseService.getPayNumberMap(payIds, insId: insId);
+      // Explode each (receipt x semester) row into synthetic per-demand rows so
+      // the existing pivot pipeline (_applyFilter / _buildStudentRows) consumes
+      // it unchanged. fees_json amounts are FEE ONLY -- the RPC subtracts
+      // fd.fineamount, because the fine has its own column and was otherwise
+      // counted twice. The row's total fine is attached to the first synthetic
+      // demand so it lands in the Fine column alone.
+      final demands = <Map<String, dynamic>>[];
+      final payNumberMap = <int, String>{};
+      for (final r in rpcRows) {
+        final payId = (r['pay_id'] as num?)?.toInt();
+        if (payId == null) continue;
+        payNumberMap[payId] = r['paynumber']?.toString() ?? '-';
+        final term = r['semester']?.toString() ?? '';
+        final paydate = r['paydate']?.toString() ?? '';
+        final rpcFine = (r['fine'] as num?)?.toDouble() ?? 0;
+        final feesJson = r['fees_json'];
+        final entries = <MapEntry<String, double>>[];
+        if (feesJson is Map) {
+          feesJson.forEach((k, v) =>
+              entries.add(MapEntry(k.toString(), (v as num?)?.toDouble() ?? 0)));
+        }
+        if (entries.isEmpty) {
+          final t = (r['total'] as num?)?.toDouble() ?? 0;
+          if (t != 0) entries.add(MapEntry('OTHERS', t));
+        }
+        for (var i = 0; i < entries.length; i++) {
+          demands.add({
+            'pay_id': payId,
+            'stuadmno': r['stuadmno']?.toString() ?? '-',
+            'stuname': r['stuname']?.toString() ?? '-',
+            'stuclass': r['stuclass']?.toString() ?? '-',
+            'courname': r['courname']?.toString() ?? '-',
+            'demfeeterm': term,
+            'demfeetype': entries[i].key,
+            'paidamount': entries[i].value,
+            'fineamount': i == 0 ? rpcFine : 0.0,
+            'paidstatus': 'P',
+            'feeamount': entries[i].value,
+            'balancedue': 0.0,
+            'reconbalancedue': 0.0,
+            'paydate': paydate,
+          });
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -6378,7 +6340,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
                   border: Border.all(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -6386,25 +6348,21 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                     const AppIcon.linear('calendar', size: 14, color: AppColors.textSecondary),
                     const SizedBox(width: 8),
                     Text(_formatFilterDate(value),
-                        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary)),
+                        style: AppUI.fieldText(context)),
                   ],
                 ),
               ),
             );
           }
 
-          Widget sectionLabel(String text) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(text, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.3)),
-              );
+          Widget sectionLabel(String text) => AppUI.sectionLabel(text);
 
           return AlertDialog(
             backgroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
             title: Row(
               children: [
-                Text('Filters', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
+                Text('Filters', style: AppUI.cardTitle),
                 const Spacer(),
                 IconButton(
                   onPressed: () => Navigator.pop(ctx),
@@ -6456,21 +6414,17 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                   from = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 30));
                   to = DateTime(now.year, now.month, now.day);
                 }),
-                child: Text('Clear', style: TextStyle(color: AppColors.textSecondary, fontSize: 13.sp, fontWeight: FontWeight.w600)),
+                child: const Text('Clear'),
               ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                ),
                 onPressed: () {
                   setState(() {
                     _fromDate = from;
                     _toDate = to;
                   });
                   Navigator.pop(ctx);
-                  _applyFilter();
+                  // Dates drive the RPC now — reload rather than re-filter.
+                  _fetchData();
                 },
                 child: const Text('Apply'),
               ),
@@ -6508,8 +6462,8 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -6548,30 +6502,34 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     }
   }
 
-  /// Build student rows for a date group, pivoted by fee type
+  /// Build student rows for a date group, pivoted by fee type.
+  /// One row per (payment x semester) so a receipt paying more than one term is
+  /// broken out into a row per semester (fees scoped to that term).
   List<Map<String, dynamic>> _buildStudentRows(List<Map<String, dynamic>> demands) {
-    // Group by pay_id (each payment is a row)
-    final Map<int, List<Map<String, dynamic>>> paymentMap = {};
+    // Group by pay_id + demfeeterm (each payment-semester is a row).
+    final Map<String, List<Map<String, dynamic>>> paymentMap = {};
     for (final d in demands) {
       final payId = d['pay_id'] as int?;
       if (payId != null) {
-        paymentMap.putIfAbsent(payId, () => []).add(d);
+        final term = (d['demfeeterm']?.toString() ?? '').trim();
+        paymentMap.putIfAbsent('$payId $term', () => []).add(d);
       }
     }
 
     final rows = <Map<String, dynamic>>[];
 
     for (final entry in paymentMap.entries) {
-      final payId = entry.key;
       final studentDemands = entry.value;
       final first = studentDemands.first;
+      final payId = first['pay_id'] as int?;
+      final term = (first['demfeeterm']?.toString() ?? '').trim();
       final stuName = first['students'] is Map
           ? (first['students']['stuname']?.toString() ?? '-')
           : (first['stuname']?.toString() ?? '-');
       final stuClass = first['stuclass']?.toString() ?? '-';
       final stuCourse = first['courname']?.toString() ?? '-';
       final admNo = first['stuadmno']?.toString() ?? '-';
-      final payNo = _payNumberMap[payId] ?? '-';
+      final payNo = payId != null ? (_payNumberMap[payId] ?? '-') : '-';
 
       final Map<String, double> feeAmounts = {};
       double total = 0;
@@ -6581,11 +6539,14 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
         final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
         final isPaid = pa > 0 || d['paidstatus'] == 'P';
-        final amt = pa - (isPaid ? fa : 0);
+        // Match the Daily Collection report: the fee-type cell holds the FULL
+        // amount paid toward that demand (fine included); Fine is a separate
+        // breakout column, not subtracted from the fee cell. So each fee cell +
+        // the fine breakout reconcile to the same paid total on both screens.
         if (isPaid) fine += fa;
         if (ft.isNotEmpty) {
-          feeAmounts[ft] = (feeAmounts[ft] ?? 0) + amt;
-          total += amt;
+          feeAmounts[ft] = (feeAmounts[ft] ?? 0) + pa;
+          total += pa;
         }
       }
 
@@ -6595,13 +6556,17 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         'stuName': stuName,
         'stuCourse': stuCourse,
         'stuClass': stuClass,
+        'semester': term.isEmpty ? '-' : term,
         'feeAmounts': feeAmounts,
         'fine': fine,
-        'total': total + fine,
+        'total': total,
       });
     }
 
-    rows.sort((a, b) => (a['payNo'] as String).compareTo(b['payNo'] as String));
+    rows.sort((a, b) {
+      final c = (a['payNo'] as String).compareTo(b['payNo'] as String);
+      return c != 0 ? c : (a['semester'] as String).compareTo(b['semester'] as String);
+    });
     return rows;
   }
 
@@ -6661,6 +6626,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
           'stuName': row['stuName'] as String,
           'stuCourse': row['stuCourse'] as String,
           'stuClass': row['stuClass'] as String,
+          'semester': row['semester'] as String? ?? '-',
           'feeAmounts': feeAmounts,
           'fine': fine,
           'total': total,
@@ -6707,11 +6673,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
             SizedBox(height: 16.h),
             // Spreadsheet-like table
             Expanded(child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.border),
-              ),
+              decoration: AppUI.card(),
               child: Column(
                 children: [
                   // Title bar with search & filter
@@ -6741,12 +6703,8 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                           height: AppBtn.height(context),
                           child: OutlinedButton.icon(
                             onPressed: _openDateMethodFilter,
-                            icon: AppIcon.linear('calendar-1', size: AppBtn.iconSize(context), color: AppColors.textPrimary),
-                            label: Text('Date', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: AppColors.border),
-                              padding: EdgeInsets.symmetric(horizontal: 14.w),
-                            ),
+                            icon: AppIcon.linear('calendar-1', size: AppBtn.iconSize(context), color: AppColors.primary),
+                    label: const Text('Date'),
                           ),
                         ),
                         SizedBox(width: AppBtn.gap(context)),
@@ -6756,11 +6714,6 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             onPressed: flatRows.isNotEmpty ? () => _exportToExcel(flatRows, activeDisplayFeeTypes, grandFeeTypeTotals, grandTotal) : null,
                             icon: AppIcon('document-download', size: AppBtn.iconSize(context), color: Colors.white),
                             label: const Text('Export'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.accent,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                            ),
                           ),
                         ),
                       ],
@@ -6772,17 +6725,10 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                       child: Center(child: CircularProgressIndicator()),
                     )
                   else if (_dateGroups.isEmpty)
-                    Padding(
-                      padding: EdgeInsets.all(48.w),
-                      child: Center(
-                        child: Column(
-                          children: [
-                            AppIcon.linear('search-favorite', size: 40.sp, color: AppColors.textSecondary.withValues(alpha: 0.5)),
-                            SizedBox(height: 8.h),
-                            const Text('No paid collections found', style: TextStyle(color: AppColors.textSecondary)),
-                          ],
-                        ),
-                      ),
+                    AppUI.empty(
+                      title: 'No paid collections found',
+                      why: 'Nothing was collected between these dates. Widen the range with the Date button.',
+                      icon: 'search-favorite',
                     )
                   else
                     Expanded(child: Padding(
@@ -6791,8 +6737,8 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.border),
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                          border: Border.all(color: AppColors.cardBorder),
                         ),
                         child: Column(
                       children: [
@@ -6815,16 +6761,17 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             const double snoW = 52;     // also fits the "S.Total" label
                             const double recptW = 96;   // fits 'CF26/00001' / 'AFR2600134' on one line
                             const double admnW = 132;   // ROLL NO - fits 12-digit register numbers
-                            const double nameW = 140;
-                            const double classW = 120;  // fits "B.TECH (IT) -II"
+                            const double nameW = 200;   // fits long full names on one line
+                            const double classW = 165;  // fits "B.TECH.- AI&DS -III" on one line
+                            const double semW = 110;    // SEMESTER - fits "III SEM" / "YEARLY"
                             const double feeColW = 104; // header + crore-scale grand-total sums
                             const double fineColW = 72;
                             const double totalColW = 116; // widest column - full collection total
                             final int feeCount = activeDisplayFeeTypes.length;
 
-                            // Build column widths list (FINE col before TOTAL)
+                            // Build column widths list (SEMESTER after CLASS, FINE before TOTAL)
                             final List<double> colWidths = [
-                              snoW, recptW, admnW, nameW, classW,
+                              snoW, recptW, admnW, nameW, classW, semW,
                               ...List.filled(feeCount, feeColW),
                               fineColW,
                               totalColW,
@@ -6840,7 +6787,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                             // columns (except FINE, which stays narrow), so the gaps
                             // stay small and even and nothing is left empty.
                             final extraSpace = tableWidth - totalFixedWidth;
-                            final int fineIdx = 5 + feeCount;
+                            final int fineIdx = 6 + feeCount;
                             final double spreadBase = colWidths
                                 .asMap()
                                 .entries
@@ -6863,11 +6810,11 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                       style: TextStyle(fontSize: fontSize ?? 13.sp, fontWeight: effectiveWeight, color: effectiveColor));
                               return SizedBox(
                                 width: adjustedWidths[colIndex],
-                                // Text columns (SNO..CLASS, idx 0-4) left; numeric
-                                // columns (fees, FINE, TOTAL, idx 5+) right - headers
+                                // Text columns (SNO..SEMESTER, idx 0-5) left; numeric
+                                // columns (fees, FINE, TOTAL, idx 6+) right - headers
                                 // and data both flow through here so they stay aligned.
                                 child: truncate ? child : Align(
-                                  alignment: (colIndex >= 5) ? Alignment.centerRight : Alignment.centerLeft,
+                                  alignment: (colIndex >= 6) ? Alignment.centerRight : Alignment.centerLeft,
                                   child: child,
                                 ),
                               );
@@ -6894,13 +6841,14 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                               [
                                 buildCell('SNO', 0, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('RECPT.NO', 1, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('ROLL NO', 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell(schoolTerm('ROLL NO'), 2, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 buildCell('NAME', 3, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('CLASS', 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell(schoolTerm('CLASS'), 4, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell(schoolTerm('SEMESTER'), 5, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                                 for (int i = 0; i < feeCount; i++)
-                                  buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 5 + i, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('FINE', 5 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
-                                buildCell('TOTAL', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                  buildCell((_feeShortByDesc[activeDisplayFeeTypes[i]] ?? activeDisplayFeeTypes[i]).toUpperCase(), 6 + i, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('FINE', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
+                                buildCell('TOTAL', 7 + feeCount, fontWeight: FontWeight.w700, fontSize: 13.sp, color: AppColors.textPrimary),
                               ],
                               bgColor: headerBg,
                               height: 40,
@@ -6939,14 +6887,15 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                     buildCell('', 2),
                                     buildCell('', 3),
                                     buildCell('', 4),
+                                    buildCell('', 5),
                                     for (int i = 0; i < feeCount; i++)
                                       buildCell(
                                         (feeAmts[activeDisplayFeeTypes[i]] ?? 0) > 0
                                             ? formatIndianNumber(feeAmts[activeDisplayFeeTypes[i]]!) : '',
-                                        5 + i, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+                                        6 + i, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
                                       ),
-                                    buildCell(fine > 0 ? formatIndianNumber(fine) : '', 5 + feeCount, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
-                                    buildCell(formatIndianNumber(total), 6 + feeCount, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                                    buildCell(fine > 0 ? formatIndianNumber(fine) : '', 6 + feeCount, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                                    buildCell(formatIndianNumber(total), 7 + feeCount, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                                   ],
                                   bgColor: subTotalBg,
                                   height: 36,
@@ -6961,17 +6910,18 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                     buildCell(row['payNo'] as String, 1),
                                     buildCell(row['admNo'] as String, 2),
                                     buildCell(row['stuName'] as String, 3, truncate: true),
-                                    buildCell(row['stuClass'] as String, 4),
+                                    buildCell(row['stuClass'] as String, 4, truncate: true),
+                                    buildCell(row['semester'] as String? ?? '-', 5, truncate: true),
                                     for (int i = 0; i < feeCount; i++)
                                       buildCell(
                                         (feeAmts[activeDisplayFeeTypes[i]] ?? 0) > 0
                                             ? formatIndianNumber(feeAmts[activeDisplayFeeTypes[i]]!) : '',
-                                        5 + i,
+                                        6 + i,
                                       ),
-                                    buildCell(fine > 0 ? formatIndianNumber(fine) : '', 5 + feeCount),
+                                    buildCell(fine > 0 ? formatIndianNumber(fine) : '', 6 + feeCount),
                                     buildCell(
                                       formatIndianNumber(row['total'] as double),
-                                      6 + feeCount, fontWeight: FontWeight.w600,
+                                      7 + feeCount, fontWeight: FontWeight.w600,
                                     ),
                                   ],
                                   bgColor: dataRowIdx.isEven ? Colors.white : AppColors.surface,
@@ -6989,14 +6939,15 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
                                 buildCell('', 2),
                                 buildCell('GRAND TOTAL', 3, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary),
                                 buildCell('', 4),
+                                buildCell('', 5),
                                 for (int i = 0; i < feeCount; i++)
                                   buildCell(
                                     (grandFeeTypeTotals[activeDisplayFeeTypes[i]] ?? 0) > 0
                                         ? formatIndianNumber(grandFeeTypeTotals[activeDisplayFeeTypes[i]]!) : '',
-                                    5 + i, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary,
+                                    6 + i, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary,
                                   ),
-                                buildCell(grandFine > 0 ? formatIndianNumber(grandFine) : '', 5 + feeCount, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary),
-                                buildCell(formatIndianNumber(grandTotal), 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary),
+                                buildCell(grandFine > 0 ? formatIndianNumber(grandFine) : '', 6 + feeCount, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary),
+                                buildCell(formatIndianNumber(grandTotal), 7 + feeCount, fontWeight: FontWeight.w700, fontSize: 14.sp, color: AppColors.textPrimary),
                               ],
                               bgColor: headerBg,
                               height: 40,
@@ -7125,7 +7076,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     // Filter fee types to only those with actual payments
     final activeFeeTypes = feeTypes.where((ft) => (grandFeeTypeTotals[ft] ?? 0) > 0).toList();
 
-    final totalCols = 6 + activeFeeTypes.length + 1; // +1 for TOTAL
+    final totalCols = 7 + activeFeeTypes.length + 1; // +Semester +TOTAL
     int row = 0;
 
     // Institution name
@@ -7169,7 +7120,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     row++;
 
     // Column headers (no Challan No.)
-    final headers = ['SNO', 'Recpt. No.', 'Roll No.', 'Name', 'Course', 'Class', ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
+    final headers = ['SNO', 'Recpt. No.', schoolTerm('Roll No.'), 'Name', schoolTerm('Course'), schoolTerm('Class'), schoolTerm('Semester'), ...activeFeeTypes.map((ft) => ft.toUpperCase()), 'TOTAL'];
     for (var c = 0; c < headers.length; c++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row));
       cell.value = xl.TextCellValue(headers[c]);
@@ -7192,16 +7143,16 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         final stCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row));
         stCell.value = xl.TextCellValue('S.Total');
         stCell.cellStyle = subTotalStyle;
-        for (var i = 1; i < 6; i++) {
+        for (var i = 1; i < 7; i++) {
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: row)).cellStyle = subTotalStyle;
         }
         for (var i = 0; i < activeFeeTypes.length; i++) {
           final amt = feeAmts[activeFeeTypes[i]] ?? 0;
-          final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + i, rowIndex: row));
+          final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + i, rowIndex: row));
           if (amt > 0) cell.value = xl.IntCellValue(amt.toInt());
           cell.cellStyle = subTotalStyle;
         }
-        final tCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + activeFeeTypes.length, rowIndex: row));
+        final tCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + activeFeeTypes.length, rowIndex: row));
         tCell.value = xl.IntCellValue(total.toInt());
         tCell.cellStyle = subTotalStyle;
         row++;
@@ -7213,16 +7164,17 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuName'] as String);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(r['stuCourse'] as String);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['stuClass'] as String);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue(r['semester'] as String? ?? '-');
 
         final feeAmts = r['feeAmounts'] as Map<String, double>;
         for (var i = 0; i < activeFeeTypes.length; i++) {
           final amt = feeAmts[activeFeeTypes[i]] ?? 0;
           if (amt > 0) {
-            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + i, rowIndex: row)).value = xl.IntCellValue(amt.toInt());
+            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + i, rowIndex: row)).value = xl.IntCellValue(amt.toInt());
           }
         }
         final total = r['total'] as double;
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + activeFeeTypes.length, rowIndex: row)).value = xl.IntCellValue(total.toInt());
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + activeFeeTypes.length, rowIndex: row)).value = xl.IntCellValue(total.toInt());
         row++;
       }
     }
@@ -7231,16 +7183,16 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     final gtLabel = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row));
     gtLabel.value = xl.TextCellValue('GRAND TOTAL');
     gtLabel.cellStyle = totalRowStyle;
-    for (var c = 1; c < 6; c++) {
+    for (var c = 1; c < 7; c++) {
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = totalRowStyle;
     }
     for (var i = 0; i < activeFeeTypes.length; i++) {
       final amt = grandFeeTypeTotals[activeFeeTypes[i]] ?? 0;
-      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + i, rowIndex: row));
+      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + i, rowIndex: row));
       if (amt > 0) cell.value = xl.IntCellValue(amt.toInt());
       cell.cellStyle = totalRowStyle;
     }
-    final gtCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + activeFeeTypes.length, rowIndex: row));
+    final gtCell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7 + activeFeeTypes.length, rowIndex: row));
     gtCell.value = xl.IntCellValue(grandTotal.toInt());
     gtCell.cellStyle = totalRowStyle;
 
@@ -7251,10 +7203,11 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     sheet.setColumnWidth(3, 22);
     sheet.setColumnWidth(4, 14);
     sheet.setColumnWidth(5, 8);
+    sheet.setColumnWidth(6, 12); // Semester
     for (var i = 0; i < activeFeeTypes.length; i++) {
-      sheet.setColumnWidth(6 + i, 14);
+      sheet.setColumnWidth(7 + i, 14);
     }
-    sheet.setColumnWidth(6 + activeFeeTypes.length, 12);
+    sheet.setColumnWidth(7 + activeFeeTypes.length, 12);
 
     // Save
     final result = await FilePicker.platform.saveFile(
@@ -7271,7 +7224,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
         await File(path).writeAsBytes(bytes);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Exported to $path'), backgroundColor: Colors.green),
+            SnackBar(content: Text('Exported to $path'), backgroundColor: AppColors.success),
           );
         }
       }
@@ -7279,58 +7232,27 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
   }
 
   Widget _buildSummaryCard(String icon, Color iconColor, String value, String label) {
+    // AppUI.kpi, composed locally so a long rupee figure can still shrink to
+    // fit (FittedBox) instead of being cut off with an ellipsis.
     return Expanded(
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 16.h),
-        decoration: BoxDecoration(
-          // Light tinted card: each metric carries a wash of its own accent
-          // colour so the four read apart at a glance. Kept at a low alpha so
-          // the dark value text stays well above AA contrast.
-          // Opaque tint (the 8% wash composited over white) so nothing behind
-          // the card can bleed through — a translucent fill let table content
-          // show through and read as overlapping colour.
-          color: Color.alphaBlend(iconColor.withValues(alpha: 0.08), Colors.white),
-          borderRadius: BorderRadius.circular(14.r),
-          border: Border.all(color: iconColor.withValues(alpha: 0.28)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color.fromRGBO(15, 23, 42, 0.04),
-              offset: Offset(0, 3),
-              blurRadius: 12,
-            ),
-          ],
-        ),
+        padding: EdgeInsets.all(16.w),
+        decoration: AppUI.card(),
         child: Row(
           children: [
-            Container(
-              padding: EdgeInsets.all(10.w),
-              decoration: BoxDecoration(
-                // Solid white chip so the icon still separates from the tint.
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12.r),
-                border: Border.all(color: iconColor.withValues(alpha: 0.22)),
-              ),
-              child: AppIcon(icon, color: iconColor, size: 20),
-            ),
+            AppUI.iconTile(icon, color: iconColor),
             SizedBox(width: 12.w),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // FittedBox so large currency values shrink to fit instead
-                  // of clipping with an ellipsis.
+                  Text(label.toUpperCase(), style: AppUI.caps, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  SizedBox(height: 4.h),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: Text(value, style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.2)),
-                  ),
-                  SizedBox(height: 3.h),
-                  Text(
-                    label.toUpperCase(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary, letterSpacing: 0.4),
+                    child: Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
                   ),
                 ],
               ),
@@ -7405,8 +7327,14 @@ class _DateDemandGroup {
 /// Reports desktop hover state to its [builder] so a card can lift / deepen its
 /// shadow on mouse-over. A no-op on touch. Used by the dashboard KPI cards.
 class _HoverLift extends StatefulWidget {
-  final Widget Function(bool hovered) builder;
-  const _HoverLift({required this.builder});
+  // `child` is built once by the caller and handed back to `builder` unchanged
+  // on every hover toggle. Because the child widget instance is identical
+  // across rebuilds, Flutter skips re-building that (heavy) subtree — only the
+  // lightweight wrapper the builder returns (transform / border / shadow) is
+  // rebuilt when the pointer enters or leaves.
+  final Widget Function(bool hovered, Widget? child) builder;
+  final Widget? child;
+  const _HoverLift({required this.builder, this.child});
 
   @override
   State<_HoverLift> createState() => _HoverLiftState();
@@ -7419,9 +7347,13 @@ class _HoverLiftState extends State<_HoverLift> {
   Widget build(BuildContext context) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: widget.builder(_hovered),
+      onEnter: (_) {
+        if (!_hovered) setState(() => _hovered = true);
+      },
+      onExit: (_) {
+        if (_hovered) setState(() => _hovered = false);
+      },
+      child: widget.builder(_hovered, widget.child),
     );
   }
 }
@@ -7540,7 +7472,7 @@ class _StudentAccordionState extends State<_StudentAccordion> {
                   ),
                   child: Row(
                     children: [
-                      Expanded(flex: 2, child: Text('Semester', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
+                      Expanded(flex: 2, child: Text(schoolTerm('Semester'), style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 3, child: Text('Fee Type', style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 2, child: Text('Due Date', textAlign: TextAlign.center, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
                       Expanded(flex: 2, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
@@ -7586,7 +7518,7 @@ class _StudentAccordionState extends State<_StudentAccordion> {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: statusColor.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8.r),
+                                borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
                                 statusLabel,

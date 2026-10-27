@@ -41,7 +41,10 @@ serve(async (req) => {
       channel_id: channelIdRaw } = await req.json();
     const channelId = (channelIdRaw && String(channelIdRaw).trim()) || "";
 
-    if (!amount || !pay_id) {
+    // pay_id is compared against null/undefined, NOT tested for truthiness:
+    // `!pay_id` also rejects 0, and a Misc receipt has no payment row to quote.
+    // That is what made every Misc Paytm payment fail with "missing fields".
+    if (!amount || pay_id === undefined || pay_id === null) {
       return new Response(
         JSON.stringify({ error: "Missing required fields (amount, pay_id)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -124,18 +127,54 @@ serve(async (req) => {
       );
     }
 
-    // Persist the order id on the payment row (service-role bypasses RLS),
-    // same as the Razorpay function does.
-    try {
-      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-      const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-      const supabase = createClient(supabaseUrl, supabaseServiceKey);
-      await supabase.from("payment").update({ payorderid: orderId }).eq(
-        "pay_id",
-        pay_id,
+    // Persist the order id on the payment row. Skipped when there is no
+    // payment row (Misc/Advance pass a negative sentinel id).
+    //
+    // THIS USED TO BE `supabase.from("payment")`, WHICH NEVER WORKED.
+    // Unqualified, that resolves to public.payment -- a table that does not
+    // exist, because payment lives in <institution schema>. The update
+    // matched nothing and the error was swallowed as "non-fatal: the client
+    // also updates payorderid". The DESKTOP client does; the MOBILE app does
+    // not, so a mobile payment's order id was never written anywhere.
+    //
+    // Everything downstream keys on payorderid: webhook_find_payment matches
+    // only on it, _sweepOrphanedPayments needs it to ask Paytm, and
+    // create_pending_payment deletes rows that lack it. So an unstamped
+    // mobile payment could be captured by Paytm and then have its own row
+    // deleted by the next retry -- which is how KANNAN D's Rs 5,125 of
+    // 11-10-2026 went missing.
+    //
+    // stamp_payorderid() is SECURITY DEFINER and finds the right tenant
+    // schema, which this function cannot do on its own.
+    if (pay_id !== undefined && pay_id !== null && Number(pay_id) > 0) {
+      const supabase = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
       );
-    } catch (_) {
-      // Non-fatal: the client also updates payorderid.
+      const { data: stamped, error: stampErr } = await supabase.rpc(
+        "stamp_payorderid",
+        { p_pay_id: Number(pay_id), p_order_id: orderId },
+      );
+      // NOT swallowed any more. An order exists at Paytm now, but nothing has
+      // been charged -- the checkout has not opened. Refusing here costs the
+      // payer one retry; letting it through costs a payment nobody can trace
+      // back to a student. The abandoned order simply expires.
+      if (stampErr || stamped !== true) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Could not record the payment order against the payment row. " +
+              "The payment was NOT started -- please try again.",
+            detail: stampErr?.message ?? "stamp_payorderid returned false",
+            order_id: orderId,
+            pay_id,
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
     }
 
     return new Response(

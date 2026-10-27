@@ -1,12 +1,27 @@
 -- ============================================================================
--- Update the LIVE schema generator to the current structure (run on Supabase).
--- ============================================================================
--- create_institution_schema is what provisions each new institution-year schema.
--- The live copy drifted (missing feegroup_accountant + old master-import layout).
--- This re-defines it (and process_master_import) to match complete_setup.sql /
--- the live kcet20262027 structure. Both are CREATE OR REPLACE and DO NOT touch
--- any EXISTING schema — they only fix what NEW institutions get. Idempotent.
--- Run in the Supabase SQL editor.
+-- create_institution_schema -- refresh the per-institution schema generator.
+--
+-- WHY NOW: interim_promotion gained two audit columns (admname,
+-- transferred_admname) so a course transfer records the admission type on both
+-- sides. EXISTING schemas are patched by PART 1 of
+-- migrations/transfer_course_admission_type.sql; this file is what makes a
+-- NEWLY created institution come out with them already in place.
+--
+-- So this is only required BEFORE the next institution/year is provisioned.
+-- Nothing breaks if it is run later -- but a schema generated in between would
+-- be missing the columns, and the transfer log would fail on it.
+--
+-- CREATE OR REPLACE of the generator only. It does NOT touch any existing
+-- schema and creates nothing by itself: it just redefines the function that
+-- later provisioning calls.
+--
+-- WARNING: do not "test" this by generating a throwaway schema. The function
+-- calls expose_schema(), which appends the new name to pgrst.db_schemas on the
+-- authenticator role -- dropping the schema afterwards leaves a dead entry
+-- there and takes PostgREST down with PGRST002. (That is not hypothetical; it
+-- happened on test on 2026-09-12.)
+--
+-- SAFE TO RE-RUN. Run on TEST first.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.create_institution_schema(
@@ -31,13 +46,15 @@ BEGIN
   -- students
   -- students — `aadharno + community/caste/religion/nationality/transportmode/hostel`
   -- columns are carried over from public.admission during class allocation.
-  EXECUTE format('CREATE TABLE %I.students (stu_id bigint NOT NULL PRIMARY KEY CHECK (stu_id > 0), ins_id integer NOT NULL, inscode varchar(10) NOT NULL, yr_id integer NOT NULL, yrlabel varchar(9) NOT NULL, stuadmno varchar(25) NOT NULL, stuadmdate date NOT NULL, stuname varchar(50) NOT NULL, stugender char(1) NOT NULL CHECK (stugender = ANY(ARRAY[''M'',''F'',''T''])), studob date NOT NULL, stumobile varchar(30), stuemail varchar(254), stuaddress text, stucity varchar(50), stustate varchar(50), stucountry varchar(50), stupin varchar(6), stugeocoordinates varchar(40), stubloodgrp varchar(20), stuphoto text, stuclass varchar(20) NOT NULL, cour_id integer, admit_cour_id smallint, courname varchar(20), con_id integer, stucondesc varchar(20), stuser_id varchar(25) NOT NULL, stupassword varchar(255), stumobotp numeric(6,0), stuotpstatus smallint DEFAULT 0 NOT NULL, approvedby varchar(50), approveddate timestamp DEFAULT now() NOT NULL, suspendeddate date, suspendedby varchar(50), terminateddate date, terminatedby varchar(50), activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[1,2,9])), createdon timestamp DEFAULT now() NOT NULL, terminatedreason text, batch varchar(9), admname varchar(30), quoname varchar(30), admittyear varchar(9), aadharno varchar(20), community varchar(30), caste varchar(30), religion varchar(30), nationality varchar(30), transportmode varchar(20), hostel char(1), medium varchar(30), cla_id smallint, adm_id smallint, quo_id smallint)', v_schema);
-  -- No UNIQUE on stuemail: students commonly share or lack an email (bulk import).
+  EXECUTE format('CREATE TABLE %I.students (stu_id bigint NOT NULL PRIMARY KEY CHECK (stu_id > 0), ins_id integer NOT NULL, inscode varchar(10) NOT NULL, yr_id integer NOT NULL, yrlabel varchar(9) NOT NULL, stuadmno varchar(25) NOT NULL, stuadmdate date NOT NULL, stuname varchar(50) NOT NULL, stugender char(1) NOT NULL CHECK (stugender = ANY(ARRAY[''M'',''F'',''T''])), studob date NOT NULL, stumobile varchar(30), stuemail varchar(254), stuaddress text, stucity varchar(50), stustate varchar(50), stucountry varchar(50), stupin varchar(6), stugeocoordinates varchar(40), stubloodgrp varchar(20), stuphoto text, stuclass varchar(20) NOT NULL, cour_id integer, admit_cour_id smallint, courname varchar(20), con_id integer, stucondesc varchar(20), stuser_id varchar(25) NOT NULL, stupassword varchar(255), stumobotp numeric(6,0), stuotpstatus smallint DEFAULT 0 NOT NULL, approvedby varchar(50), approveddate timestamp DEFAULT now() NOT NULL, suspendeddate date, suspendedby varchar(50), terminateddate date, terminatedby varchar(50), activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[1,2,3,4,5,9])), createdon timestamp DEFAULT now() NOT NULL, terminatedreason text, batch varchar(9), admname varchar(30), quoname varchar(30), admittyear varchar(9), aadharno varchar(20), community varchar(30), caste varchar(30), religion varchar(30), nationality varchar(30), transportmode varchar(20), hostel char(1), emisno varchar(30), umisno varchar(30), scholarship char(1), scholarshiptype varchar(60), medium varchar(30), cla_id smallint, adm_id smallint, quo_id smallint)', v_schema);
+  -- No UNIQUE on stuemail: students commonly share or lack an email (bulk import
+  -- of hundreds would fail on the first shared/placeholder address).
   EXECUTE format('ALTER TABLE %I.students ADD CONSTRAINT uq_students_admission UNIQUE (ins_id, stuadmno)', v_schema);
 
   -- parents
-  EXECUTE format('CREATE TABLE %I.parents (par_id bigint NOT NULL PRIMARY KEY, yr_id integer NOT NULL, yrlabel varchar(9), partype char(1) NOT NULL CHECK (partype = ANY(ARRAY[''P'',''G''])), paremail varchar(254), fathername varchar(50), mothername varchar(50), guardianname varchar(50), fathermobile varchar(20), mothermobile varchar(20), guardianmobile varchar(20), fatheroccupation varchar(60), motheroccupation varchar(60), guardianoccupation varchar(60), payincharge varchar(50) NOT NULL, payinchargemob varchar(20) NOT NULL, parpassword varchar(255), parmobotp numeric(6,0), parotpstatus smallint DEFAULT 0 NOT NULL, approvedby varchar(50), approveddate timestamp DEFAULT now(), terminateddate date, terminatedby varchar(50), activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[1,2,9])), ins_id integer)', v_schema);
-  -- No UNIQUE on paremail: parents commonly share an email (siblings / one family email).
+  EXECUTE format('CREATE TABLE %I.parents (par_id bigint NOT NULL PRIMARY KEY, yr_id integer NOT NULL, yrlabel varchar(9), partype char(1) NOT NULL CHECK (partype = ANY(ARRAY[''P'',''G''])), paremail varchar(254), fathername varchar(50), mothername varchar(50), guardianname varchar(50), fathermobile varchar(20), mothermobile varchar(20), guardianmobile varchar(20), fatheroccupation varchar(60), motheroccupation varchar(60), guardianoccupation varchar(60), payincharge varchar(50) NOT NULL, payinchargemob varchar(20) NOT NULL, parpassword varchar(255), parmobotp numeric(6,0), parmobotp_at timestamp, parotpstatus smallint DEFAULT 0 NOT NULL, approvedby varchar(50), approveddate timestamp DEFAULT now(), terminateddate date, terminatedby varchar(50), activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[1,2,9])), ins_id integer)', v_schema);
+  -- No UNIQUE on paremail: parents commonly share an email (siblings / one family
+  -- email), so a bulk student import would fail on the first shared address.
 
   -- parentdetail
   EXECUTE format('CREATE TABLE %I.parentdetail (pd_id bigint NOT NULL PRIMARY KEY, yr_id integer NOT NULL, yrlabel varchar(9), par_id bigint NOT NULL, stu_id bigint NOT NULL, ins_id integer NOT NULL, inscode varchar(10) NOT NULL, stuadmno varchar(20) NOT NULL UNIQUE, stuname varchar(50) NOT NULL, stuclass varchar(20) NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
@@ -49,6 +66,14 @@ BEGIN
   -- tempfeedemand (staging — copied into feedemand by fn_approve_tempfeedemand on approval)
   EXECUTE format('CREATE TABLE %I.tempfeedemand (temp_id bigint NOT NULL PRIMARY KEY, demno varchar(30) NOT NULL, ins_id integer NOT NULL, inscode varchar(10) NOT NULL, yr_id integer, stu_id bigint, stuadmno varchar(25) NOT NULL, stuclass varchar(20) NOT NULL, courname varchar(20), demfeeyear varchar(9) NOT NULL, demfeeterm varchar(20) NOT NULL, demfeetype varchar(30) NOT NULL, feeamount numeric(12,2) NOT NULL, con_id integer, conamount numeric(12,2) DEFAULT 0, balancedue numeric(12,2), duedate date NOT NULL, activestatus smallint DEFAULT 1 NOT NULL, createdat timestamptz DEFAULT now(), createdby varchar(50), isapproved boolean DEFAULT false, collectible boolean DEFAULT true NOT NULL, cla_id smallint, sem_id smallint, fee_id integer, cf_id integer, demseqtype varchar(20), arrearclass varchar(30))', v_schema);
 
+  -- Demand generation + approval performance indexes. The dedup NOT EXISTS
+  -- checks (generate_feedemand_from_template / _for_class) and the approval
+  -- trigger's per-row feedemand lookup would otherwise sequential-scan and grow
+  -- O(N^2) as feedemand fills, timing out on bulk generate/approve.
+  EXECUTE format('CREATE INDEX idx_feedemand_dedup ON %I.feedemand (stu_id, demfeeterm, demfeetype) WHERE activestatus = 1', v_schema);
+  EXECUTE format('CREATE INDEX idx_tempfeedemand_dedup ON %I.tempfeedemand (stu_id, demfeeterm, demfeetype) WHERE activestatus = 1', v_schema);
+  EXECUTE format('CREATE INDEX idx_feedemand_demno_type ON %I.feedemand (ins_id, demno, demfeetype) WHERE activestatus = 1', v_schema);
+
   -- Approval trigger: copy temp → feedemand carrying the collectible flag.
   EXECUTE format('CREATE OR REPLACE FUNCTION %1$I.fn_approve_tempfeedemand() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $t$ DECLARE v_dem_id bigint; v_paid numeric; v_net numeric; BEGIN IF NEW.isapproved = true AND (OLD.isapproved = false OR OLD.isapproved IS NULL) THEN SELECT dem_id, COALESCE(paidamount, 0) INTO v_dem_id, v_paid FROM %1$I.feedemand WHERE ins_id = NEW.ins_id AND NEW.demno IS NOT NULL AND btrim(NEW.demno) <> '''' AND demno IS NOT DISTINCT FROM NEW.demno AND demfeetype IS NOT DISTINCT FROM NEW.demfeetype AND activestatus = 1 ORDER BY dem_id LIMIT 1; IF v_dem_id IS NOT NULL THEN v_net := GREATEST(COALESCE(NEW.feeamount,0) - COALESCE(NEW.conamount,0) - v_paid, 0); UPDATE %1$I.feedemand SET feeamount = NEW.feeamount, con_id = NEW.con_id, conamount = NEW.conamount, balancedue = v_net, reconbalancedue = v_net, duedate = NEW.duedate, collectible = COALESCE(NEW.collectible, collectible), cla_id = NEW.cla_id, sem_id = NEW.sem_id, fee_id = NEW.fee_id, cf_id = NEW.cf_id, demseqtype = COALESCE(NEW.demseqtype, demseqtype), arrearclass = NEW.arrearclass WHERE dem_id = v_dem_id; ELSE INSERT INTO %1$I.feedemand (demno, demseqtype, ins_id, inscode, yr_id, stu_id, stuadmno, stuclass, courname, demfeeyear, demfeeterm, demfeetype, feeamount, con_id, conamount, balancedue, reconbalancedue, duedate, activestatus, createdat, createdby, paidstatus, paidamount, collectible, cla_id, sem_id, fee_id, cf_id, arrearclass) VALUES (NEW.demno, NEW.demseqtype, NEW.ins_id, NEW.inscode, NEW.yr_id, NEW.stu_id, NEW.stuadmno, NEW.stuclass, NEW.courname, NEW.demfeeyear, NEW.demfeeterm, NEW.demfeetype, NEW.feeamount, NEW.con_id, NEW.conamount, NEW.balancedue, COALESCE(NEW.balancedue, NEW.feeamount), NEW.duedate, 1, NEW.createdat, NEW.createdby, ''U'', 0, COALESCE(NEW.collectible, true), NEW.cla_id, NEW.sem_id, NEW.fee_id, NEW.cf_id, NEW.arrearclass); END IF; NEW.activestatus := 9; END IF; RETURN NEW; END; $t$', v_schema);
   EXECUTE format('CREATE TRIGGER trg_tempfeedemand_approve BEFORE UPDATE OF isapproved ON %I.tempfeedemand FOR EACH ROW EXECUTE FUNCTION %I.fn_approve_tempfeedemand()', v_schema, v_schema);
@@ -57,11 +82,8 @@ BEGIN
   EXECUTE format('CREATE TABLE %I.feegroup (fg_id integer NOT NULL PRIMARY KEY, fgdesc varchar(30) NOT NULL, ban_id integer, ins_id integer NOT NULL, yr_id integer NOT NULL, yrlabel varchar(9) NOT NULL, activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[0,1,9])))', v_schema);
 
   -- feetype (feefineapplicable: 1 = fines apply when overdue, 0 = no fine)
-  EXECUTE format('CREATE TABLE %I.feetype (fee_id integer NOT NULL PRIMARY KEY, feedesc varchar(30) NOT NULL, feeshort varchar(10) NOT NULL, feefineapplicable smallint DEFAULT 0, fg_id integer NOT NULL, yr_id integer NOT NULL, yrlabel varchar(9) NOT NULL, activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[0,1,9])), ins_id integer, type varchar(20))', v_schema);
-  -- feegroup_accountant: fee-group -> accountant mapping (matches live kcet schema).
-  EXECUTE format('CREATE TABLE %I.feegroup_accountant (fga_id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, fg_id integer NOT NULL, use_id integer NOT NULL, ins_id integer NOT NULL, activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[0,1])), createdat timestamp DEFAULT now(), createdby varchar(50))', v_schema);
-  EXECUTE format('CREATE INDEX idx_feegroup_accountant_fg ON %I.feegroup_accountant (fg_id)', v_schema);
-  EXECUTE format('CREATE INDEX idx_feegroup_accountant_use ON %I.feegroup_accountant (use_id)', v_schema);
+  EXECUTE format('CREATE TABLE %I.feetype (fee_id integer NOT NULL PRIMARY KEY, feedesc varchar(30) NOT NULL, feeshort varchar(10) NOT NULL, feefineapplicable smallint DEFAULT 0, fg_id integer NOT NULL, yr_id integer NOT NULL, yrlabel varchar(9) NOT NULL, activestatus smallint DEFAULT 1 NOT NULL CHECK (activestatus = ANY(ARRAY[0,1,9])), ins_id integer, type varchar(20), payseq smallint DEFAULT 100, partialallowed char(1) DEFAULT ''Y'')', v_schema);
+  -- (feegroup_accountant removed — unused scaffold; no app or DB references.)
   EXECUTE format('ALTER TABLE %I.feetype ADD CONSTRAINT fk_feetype_feegroup FOREIGN KEY (fg_id) REFERENCES %I.feegroup(fg_id)', v_schema, v_schema);
   -- Lets PostgREST resolve embedded selects like feedemand?select=*,feetype(*) in the mobile app.
   EXECUTE format('ALTER TABLE %I.feedemand ADD CONSTRAINT fk_feedemand_feetype FOREIGN KEY (fee_id) REFERENCES %I.feetype(fee_id) NOT VALID', v_schema, v_schema);
@@ -94,25 +116,18 @@ BEGIN
   -- each generated tempfeedemand/feedemand row.
   EXECUTE format('CREATE TABLE %I.classfeedemand (cf_id integer NOT NULL PRIMARY KEY, cfclass varchar(20), cfterm varchar(20), cffeetype varchar(30), cfamount numeric(12,2), cfdduedate date, admissiontype smallint, collectible boolean DEFAULT false NOT NULL, activestatus smallint DEFAULT 1 NOT NULL, cla_id smallint, sem_id smallint, fee_id integer)', v_schema);
 
-  -- Auto-stage fee demands for a newly added student from the classfeedemand
-  -- template (any insert path: admission allocation, fast/manual add, import).
-  -- Matches the student's class + admission type (NULL = all), uses the template
-  -- due date, stages into tempfeedemand (isapproved=false → Fee Demand Approval
-  -- → feedemand). Skips duplicates.
-  EXECUTE format('CREATE OR REPLACE FUNCTION %1$I.fn_gen_feedemand_on_student() RETURNS trigger LANGUAGE plpgsql AS $t$ DECLARE v_adm_id smallint; BEGIN IF NEW.admname IS NOT NULL AND TRIM(NEW.admname) <> '''' THEN SELECT adm_id INTO v_adm_id FROM %1$I.admissiontype WHERE UPPER(TRIM(admname))=UPPER(TRIM(NEW.admname)) AND activestatus=1 LIMIT 1; END IF; INSERT INTO %1$I.tempfeedemand (ins_id,inscode,yr_id,stu_id,stuadmno,stuclass,courname,demfeeyear,demfeeterm,demfeetype,feeamount,con_id,conamount,balancedue,duedate,activestatus,createdby,isapproved,collectible) SELECT NEW.ins_id,NEW.inscode,NEW.yr_id,NEW.stu_id,NEW.stuadmno,NEW.stuclass,NEW.courname,NEW.yrlabel,cf.cfterm,cf.cffeetype,cf.cfamount,NEW.con_id,0,cf.cfamount,cf.cfdduedate,1,COALESCE(NEW.approvedby,''SYSTEM''),false,COALESCE(cf.collectible,true) FROM %1$I.classfeedemand cf WHERE cf.cfclass=NEW.stuclass AND (cf.admissiontype IS NULL OR cf.admissiontype=v_adm_id) AND cf.cfamount IS NOT NULL AND (cf.cfdduedate IS NULL OR cf.cfdduedate >= NEW.stuadmdate) AND NOT EXISTS (SELECT 1 FROM %1$I.tempfeedemand t WHERE t.stu_id=NEW.stu_id AND t.demfeeterm=cf.cfterm AND t.demfeetype=cf.cffeetype AND t.activestatus=1) AND NOT EXISTS (SELECT 1 FROM %1$I.feedemand fd WHERE fd.stu_id=NEW.stu_id AND fd.demfeeterm=cf.cfterm AND fd.demfeetype=cf.cffeetype AND fd.activestatus=1); RETURN NEW; END; $t$', v_schema);
-  EXECUTE format('DROP TRIGGER IF EXISTS trg_gen_feedemand_on_student ON %1$I.students', v_schema);
-  -- Auto-generation on student insert is DISABLED (per requirement): importing
-  -- students / adding a student must NOT auto-create fee demands. Generate them
-  -- explicitly via the Fee Demand import or generate_feedemand_from_template.
-  -- (fn_gen_feedemand_on_student is defined above so re-adding this CREATE
-  --  TRIGGER re-enables it.)
+  -- NOTE: on-admission (per-student-insert) fee-demand auto-generation was
+  -- reverted. There is deliberately no fn_gen_feedemand_on_student function or
+  -- trg_gen_feedemand_on_student trigger here. Adding a student does NOT create
+  -- demands. Generate them explicitly via generate_feedemand_for_class /
+  -- generate_feedemand_from_template (or the Fee Demand screen).
 
   -- finerule (overdue fine slabs configured by admin)
   EXECUTE format('CREATE TABLE %I.finerule (fr_id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ins_id integer NOT NULL, rulename varchar(50) NOT NULL, feetype varchar(30) DEFAULT ''ALL'', from_days integer NOT NULL, to_days integer, fine_type varchar(10) DEFAULT ''FIXED'' CHECK (fine_type IN (''FIXED'',''PERCENT'')), fine_value numeric(12,2) NOT NULL, activestatus smallint DEFAULT 1 NOT NULL, createdat timestamp DEFAULT now(), createdby varchar(50))', v_schema);
 
 
   -- payment
-  EXECUTE format('CREATE TABLE %I.payment (pay_id bigint NOT NULL PRIMARY KEY, ins_id integer NOT NULL, inscode varchar(10), stu_id integer NOT NULL, yr_id integer NOT NULL, yrlabel varchar(20), transtotalamount numeric(12,2) NOT NULL, transcurrency varchar(20) DEFAULT ''INR'' NOT NULL, paydate timestamp, paystatus char(1) CHECK (paystatus = ANY(ARRAY[''I'',''C'',''F'',''R''])), paymethod varchar(60), payreference varchar(100), paygwresponse numeric(15,0), payitems text, createdby varchar(100), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL, paynumber varchar(30) UNIQUE, payorderid varchar(100), notification_read boolean DEFAULT false, paychequeno varchar(50), paychequedate date, paybankname varchar(100), recon_status char(1) DEFAULT ''P'', reconciled_by varchar(50), reconciled_date timestamp, bank_reference varchar(100), bank_date date, ban_id integer, tender_amount numeric(12,2), refund_amount numeric(12,2), voidedby varchar(100), voideddate timestamp)', v_schema);
+  EXECUTE format('CREATE TABLE %I.payment (pay_id bigint NOT NULL PRIMARY KEY, ins_id integer NOT NULL, inscode varchar(10), stu_id integer NOT NULL, yr_id integer NOT NULL, yrlabel varchar(20), transtotalamount numeric(12,2) NOT NULL, transcurrency varchar(20) DEFAULT ''INR'' NOT NULL, paydate timestamp, paystatus char(1) CHECK (paystatus = ANY(ARRAY[''I'',''C'',''F'',''R''])), paymethod varchar(60), payreference varchar(100), paygwresponse numeric(15,0), payitems text, createdby varchar(100), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL, paynumber varchar(30) UNIQUE, payorderid varchar(100), notification_read boolean DEFAULT false, paychequeno varchar(50), paychequedate date, paybankname varchar(100), recon_status char(1) DEFAULT ''P'', reconciled_by varchar(50), reconciled_date timestamp, bank_reference varchar(100), bank_date date, ban_id integer, tender_amount numeric(12,2), refund_amount numeric(12,2), voidedby varchar(100), voideddate timestamp, voidreason varchar(255))', v_schema);
 
   -- bank: per-institution beneficiary account list. Fee groups are
   -- tagged with ban_id so a single payment can be split (mock for now —
@@ -129,14 +144,28 @@ BEGIN
 
   -- interim_promotion (mid-year move of a single student to another class;
   -- keeps the before/after course+class for audit)
-  EXECUTE format('CREATE TABLE %I.interim_promotion (ip_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, doc_no integer NOT NULL, ins_id integer NOT NULL, promotiondate date NOT NULL, stu_id bigint, stuadmno varchar(25), stuname varchar(50), courname varchar(20), stuclass varchar(20), transferred_courname varchar(20), transferred_class varchar(20), remarks varchar(200), createdby varchar(50), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE TABLE %I.interim_promotion (ip_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, doc_no integer NOT NULL, ins_id integer NOT NULL, promotiondate date NOT NULL, stu_id bigint, stuadmno varchar(25), stuname varchar(50), courname varchar(20), stuclass varchar(20), admname varchar(30), transferred_courname varchar(20), transferred_class varchar(20), transferred_admname varchar(30), remarks varchar(200), createdby varchar(50), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
   EXECUTE format('CREATE INDEX idx_interim_promotion_stu ON %I.interim_promotion (ins_id, stu_id)', v_schema);
 
   -- fee_refund (refund voucher header; one row per refund raised against a receipt/payment)
-  EXECUTE format('CREATE TABLE %I.fee_refund (rf_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, doc_no integer NOT NULL, ins_id integer NOT NULL, inscode varchar(10), yr_id integer, yrlabel varchar(20), refunddate date NOT NULL, pay_id bigint, paynumber varchar(30), stu_id bigint, stuadmno varchar(25), stuname varchar(50), stuclass varchar(20), refundmode varchar(20) NOT NULL, ban_id integer, bankname varchar(100), bankref varchar(100), chequedate date, accountcode varchar(50), refundreason varchar(200), totalrefund numeric(12,2) DEFAULT 0, totaladjust numeric(12,2) DEFAULT 0, createdby varchar(50), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE TABLE %I.fee_refund (rf_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, doc_no varchar(30) NOT NULL, ins_id integer NOT NULL, inscode varchar(10), yr_id integer, yrlabel varchar(20), refunddate date NOT NULL, pay_id bigint, paynumber varchar(30), stu_id bigint, stuadmno varchar(25), stuname varchar(50), stuclass varchar(20), refundmode varchar(20) NOT NULL, ban_id integer, bankname varchar(100), bankref varchar(100), chequedate date, accountcode varchar(50), refundreason varchar(200), totalrefund numeric(12,2) DEFAULT 0, totaladjust numeric(12,2) DEFAULT 0, createdby varchar(50), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
 
   -- fee_refunddetails (per fee-line breakdown of a refund voucher; dem_id references this schema''s feedemand by value)
   EXECUTE format('CREATE TABLE %I.fee_refunddetails (rfd_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, rf_id bigint NOT NULL, dem_id bigint, ins_id integer NOT NULL, refundterm varchar(20), refundfeetype varchar(30), feeamount numeric(12,2) DEFAULT 0, refundamount numeric(12,2) DEFAULT 0, adjustamount numeric(12,2) DEFAULT 0, adjustreason varchar(200), activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+
+  -- concession (concession voucher header; one row per concession applied to a student) + concessiondetail (per fee-line breakdown). Written only via process_concession(). See migrations/add_concession_tables.sql.
+  EXECUTE format('CREATE TABLE %I.concession (con_hdr_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, doc_no varchar(30), ins_id integer NOT NULL, inscode varchar(10), yr_id integer, yrlabel varchar(20), condate date NOT NULL DEFAULT CURRENT_DATE, stu_id bigint, stuadmno varchar(25), stuname varchar(50), stuclass varchar(20), courname varchar(20), con_id integer, contype varchar(30), totalfee numeric(12,2) DEFAULT 0, totalconcession numeric(12,2) DEFAULT 0, totalbalance numeric(12,2) DEFAULT 0, remarks varchar(200), createdby varchar(50), createdat timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE TABLE %I.concessiondetail (cond_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, con_hdr_id bigint NOT NULL, ins_id integer NOT NULL, stu_id bigint, stuadmno varchar(25), receiptno varchar(30), dem_id bigint, demfeeterm varchar(20), demfeetype varchar(30), feeamount numeric(12,2) DEFAULT 0, conamount numeric(12,2) DEFAULT 0, balancedue numeric(12,2) DEFAULT 0, con_id integer, contype varchar(30), condate date, createdby varchar(50), activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE INDEX idx_concession_stu ON %I.concession (ins_id, stu_id)', v_schema);
+  EXECUTE format('CREATE INDEX idx_concessiondetail_hdr ON %I.concessiondetail (con_hdr_id)', v_schema);
+  EXECUTE format('CREATE INDEX idx_concessiondetail_stu ON %I.concessiondetail (ins_id, stu_id)', v_schema);
+
+  -- misc_collection (standalone counter collection: BONAFIDE, APPLICATION, …).
+  -- Does NOT touch feedemand. selection ''S'' = registered student, ''O'' = others.
+  -- Receipt number (mcno) is drawn from the shared fee-receipt sequence.
+  EXECUTE format('CREATE TABLE %I.misc_collection (mc_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ins_id integer NOT NULL, inscode varchar(10), yr_id integer, yrlabel varchar(9), mcno varchar(30) NOT NULL, mcdate date NOT NULL DEFAULT CURRENT_DATE, selection char(1) NOT NULL DEFAULT ''S'' CHECK (selection IN (''S'',''O'')), stu_id bigint, regno varchar(25), stuclass varchar(30), stuname varchar(100) NOT NULL, courname varchar(20), city varchar(50), address varchar(255), paymode varchar(20) DEFAULT ''Cash'', ban_id integer, bankname varchar(100), transrefno varchar(50), paytm_txnid varchar(60), draweebank varchar(100), transdate date, transamt numeric(12,2), collectedby varchar(50), remarks varchar(255), totalamount numeric(12,2) NOT NULL DEFAULT 0, activestatus smallint DEFAULT 1 NOT NULL, createdat timestamptz DEFAULT now(), createdby varchar(50), recon_status char(1) DEFAULT ''P'', reconciled_by varchar(50), reconciled_date timestamptz, bank_reference varchar(100), bank_date date, paystatus char(1) DEFAULT ''C'', voidedby varchar(100), voideddate timestamptz, voidreason varchar(255))', v_schema);
+  EXECUTE format('CREATE TABLE %I.misc_collection_detail (mcd_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, mc_id bigint NOT NULL, ins_id integer NOT NULL, fee_id integer, feetype varchar(30) NOT NULL, amount numeric(12,2) NOT NULL DEFAULT 0, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE INDEX idx_misc_detail_mc ON %I.misc_collection_detail (mc_id)', v_schema);
 
   -- sequence: unified numbering for BOTH fee-receipt sequences (fg_id set,
   -- actname = fee-group name) AND admission/register-number sequences
@@ -232,7 +261,8 @@ BEGIN
   EXECUTE format('CREATE SEQUENCE %I.classfeedemand_cf_id_seq', v_schema);
   EXECUTE format('CREATE FUNCTION %I.set_cf_id() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN IF NEW.cf_id IS NULL THEN NEW.cf_id := nextval(''%I.classfeedemand_cf_id_seq''); END IF; RETURN NEW; END; $t$', v_schema, v_schema);
   EXECUTE format('CREATE TRIGGER trg_classfeedemand_cf_id BEFORE INSERT ON %I.classfeedemand FOR EACH ROW EXECUTE FUNCTION %I.set_cf_id()', v_schema, v_schema);
-  -- Resolve cla_id / sem_id / fee_id from the cfclass / cfterm / cffeetype names.
+  -- Resolve cla_id / sem_id / fee_id from the cfclass / cfterm / cffeetype names
+  -- on insert/update (schema-qualified, so it works from the session-gated RPCs).
   EXECUTE format('CREATE OR REPLACE FUNCTION %I.set_classfee_ids() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN IF (NEW.cla_id IS NULL OR NEW.cla_id = 0) AND NEW.cfclass IS NOT NULL THEN SELECT cla_id INTO NEW.cla_id FROM %I.class WHERE claname = NEW.cfclass AND activestatus = 1 LIMIT 1; END IF; IF (NEW.sem_id IS NULL OR NEW.sem_id = 0) AND NEW.cfterm IS NOT NULL THEN SELECT sem_id INTO NEW.sem_id FROM %I.semester WHERE semname = NEW.cfterm AND activestatus = 1 LIMIT 1; END IF; IF (NEW.fee_id IS NULL OR NEW.fee_id = 0) AND NEW.cffeetype IS NOT NULL THEN SELECT fee_id INTO NEW.fee_id FROM %I.feetype WHERE feedesc = NEW.cffeetype AND activestatus = 1 LIMIT 1; END IF; RETURN NEW; END; $t$', v_schema, v_schema, v_schema, v_schema);
   EXECUTE format('CREATE TRIGGER trg_classfeedemand_ids BEFORE INSERT OR UPDATE ON %I.classfeedemand FOR EACH ROW EXECUTE FUNCTION %I.set_classfee_ids()', v_schema, v_schema);
 
@@ -263,6 +293,19 @@ BEGIN
   EXECUTE format('CREATE FUNCTION %I.hash_parent_password() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN IF NEW.parpassword IS NOT NULL AND NEW.parpassword != '''' AND LEFT(NEW.parpassword, 4) != ''$2a$'' AND LEFT(NEW.parpassword, 4) != ''$2b$'' THEN NEW.parpassword := crypt(NEW.parpassword, gen_salt(''bf'', 10)); END IF; RETURN NEW; END; $t$', v_schema);
   EXECUTE format('CREATE TRIGGER hash_parent_password_trigger BEFORE INSERT OR UPDATE OF parpassword ON %I.parents FOR EACH ROW EXECUTE FUNCTION %I.hash_parent_password()', v_schema, v_schema);
 
+  -- Transfer Certificate entries (Admission → Transfer Certificate). One row per
+  -- TC issued; save_tc_entry writes here and stamps the student's + admission's
+  -- activestatus with the leaving code, so non-active students drop out of the
+  -- active screens (which filter activestatus=1).
+  EXECUTE format('CREATE TABLE %I.tc_entry (tc_id bigint NOT NULL PRIMARY KEY, ins_id integer NOT NULL, inscode varchar(10), yr_id integer, yrlabel varchar(9), stu_id bigint, stuadmno varchar(25) NOT NULL, stuname varchar(50), stuclass varchar(20), cla_id smallint, birthdate date, joindate date, status smallint NOT NULL DEFAULT 1 CHECK (status = ANY(ARRAY[1,2,3,4,5,9])), statustype varchar(20), tcno varchar(30), tcdate date, effectfrom date, docno varchar(30), docdate date, remarks varchar(200), createdby varchar(50), createdon timestamp DEFAULT now() NOT NULL, activestatus smallint DEFAULT 1 NOT NULL)', v_schema);
+  EXECUTE format('CREATE SEQUENCE %I.tc_entry_tc_id_seq', v_schema);
+  EXECUTE format('CREATE FUNCTION %I.set_tc_id() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN IF NEW.tc_id IS NULL OR NEW.tc_id = 0 THEN NEW.tc_id := nextval(''%I.tc_entry_tc_id_seq''); END IF; RETURN NEW; END; $t$', v_schema, v_schema);
+  EXECUTE format('CREATE TRIGGER trg_tc_entry_tc_id BEFORE INSERT ON %I.tc_entry FOR EACH ROW EXECUTE FUNCTION %I.set_tc_id()', v_schema, v_schema);
+  EXECUTE format('ALTER TABLE %I.tc_entry ENABLE ROW LEVEL SECURITY', v_schema);
+  EXECUTE format('CREATE POLICY "Allow all" ON %I.tc_entry USING (true) WITH CHECK (true)', v_schema);
+
+  -- (rollno_change lives in public, alongside public.admission — see above.)
+
   -- (fn_approve_tempfeedemand + trigger are defined right after the tempfeedemand
   -- table above; they carry the `collectible` flag from temp into feedemand.)
 
@@ -270,6 +313,9 @@ BEGIN
   EXECUTE format('ALTER TABLE %I.notice ENABLE ROW LEVEL SECURITY', v_schema);
   EXECUTE format('ALTER TABLE %I.notification ENABLE ROW LEVEL SECURITY', v_schema);
   EXECUTE format('ALTER TABLE %I.tempfeedemand ENABLE ROW LEVEL SECURITY', v_schema);
+  -- student_import was missing its ENABLE (policy created below), which tripped
+  -- the Supabase "Policy Exists RLS Disabled" advisor for every new schema.
+  EXECUTE format('ALTER TABLE %I.student_import ENABLE ROW LEVEL SECURITY', v_schema);
   EXECUTE format('CREATE POLICY "Allow all" ON %I.notice USING (true) WITH CHECK (true)', v_schema);
   EXECUTE format('CREATE POLICY "Allow all" ON %I.notification USING (true) WITH CHECK (true)', v_schema);
   EXECUTE format('CREATE POLICY "Allow all" ON %I.tempfeedemand USING (true) WITH CHECK (true)', v_schema);
@@ -309,10 +355,12 @@ BEGIN
   -- mirrors phase3a_revoke_money_writes.sql for existing schemas.
   EXECUTE format(
     'REVOKE INSERT, UPDATE, DELETE ON %I.payment, %I.paymentdetails, %I.feedemand, '
-    '%I.fee_refund, %I.fee_refunddetails, %I.students, %I.parents, %I.parentdetail FROM anon',
-    v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema);
+    '%I.fee_refund, %I.fee_refunddetails, %I.concession, %I.concessiondetail, %I.students, %I.parents, %I.parentdetail FROM anon',
+    v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema, v_schema);
 
-  -- Read lockdown: new schema born read-locked (RLS + per-tenant SELECT policy).
+  -- Read lockdown: enable RLS + per-tenant SELECT policy on sensitive tables so a
+  -- NEW institution is born read-locked (anon can't SELECT another tenant's PII/
+  -- money). Wrapped so a policy hiccup never blocks institution creation.
   BEGIN
     PERFORM public.read_lock_schema(v_schema);
   EXCEPTION WHEN OTHERS THEN
@@ -321,91 +369,438 @@ BEGIN
 
 END; $$;
 
-CREATE OR REPLACE FUNCTION public.process_master_import(p_ins_id integer) RETURNS TABLE(total integer, imported integer, skipped integer)
-LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE rec RECORD; v_total int:=0; v_imported int:=0; v_skipped int:=0; v_fg_id int; v_schema text; v_id int; v_adm_id smallint; v_yr_id int; v_yrlabel text;
+-- ============================================
+-- ADMISSION MODULE — allocate_admission_to_student
+-- Moves a PENDING public.admission row into <schema>.students (+ parents +
+-- parentdetail) and stamps it ALLOCATED. SECURITY DEFINER so it can write to
+-- the institution schema regardless of the caller's grants. The function
+-- self-heals: if a legacy schema's `students` table lacks the admission
+-- columns it adds them via ADD COLUMN IF NOT EXISTS before the insert.
+-- ============================================
+CREATE OR REPLACE FUNCTION public.allocate_admission_to_student(
+  p_adm_id      bigint,
+  p_schema      text,
+  p_class       text,
+  p_stuadmno    text,
+  p_allocatedby text DEFAULT NULL
+)
+RETURNS json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $fn$
+DECLARE
+  v_schema   text := lower(p_schema);
+  v          public.admission%ROWTYPE;
+  v_stu_id   bigint;
+  v_par_id   bigint;
+  v_yr_id    integer;
+  v_yrlabel  varchar(9);
+  v_adm_id   smallint;
+  v_cla_id   smallint;
+  v_cour_id  integer;
 BEGIN
-  v_schema := get_institution_schema(p_ins_id);
-  FOR rec IN SELECT * FROM master_import WHERE ins_id=p_ins_id AND status='PENDING' ORDER BY imp_id LOOP
-    v_total := v_total+1;
-    BEGIN
-      -- Every import row must carry an explicit id in col1. Blank or
-      -- non-numeric ids are rejected outright — no sequence fallback.
-      IF rec.col1 IS NULL OR TRIM(rec.col1) = '' THEN
-        UPDATE master_import SET status='ERROR', error_msg='Missing id in column 1' WHERE imp_id=rec.imp_id;
-        v_skipped := v_skipped+1; CONTINUE;
-      END IF;
-      BEGIN v_id := TRIM(rec.col1)::int; EXCEPTION WHEN OTHERS THEN
-        UPDATE master_import SET status='ERROR', error_msg='Invalid id: "'||rec.col1||'"' WHERE imp_id=rec.imp_id;
-        v_skipped := v_skipped+1; CONTINUE;
-      END;
-      IF v_schema IS NULL THEN
-        UPDATE master_import SET status='ERROR', error_msg='No institution schema' WHERE imp_id=rec.imp_id;
-        v_skipped := v_skipped+1; CONTINUE;
-      END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = v_schema) THEN
+    RAISE EXCEPTION 'allocate_admission: schema % does not exist', v_schema;
+  END IF;
 
-      CASE rec.imp_type
-      WHEN 'FEEGROUP' THEN
-        -- Year auto-derived from the schema's active year (Year column removed
-        -- from the import). Matches live process_master_import.
-        EXECUTE format('SELECT yr_id, yrlabel FROM %I.year WHERE ins_id=$1 AND activestatus=1 ORDER BY yr_id DESC LIMIT 1', v_schema)
-          INTO v_yr_id, v_yrlabel USING p_ins_id;
-        IF v_yr_id IS NULL THEN
-          UPDATE master_import SET status='ERROR', error_msg='No active year configured in year master' WHERE imp_id=rec.imp_id;
-          v_skipped:=v_skipped+1; CONTINUE;
-        END IF;
-        EXECUTE format('INSERT INTO %I.feegroup(fg_id,fgdesc,ins_id,yr_id,yrlabel,ban_id,activestatus) VALUES($1,$2,$3,$4,$5,NULL,1)', v_schema) USING v_id,TRIM(rec.col2),p_ins_id,v_yr_id,v_yrlabel;
-      WHEN 'FEETYPE' THEN
-        -- Fee Group column accepts an fg_id (numeric) OR a group name.
-        IF TRIM(rec.col4) ~ '^[0-9]+$' THEN
-          EXECUTE format('SELECT fg_id FROM %I.feegroup WHERE fg_id=$1 AND ins_id=$2 AND activestatus=1 LIMIT 1', v_schema) INTO v_fg_id USING TRIM(rec.col4)::int, p_ins_id;
-        ELSE
-          EXECUTE format('SELECT fg_id FROM %I.feegroup WHERE UPPER(TRIM(fgdesc))=UPPER($1) AND ins_id=$2 AND activestatus=1 LIMIT 1', v_schema) INTO v_fg_id USING TRIM(rec.col4),p_ins_id;
-        END IF;
-        IF v_fg_id IS NULL THEN UPDATE master_import SET status='ERROR',error_msg='Fee group "'||rec.col4||'" not found' WHERE imp_id=rec.imp_id; v_skipped:=v_skipped+1; CONTINUE; END IF;
-        -- Year auto-derived from the schema's active year. Matches live.
-        EXECUTE format('SELECT yr_id, yrlabel FROM %I.year WHERE ins_id=$1 AND activestatus=1 ORDER BY yr_id DESC LIMIT 1', v_schema)
-          INTO v_yr_id, v_yrlabel USING p_ins_id;
-        IF v_yr_id IS NULL THEN
-          UPDATE master_import SET status='ERROR', error_msg='No active year configured in year master' WHERE imp_id=rec.imp_id;
-          v_skipped:=v_skipped+1; CONTINUE;
-        END IF;
-        -- col5 = Fine Applicable, col6 = FeeType Order (unused), col7 = Type.
-        EXECUTE format('INSERT INTO %I.feetype(fee_id,feedesc,feeshort,fg_id,yr_id,yrlabel,feefineapplicable,type,activestatus,ins_id) VALUES($1,$2,$3,$4,$5,$6,COALESCE(NULLIF($7,'''')::smallint,0),NULLIF($8,''''),1,$9)', v_schema) USING v_id,TRIM(rec.col2),TRIM(rec.col3),v_fg_id,v_yr_id,v_yrlabel,TRIM(rec.col5),TRIM(rec.col7),p_ins_id;
-      WHEN 'CONCESSION' THEN
-        EXECUTE format('INSERT INTO %I.concessioncategory(con_id,condesc,ins_id,ordid,activestatus) VALUES($1,$2,$3,NULLIF($4,'''')::int,1)', v_schema) USING v_id,TRIM(rec.col2),p_ins_id,TRIM(rec.col3);
-      WHEN 'CLASSFEEDEMAND' THEN
-        -- cf_id is assigned by the set_cf_id BEFORE-INSERT trigger; col1 is a
-        -- placeholder row number that we ignore here.
-        -- col7 is an admissiontype NAME (e.g. "MANAGEMENT QUOTA"). Look up
-        -- adm_id from the per-schema admissiontype master and store that
-        -- smallint id. Falls back to direct numeric cast for legacy 1/2/3.
-        IF NULLIF(TRIM(rec.col7),'') IS NULL THEN
-          v_adm_id := NULL;
-        ELSIF TRIM(rec.col7) ~ '^\d+$' THEN
-          v_adm_id := TRIM(rec.col7)::smallint;
-        ELSE
-          EXECUTE format('SELECT adm_id FROM %I.admissiontype WHERE UPPER(TRIM(admname))=UPPER($1) AND ins_id=$2 AND activestatus=1 LIMIT 1', v_schema)
-            INTO v_adm_id USING TRIM(rec.col7), p_ins_id;
-          IF v_adm_id IS NULL THEN
-            UPDATE master_import SET status='ERROR', error_msg='Admission Type "'||rec.col7||'" not found in admissiontype master' WHERE imp_id=rec.imp_id;
-            v_skipped := v_skipped+1;
-            CONTINUE;
-          END IF;
-        END IF;
-        EXECUTE format('INSERT INTO %I.classfeedemand(cfclass,cfterm,cffeetype,cfamount,cfdduedate,admissiontype) VALUES($1,NULLIF($2,''''),$3,NULLIF($4,'''')::numeric(12,2),NULLIF($5,'''')::date,$6)', v_schema)
-          USING TRIM(rec.col2),TRIM(rec.col3),TRIM(rec.col4),TRIM(rec.col5),TRIM(rec.col6),v_adm_id;
-      ELSE
-        UPDATE master_import SET status='ERROR',error_msg='Unknown type: '||rec.imp_type WHERE imp_id=rec.imp_id; v_skipped:=v_skipped+1; CONTINUE;
-      END CASE;
-      UPDATE master_import SET status='DONE' WHERE imp_id=rec.imp_id; v_imported:=v_imported+1;
-    EXCEPTION WHEN unique_violation THEN
-      UPDATE master_import SET status='ERROR', error_msg='ID '||COALESCE(v_id::text, rec.col1)||' already exists — row rejected' WHERE imp_id=rec.imp_id; v_skipped:=v_skipped+1;
-    WHEN OTHERS THEN
-      UPDATE master_import SET status='ERROR',error_msg=SQLERRM WHERE imp_id=rec.imp_id; v_skipped:=v_skipped+1;
-    END;
-  END LOOP;
-  RETURN QUERY SELECT v_total, v_imported, v_skipped;
+  SELECT * INTO v FROM public.admission WHERE adm_id = p_adm_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Admission % not found', p_adm_id; END IF;
+  IF v.admstatus = 'ALLOCATED' THEN
+    RAISE EXCEPTION 'Admission % is already allocated', p_adm_id;
+  END IF;
+
+  -- admission no longer stores yr_id/yrlabel — derive from the target schema.
+  EXECUTE format('SELECT yr_id, yrlabel FROM %I.year WHERE ins_id=$1 AND activestatus=1 ORDER BY yr_id DESC LIMIT 1', v_schema)
+    INTO v_yr_id, v_yrlabel USING v.ins_id;
+  IF v_yr_id IS NULL THEN
+    RAISE EXCEPTION 'allocate_admission: cannot resolve academic year for schema %', v_schema;
+  END IF;
+
+  -- Self-heal: ensure the target schema's students table has the demographic
+  -- columns (no-op if already present). Covers schemas created before this
+  -- feature was added.
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS aadharno      varchar(20)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS community     varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS caste         varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS religion      varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS nationality   varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS transportmode varchar(20)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS hostel        char(1)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS emisno        varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS umisno        varchar(30)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS scholarship     char(1)', v_schema);
+  EXECUTE format('ALTER TABLE %I.students ADD COLUMN IF NOT EXISTS scholarshiptype varchar(60)', v_schema);
+
+  -- Resolve the allocated class's ids (p_class can differ from the admission's
+  -- preferred class) so the new student carries cla_id / cour_id; adm_id (from
+  -- admission.admtype_id) / quo_id / medium come straight from the admission row.
+  EXECUTE format('SELECT cla_id, cour_id FROM %I.class WHERE UPPER(TRIM(claname))=UPPER(TRIM($1)) AND activestatus=1 ORDER BY cla_id LIMIT 1', v_schema)
+    INTO v_cla_id, v_cour_id USING p_class;
+
+  -- 1) students (stu_id auto-assigned by the schema's set_stu_id trigger)
+  EXECUTE format(
+    'INSERT INTO %I.students '
+    '(ins_id, inscode, yr_id, yrlabel, stuadmno, stuadmdate, stuname, stugender, studob, '
+    ' stumobile, stuemail, stuaddress, stucity, stustate, stucountry, stupin, stubloodgrp, stuphoto, '
+    ' stuclass, courname, con_id, stucondesc, stuser_id, stuotpstatus, '
+    ' approvedby, approveddate, activestatus, createdon, batch, admname, quoname, admittyear, aadharno, '
+    ' community, caste, religion, nationality, transportmode, hostel, emisno, umisno, scholarship, scholarshiptype, cla_id, cour_id, adm_id, quo_id, medium, admit_cour_id) '
+    'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'
+    ' $19,$20,$21,$22,$5,0,$23,now(),1,now(),$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,'
+    ' $41,$42,$43,$44,$35,$36,$37,$38,$39,$40) RETURNING stu_id', v_schema)
+  INTO v_stu_id
+  USING v.ins_id, v.inscode, v_yr_id, v_yrlabel, p_stuadmno, COALESCE(v.admdate, CURRENT_DATE),
+        v.stuname, v.stugender, v.studob, v.stumobile, v.stuemail, v.stuaddress, v.stucity,
+        v.stustate, v.stucountry, v.stupin, v.stubloodgrp, v.stuphoto, p_class, v.courname,
+        v.con_id, v.stucondesc, p_allocatedby, v.batch, v.admname, v.quoname, v.admittyear, v.aadharno,
+        v.community, v.caste, v.religion, v.nationality, v.transportmode, v.hostel,
+        COALESCE(v_cla_id, v.cla_id), COALESCE(v_cour_id, v.cour_id), v.admtype_id, v.quo_id, v.medium,
+        COALESCE(v.admit_cour_id, v_cour_id, v.cour_id),
+        -- $41-$44: appended rather than inserted mid-list so every existing
+        -- placeholder keeps its number.
+        v.emisno, v.umisno, v.scholarship, v.scholarshiptype;
+
+  -- 2) parents — reuse an existing parent matched by payinchargemob, else create.
+  IF v.payinchargemob IS NOT NULL AND TRIM(v.payinchargemob) <> '' THEN
+    EXECUTE format('SELECT par_id FROM %I.parents WHERE payinchargemob = $1 LIMIT 1', v_schema)
+      INTO v_par_id USING v.payinchargemob;
+    IF v_par_id IS NULL THEN
+      EXECUTE format('ALTER TABLE %I.parents ADD COLUMN IF NOT EXISTS paremail varchar(254)', v_schema);
+      EXECUTE format(
+        'INSERT INTO %I.parents '
+        '(ins_id, yr_id, yrlabel, partype, fathername, fathermobile, fatheroccupation, '
+        ' mothername, mothermobile, motheroccupation, guardianname, guardianmobile, guardianoccupation, '
+        ' payincharge, payinchargemob, paremail, parotpstatus, approveddate, activestatus) '
+        'VALUES ($1,$2,$3,''P'',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULLIF(TRIM($15),''''),0,now(),1) RETURNING par_id', v_schema)
+      INTO v_par_id
+      USING v.ins_id, v_yr_id, v_yrlabel, v.fathername, v.fathermobile, v.fatheroccupation,
+            v.mothername, v.mothermobile, v.motheroccupation, v.guardianname, v.guardianmobile,
+            v.guardianoccupation, COALESCE(NULLIF(TRIM(v.payincharge), ''), v.stuname), v.payinchargemob, v.paremail;
+    END IF;
+
+    -- 3) parentdetail link
+    EXECUTE format(
+      'INSERT INTO %I.parentdetail '
+      '(yr_id, yrlabel, par_id, stu_id, ins_id, inscode, stuadmno, stuname, stuclass, activestatus) '
+      'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1)', v_schema)
+    USING v_yr_id, v_yrlabel, v_par_id, v_stu_id, v.ins_id, v.inscode, p_stuadmno, v.stuname, p_class;
+  END IF;
+
+  -- 4) stamp the admission row as allocated (admission no longer has stu_id).
+  UPDATE public.admission
+     SET allocatedclass = p_class,
+         admstatus = 'ALLOCATED',
+         allocatedby = p_allocatedby,
+         allocateddate = now()
+   WHERE adm_id = p_adm_id;
+
+  -- NOTE: fee demand is deliberately NOT generated on admission/allocation.
+  -- Enrolment creates the student (+ parent) only; fee demands are raised
+  -- separately from the Fee Demand screen (generate_feedemand_*). Allocation
+  -- therefore never seeds tempfeedemand. (v_adm_id stays declared but unused.)
+
+  RETURN json_build_object(
+    'adm_id', p_adm_id, 'stu_id', v_stu_id, 'par_id', v_par_id,
+    'stuadmno', p_stuadmno, 'class', p_class, 'status', 'ALLOCATED');
+END;
+$fn$;
+
+GRANT EXECUTE ON FUNCTION public.allocate_admission_to_student(bigint, text, text, text, text) TO anon, authenticated;
+
+-- Create new academic year schema with year records
+CREATE OR REPLACE FUNCTION public.create_next_academic_year(
+  p_ins_id integer,
+  p_year_label text,        -- e.g. '2027-2028'
+  p_start_date date,        -- e.g. '2027-06-01'
+  p_end_date date           -- e.g. '2028-05-31'
+) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_short_name text;
+  v_schema text;
+BEGIN
+  -- Get institution short name
+  SELECT lower(inshortname) INTO v_short_name
+  FROM public.institution WHERE ins_id = p_ins_id;
+  IF v_short_name IS NULL THEN
+    RAISE EXCEPTION 'Institution not found for ins_id %', p_ins_id;
+  END IF;
+
+  -- Build schema name: shortname + year without hyphen
+  v_schema := v_short_name || replace(p_year_label, '-', '');
+
+  -- Create schema with all tables and triggers
+  PERFORM public.create_institution_schema(v_schema);
+
+  -- Insert into public.institutionyear, stamping iyrschema with the
+  -- schema name we just created.
+  INSERT INTO public.institutionyear (ins_id, yrlabel, iyrstadate, iyrenddate, iyrschema, activestatus)
+  VALUES (p_ins_id, p_year_label, p_start_date, p_end_date, v_schema, 1)
+  ON CONFLICT (ins_id, yrlabel) DO UPDATE SET iyrschema = EXCLUDED.iyrschema;
+
+  -- Insert year record into the new schema
+  EXECUTE format('INSERT INTO %I.year (ins_id, yrlabel, yrstadate, yrenddate, activestatus) VALUES ($1, $2, $3, $4, 1)', v_schema)
+  USING p_ins_id, p_year_label, p_start_date, p_end_date;
+
+  -- Expose the new schema to PostgREST
+  PERFORM public.expose_schema(v_schema);
+
+  RETURN v_schema;
 END; $$;
 
+-- ============================================
+-- SCHEMA-AWARE RPC FUNCTIONS
+-- ============================================
+
+CREATE OR REPLACE FUNCTION public.get_student_counts_by_class(p_ins_id integer) RETURNS TABLE(stuclass text, student_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE v text; BEGIN v := get_institution_schema(p_ins_id); IF v IS NULL THEN RETURN; END IF;
+RETURN QUERY EXECUTE format('SELECT stuclass::text, COUNT(*)::bigint FROM %I.students WHERE ins_id = $1 AND activestatus = 1 GROUP BY stuclass ORDER BY stuclass', v) USING p_ins_id; END; $$;
+
+CREATE OR REPLACE FUNCTION public.get_students_by_class(p_ins_id integer, p_class text) RETURNS SETOF json
+LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE v text; BEGIN v := get_institution_schema(p_ins_id); IF v IS NULL THEN RETURN; END IF;
+RETURN QUERY EXECUTE format('SELECT row_to_json(t) FROM (SELECT * FROM %I.students WHERE ins_id = $1 AND activestatus = 1 AND stuclass = $2 ORDER BY stuname) t', v) USING p_ins_id, p_class; END; $$;
+
+-- Distinct (courname, stuclass) pairs for the class/course dropdowns. Returns
+-- server-side DISTINCT so the client never pulls the whole students table (and
+-- so classes past the 1000-row PostgREST cap aren't silently dropped).
+CREATE OR REPLACE FUNCTION public.get_distinct_classes(p_ins_id integer)
+RETURNS TABLE (courname text, stuclass text)
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v text;
+BEGIN
+  v := get_institution_schema(p_ins_id);
+  IF v IS NULL THEN RETURN; END IF;
+  RETURN QUERY EXECUTE format(
+    'SELECT DISTINCT COALESCE(courname, '''')::text, COALESCE(stuclass, '''')::text
+       FROM %I.students
+      WHERE ins_id = $1 AND activestatus = 1
+        AND stuclass IS NOT NULL AND btrim(stuclass) <> ''''
+      ORDER BY 1, 2', v
+  ) USING p_ins_id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.get_distinct_classes(integer) TO anon, authenticated;
+
+-- Home overview aggregates (every-user login path) — compute scalars server-side
+-- instead of pulling whole tables to the client.
+-- REMOVED (dead): get_overdue_total — superseded by get_fee_totals /
+-- get_fee_totals_by_seqtype (the overview aggregates the app actually calls).
+
+CREATE OR REPLACE FUNCTION public.get_reconciled_collection_by_day(
+  p_ins_id integer, p_from date, p_to date
+) RETURNS TABLE (day date, total numeric)
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v text;
+BEGIN
+  v := get_institution_schema(p_ins_id);
+  IF v IS NULL THEN RETURN; END IF;
+  RETURN QUERY EXECUTE format($q$
+    SELECT paydate::date AS day, COALESCE(SUM(transtotalamount), 0)::numeric AS total
+    FROM   %1$I.payment
+    WHERE  ins_id = $1 AND activestatus = 1 AND paystatus = 'C' AND recon_status = 'R'
+      AND  paydate >= $2 AND paydate < $3 + 1
+    GROUP  BY paydate::date
+    ORDER  BY 1
+  $q$, v) USING p_ins_id, p_from, p_to;
+END $$;
+GRANT EXECUTE ON FUNCTION public.get_reconciled_collection_by_day(integer, date, date) TO anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_fee_demands(p_ins_id integer) RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE v text; r json; BEGIN v := get_institution_schema(p_ins_id); IF v IS NULL THEN RETURN NULL; END IF;
+EXECUTE format('SELECT json_agg(json_build_object(''dem_id'',fd.dem_id,''fee_id'',fd.fee_id,''ins_id'',fd.ins_id,''stu_id'',fd.stu_id,''feeamount'',fd.feeamount,''conamount'',fd.conamount,''paidamount'',fd.paidamount,''fineamount'',fd.fineamount,''duedate'',fd.duedate,''paidstatus'',fd.paidstatus,''pay_id'',fd.pay_id,''demseqtype'',fd.demseqtype,''stuclass'',fd.stuclass,''courname'',fd.courname,''stuadmno'',fd.stuadmno,''demfeetype'',fd.demfeetype,''demfeeterm'',fd.demfeeterm,''balancedue'',fd.balancedue,''reconbalancedue'',fd.reconbalancedue,''stuname'',s.stuname) ORDER BY fd.courname,fd.stuclass) FROM %I.feedemand fd LEFT JOIN %I.students s ON s.stu_id=fd.stu_id WHERE fd.ins_id=$1 AND fd.activestatus=1', v, v) INTO r USING p_ins_id; RETURN r; END; $$;
+
+-- Totals for the institution dashboard.
+-- Pending-approval payments are treated as still owed (matches the reports).
+--   total_paid    = fee portion of APPROVED payments only
+--   total_fine    = fine portion of APPROVED payments only
+--   total_pending = balancedue + fee portion of pending-approval payments
+-- Unified fee totals: total_pending uses the EXACT same WHERE/JOIN/CTE as
+-- get_pending_payment_report so the Admin dashboard card and the
+-- Pending Payment Report G.Tot are guaranteed to match. Other totals
+-- (demand/paid/fine) span all active feedemand rows, unfiltered.
+CREATE OR REPLACE FUNCTION public.get_fee_totals(p_ins_id integer) RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v text;
+  v_total_demand numeric := 0;
+  v_total_paid numeric := 0;
+  v_total_fine numeric := 0;
+  v_total_pending numeric := 0;
+  v_pending_approval_fee numeric := 0;
+  v_pending_approval_fine numeric := 0;
+BEGIN
+  v := get_institution_schema(p_ins_id);
+  IF v IS NULL THEN
+    RETURN json_build_object('total_demand',0,'total_pending',0,'total_paid',0,'total_fine',0);
+  END IF;
+
+  -- Pending-approval allocations (used to subtract un-reconciled portions
+  -- from the fee/fine subtotals).
+  EXECUTE format('
+    SELECT COALESCE(SUM(GREATEST(pd.transtotalamount - COALESCE(fd.fineamount,0), 0)),0),
+           COALESCE(SUM(LEAST(pd.transtotalamount, COALESCE(fd.fineamount,0))),0)
+    FROM %1$I.paymentdetails pd
+    JOIN %1$I.payment p ON p.pay_id = pd.pay_id
+    JOIN %1$I.feedemand fd ON fd.dem_id = pd.dem_id
+    WHERE p.ins_id=$1 AND p.paystatus=''C'' AND p.recon_status=''P'' AND p.activestatus=1
+      AND fd.activestatus=1
+  ', v) INTO v_pending_approval_fee, v_pending_approval_fine USING p_ins_id;
+
+  -- Direct column sums.
+  --   total_demand  = SUM(feeamount)
+  --   total_paid    = SUM(paidamount) − pending_approval  (includes fine portion)
+  --   total_pending = SUM(reconbalancedue)
+  EXECUTE format('
+    SELECT COALESCE(SUM(feeamount),0),
+           COALESCE(SUM(paidamount),0),
+           COALESCE(SUM(fineamount) FILTER (WHERE paidstatus=''P'' OR paidamount > 0),0),
+           COALESCE(SUM(reconbalancedue),0)
+    FROM %I.feedemand WHERE ins_id=$1 AND activestatus=1
+  ', v) INTO v_total_demand, v_total_paid, v_total_fine, v_total_pending USING p_ins_id;
+
+  v_total_paid := GREATEST(v_total_paid - v_pending_approval_fee - v_pending_approval_fine, 0);
+  v_total_fine := GREATEST(v_total_fine - v_pending_approval_fine, 0);
+
+  RETURN json_build_object(
+    'total_demand',  v_total_demand,
+    'total_paid',    v_total_paid,
+    'total_pending', v_total_pending,
+    'total_fine',    v_total_fine
+  );
+END; $$;
+
+-- Dashboard drill-down: Regular vs Arrear split of demand / paid / outstanding.
+-- Reconciled exactly like get_fee_totals (paid = SUM(paidamount) − pending-approval
+-- allocations; pending = SUM(reconbalancedue)), grouped by demseqtype.
+CREATE OR REPLACE FUNCTION public.get_fee_totals_by_seqtype(p_ins_id integer) RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v text; r json;
+BEGIN
+  v := get_institution_schema(p_ins_id);
+  IF v IS NULL THEN RETURN NULL; END IF;
+  EXECUTE format($f$
+    WITH pending_alloc AS (
+      SELECT pd.dem_id,
+             SUM(GREATEST(pd.transtotalamount - COALESCE(fd.fineamount,0), 0)) AS pending_fee,
+             SUM(LEAST(pd.transtotalamount, COALESCE(fd.fineamount,0)))       AS pending_fine
+      FROM %1$I.paymentdetails pd
+      JOIN %1$I.payment p    ON p.pay_id = pd.pay_id
+      JOIN %1$I.feedemand fd ON fd.dem_id = pd.dem_id
+      WHERE p.ins_id=$1 AND p.paystatus='C' AND p.recon_status='P' AND p.activestatus=1
+        AND fd.activestatus=1
+      GROUP BY pd.dem_id
+    ),
+    agg AS (
+      SELECT CASE WHEN UPPER(TRIM(COALESCE(fd.demseqtype,''))) = 'ARREAR'
+                  THEN 'arrear' ELSE 'regular' END AS seqtype,
+             COALESCE(SUM(fd.feeamount),0) AS demand,
+             GREATEST(
+               COALESCE(SUM(fd.paidamount),0)
+                 - COALESCE(SUM(pa.pending_fee),0)
+                 - COALESCE(SUM(pa.pending_fine),0), 0) AS paid,
+             COALESCE(SUM(fd.reconbalancedue),0) AS pending
+      FROM %1$I.feedemand fd
+      LEFT JOIN pending_alloc pa ON pa.dem_id = fd.dem_id
+      WHERE fd.ins_id=$1 AND fd.activestatus=1
+      GROUP BY 1
+    )
+    SELECT json_object_agg(seqtype,
+             json_build_object('demand', demand, 'paid', paid, 'pending', pending))
+    FROM agg
+  $f$, v) INTO r USING p_ins_id;
+  RETURN COALESCE(r, '{}'::json);
+END; $$;
+GRANT EXECUTE ON FUNCTION public.get_fee_totals_by_seqtype(integer) TO anon, authenticated;
+
+-- Class-wise summary — approved-only (matches Fee Collection cards / Consolidated Status report).
+-- Pending-approval amounts are removed from total_paid/total_fine and added to total_pending.
+CREATE OR REPLACE FUNCTION public.get_fee_demand_summary(p_ins_id integer)
+RETURNS TABLE(stuclass text, courname text, student_count bigint, fee_types text[], total_demand numeric, total_concession numeric, total_paid numeric, total_pending numeric, total_fine numeric)
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE v text;
+BEGIN
+  v := get_institution_schema(p_ins_id);
+  IF v IS NULL THEN RETURN; END IF;
+  -- The class list + student_count are driven by ACTIVE STUDENTS (so students /
+  -- classes with NO feedemand row are still counted, with 0 demand); the demand
+  -- aggregates are LEFT-joined per (class, course).
+  RETURN QUERY EXECUTE format($f$
+    WITH pending_alloc AS (
+      SELECT pd.dem_id,
+             SUM(GREATEST(pd.transtotalamount - COALESCE(fd.fineamount,0), 0)) AS pending_fee,
+             SUM(LEAST(pd.transtotalamount, COALESCE(fd.fineamount,0))) AS pending_fine
+      FROM %1$I.paymentdetails pd
+      JOIN %1$I.payment p ON p.pay_id = pd.pay_id
+      LEFT JOIN %1$I.feedemand fd ON fd.dem_id = pd.dem_id
+      WHERE p.ins_id = $1 AND p.paystatus = 'C'
+        AND p.recon_status = 'P' AND p.activestatus = 1
+      GROUP BY pd.dem_id
+    ),
+    stu_counts AS (
+      SELECT s.stuclass::text AS stuclass, COALESCE(s.courname,'Other')::text AS courname,
+             COUNT(DISTINCT s.stuadmno)::bigint AS student_count
+      FROM %1$I.students s
+      WHERE s.ins_id=$1 AND s.activestatus=1
+      GROUP BY s.stuclass, COALESCE(s.courname,'Other')
+    ),
+    dem_agg AS (
+      SELECT fd.stuclass::text AS stuclass,
+             COALESCE(fd.courname,'Other')::text AS courname,
+             ARRAY_AGG(DISTINCT fd.demfeetype::text ORDER BY fd.demfeetype::text)
+               FILTER(WHERE fd.demfeetype IS NOT NULL AND fd.demfeetype<>'') AS fee_types,
+             SUM(fd.feeamount) AS total_demand,
+             SUM(fd.conamount) AS total_concession,
+             GREATEST(
+               COALESCE(SUM(fd.paidamount),0)
+                 - COALESCE(SUM(fd.fineamount) FILTER (WHERE fd.paidstatus='P' OR fd.paidamount > 0),0)
+                 - COALESCE(SUM(pa.pending_fee),0),
+               0) AS total_paid,
+             SUM(fd.balancedue + COALESCE(pa.pending_fee, 0)) AS total_pending,
+             GREATEST(
+               COALESCE(SUM(fd.fineamount) FILTER (WHERE fd.paidstatus='P' OR fd.paidamount > 0),0)
+                 - COALESCE(SUM(pa.pending_fine),0),
+               0) AS total_fine
+      FROM %1$I.feedemand fd
+      LEFT JOIN pending_alloc pa ON pa.dem_id = fd.dem_id
+      WHERE fd.ins_id=$1 AND fd.activestatus=1
+      GROUP BY fd.stuclass, COALESCE(fd.courname,'Other')
+    )
+    SELECT COALESCE(sc.stuclass, da.stuclass) AS stuclass,
+           COALESCE(sc.courname, da.courname) AS courname,
+           COALESCE(sc.student_count, 0)::bigint AS student_count,
+           da.fee_types,
+           COALESCE(da.total_demand, 0) AS total_demand,
+           COALESCE(da.total_concession, 0) AS total_concession,
+           COALESCE(da.total_paid, 0) AS total_paid,
+           COALESCE(da.total_pending, 0) AS total_pending,
+           COALESCE(da.total_fine, 0) AS total_fine
+    FROM stu_counts sc
+    FULL OUTER JOIN dem_agg da
+      ON da.stuclass = sc.stuclass AND da.courname = sc.courname
+    ORDER BY COALESCE(sc.courname, da.courname), COALESCE(sc.stuclass, da.stuclass)
+  $f$, v) USING p_ins_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.get_fee_demands_by_class(p_ins_id integer, p_class text) RETURNS json
+LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE v text; r json; BEGIN v := get_institution_schema(p_ins_id); IF v IS NULL THEN RETURN NULL; END IF;
+EXECUTE format('SELECT json_agg(t) FROM (SELECT fd.*,s.stuname FROM %I.feedemand fd LEFT JOIN %I.students s ON s.stu_id=fd.stu_id WHERE fd.ins_id=$1 AND fd.activestatus=1 AND fd.stuclass=$2 ORDER BY fd.stuadmno) t', v, v) INTO r USING p_ins_id, p_class; RETURN r; END; $$;
+
+CREATE OR REPLACE FUNCTION public.get_fee_demands_pending(p_ins_id integer) RETURNS SETOF json
+LANGUAGE plpgsql SECURITY DEFINER AS $$ DECLARE v text; BEGIN v := get_institution_schema(p_ins_id); IF v IS NULL THEN RETURN; END IF;
+RETURN QUERY EXECUTE format('SELECT row_to_json(t) FROM (SELECT td.temp_id,td.stuadmno,s.stuname,s.stuclass,td.courname,td.demfeeyear,td.demfeeterm,td.demfeetype,td.feeamount,td.con_id,td.conamount,td.balancedue,td.createdby,td.isapproved,td.ins_id,COALESCE(c.condesc,''-'') as stucondesc FROM %I.tempfeedemand td LEFT JOIN %I.students s ON s.stuadmno=td.stuadmno AND s.ins_id=td.ins_id LEFT JOIN %I.concessioncategory c ON c.con_id=td.con_id WHERE td.ins_id=$1 AND td.activestatus=1) t', v, v, v) USING p_ins_id; END; $$;
+
+-- JSON wrapper: whole pending set as one json value (dodges PostgREST's 1000-row
+-- cap on the SETOF json above — the approval queue was truncated at 1000).
+CREATE OR REPLACE FUNCTION public.get_fee_demands_pending_json(p_ins_id integer)
+RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(json_agg(t), '[]'::json)
+  FROM public.get_fee_demands_pending(p_ins_id) t;
+$$;
+
+
 NOTIFY pgrst, 'reload schema';
+
+-- Verify: the generator now carries both audit columns.
+SELECT position('transferred_admname' in prosrc) > 0 AS has_transferred_admname,
+       position('admname varchar(30), transferred_courname' in prosrc) > 0 AS has_admname
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'create_institution_schema';

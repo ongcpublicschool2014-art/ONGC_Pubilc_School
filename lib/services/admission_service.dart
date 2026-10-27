@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admission_model.dart';
 import 'supabase_service.dart';
+import '../utils/school_terms.dart';
 
 /// Data access for the admission module.
 ///
@@ -25,7 +26,9 @@ class AdmissionService {
             .from(_table)
             .select('*')
             .eq('ins_id', insId)
-            .eq('activestatus', 1)
+            // Include TC'd students (activestatus 2/3/4/5/9) as locked rows; only
+            // truly CANCELLED admissions are hidden.
+            .neq('admstatus', 'CANCELLED')
             .order('adm_id', ascending: false)
             .range(offset, offset + batchSize - 1);
         final list = (batch as List).cast<Map<String, dynamic>>();
@@ -78,6 +81,24 @@ class AdmissionService {
     return response['adm_id'] as int;
   }
 
+  /// New admission numbered BY THE SERVER inside the same save: save_admission
+  /// claims the next free number of [seqId] under the sequence row lock
+  /// (skipping numbers already used) and inserts the admission in one
+  /// transaction -- two users saving together get different numbers, and a
+  /// save that fails uses none. Returns the new adm_id and the number given.
+  static Future<({int admId, String admno})> addAdmissionNumbered(Map<String, dynamic> data, int seqId) async {
+    final token = SupabaseService.sessionToken;
+    final body = Map<String, dynamic>.from(data)
+      ..remove('admno')
+      ..['_seq_id'] = seqId;
+    final res = await SupabaseService.client.rpc('save_admission', params: {
+      'p_token': token, 'p_data': body, 'p_adm_id': null,
+    });
+    final admId = (res as num).toInt();
+    final row = await SupabaseService.client.from(_table).select('admno').eq('adm_id', admId).maybeSingle();
+    return (admId: admId, admno: (row?['admno'] ?? '').toString());
+  }
+
   /// Update an existing admission.
   static Future<void> updateAdmission(int admId, Map<String, dynamic> data) async {
     final token = SupabaseService.sessionToken;
@@ -106,6 +127,8 @@ class AdmissionService {
 
   /// Active rows of a per-schema master table, ordered by [orderCol].
   static Future<List<Map<String, dynamic>>> getMasterRows(String table, String orderCol) async {
+    // A school has no admission-type / quota tables.
+    if (isSchool && (table == 'admissiontype' || table == 'quota')) return [];
     try {
       final res = await SupabaseService.fromSchema(table)
           .select('*')
@@ -120,6 +143,7 @@ class AdmissionService {
 
   /// Next id for a smallint-PK master (max + 1) — these tables have no sequence.
   static Future<int> nextMasterId(String table, String idCol) async {
+    if (isSchool && (table == 'admissiontype' || table == 'quota')) return 1;
     try {
       final res = await SupabaseService.fromSchema(table)
           .select(idCol)
@@ -152,11 +176,11 @@ class AdmissionService {
   // actname='REGNO' / fg_id NULL), NOT a separate regnoseq table anymore.
 
   /// Active register-number sequences (actname='REGNO'), oldest first.
-  static Future<List<Map<String, dynamic>>> getRegSequences() async {
+  static Future<List<Map<String, dynamic>>> getRegSequences({String actname = 'REGNO'}) async {
     try {
       final res = await SupabaseService.fromSchema('sequence')
           .select('*')
-          .eq('actname', 'REGNO')
+          .eq('actname', actname)
           .eq('activestatus', 1)
           .order('seq_id', ascending: true);
       return List<Map<String, dynamic>>.from(res as List);
@@ -174,6 +198,30 @@ class AdmissionService {
   /// Soft-delete a register-number sequence by its seq_id.
   static Future<void> deleteRegSequence(int seqId) async {
     await SupabaseService.deleteSchemaRow('sequence', 'seq_id', seqId);
+  }
+
+  /// Claim the next number from a register sequence ON THE SERVER
+  /// (claim_reg_no: locks the sequence row, advances it and returns the
+  /// formatted number in one statement), so two operators saving at the same
+  /// moment never get the same number. A claimed number stays used even if the
+  /// save then fails -- a gap, never a duplicate.
+  ///
+  /// Returns null when the RPC is not deployed, so a database without it still
+  /// saves (on the old client-computed number) instead of refusing.
+  static Future<String?> claimRegNo(int seqId) async {
+    final token = SupabaseService.sessionToken;
+    if (token == null) return null;
+    try {
+      final res = await SupabaseService.client.rpc('claim_reg_no', params: {
+        'p_token': token,
+        'p_seq_id': seqId,
+      });
+      final no = res?.toString().trim() ?? '';
+      return no.isEmpty ? null : no;
+    } on PostgrestException catch (e) {
+      if (SupabaseService.isMissingRpc(e)) return null;
+      rethrow;
+    }
   }
 
   /// Advance a register-number sequence's running counter after it's used.

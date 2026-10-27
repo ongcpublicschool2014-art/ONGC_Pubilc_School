@@ -5,7 +5,7 @@ import '../utils/auth_provider.dart';
 import '../services/supabase_service.dart';
 import '../models/payment_model.dart';
 
-import './app_icon.dart';
+import './app_ui.dart';
 import '../utils/formatters.dart';
 class RecentActivitiesWidget extends StatefulWidget {
   const RecentActivitiesWidget({super.key});
@@ -67,32 +67,18 @@ class _RecentActivitiesWidgetState extends State<RecentActivitiesWidget> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Recent Payments',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text('Recent Payments', style: AppUI.cardTitle),
               TextButton(
                 onPressed: () {},
-                child: Text(
-                  'View All',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                      ),
-                ),
+                child: const Text('View All'),
               ),
             ],
           ),
@@ -105,16 +91,10 @@ class _RecentActivitiesWidgetState extends State<RecentActivitiesWidget> {
               ),
             )
           else if (_payments.isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Text(
-                  'No recent payments found',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textLight,
-                      ),
-                ),
-              ),
+            AppUI.empty(
+              title: 'No recent payments found',
+              why: 'Receipts appear here once fees are collected.',
+              icon: 'wallet-money',
             )
           else
             ..._payments.asMap().entries.map((entry) {
@@ -153,25 +133,12 @@ class _RecentActivitiesWidgetState extends State<RecentActivitiesWidget> {
                                   children: [
                                     TextSpan(
                                       text: 'Payment #${payment.payId}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                            color: AppColors.textPrimary,
-                                            fontSize: 13,
-                                          ),
+                                      style: AppUI.label,
                                     ),
                                     TextSpan(
                                       text:
                                           ' — ${formatIndianNumber(payment.amount)} (${payment.statusText})',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: AppColors.textSecondary,
-                                            fontSize: 13,
-                                          ),
+                                      style: AppUI.body.copyWith(color: AppColors.textSecondary),
                                     ),
                                   ],
                                 ),
@@ -179,29 +146,12 @@ class _RecentActivitiesWidgetState extends State<RecentActivitiesWidget> {
                               const SizedBox(height: 4),
                               Text(
                                 _timeAgo(payment.createdat),
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      fontSize: 11,
-                                      color: AppColors.textLight,
-                                    ),
+                                style: AppUI.muted,
                               ),
                             ],
                           ),
                         ),
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: AppIcon('wallet-money',
-                            size: 16,
-                            color: color,
-                          ),
-                        ),
+                        AppUI.iconTile('wallet-money', color: color, size: 16),
                       ],
                     ),
                   ),

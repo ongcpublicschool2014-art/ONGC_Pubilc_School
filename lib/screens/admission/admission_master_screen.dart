@@ -4,8 +4,11 @@ import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/master_usage.dart';
+import '../../utils/school_terms.dart';
 import '../../services/admission_service.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/master_crud_panel.dart';
 import '../../widgets/pill_tab.dart';
@@ -20,11 +23,27 @@ import '../../widgets/pill_tab.dart';
 ///   - `PillTab` row at the top (vertical: 8 padding), 6.h gap, then the
 ///     `TabBarView` fills the rest of the screen.
 ///
-/// Tab order: the spec describes Community / Admission No / Concession.
+/// Tab order: the spec describes Community / Reg No / Concession.
 /// The two extra tabs (Admission Type, Quota) preserve existing CRUD
 /// functionality and follow section 7 ("When adding a new tab").
 class AdmissionMasterScreen extends StatefulWidget {
-  const AdmissionMasterScreen({super.key});
+  /// Which tab to open at. Each tab is its own sidebar submenu, so the sidebar
+  /// is normally the tab selector and [showTabBar] is false.
+  final int initialTab;
+
+  /// When false the in-screen pill tab bar is hidden.
+  final bool showTabBar;
+
+  const AdmissionMasterScreen({super.key, this.initialTab = 0, this.showTabBar = true});
+
+  /// The tab order, and the sidebar's link to it.
+  ///
+  /// On the widget rather than the State because the sidebar resolves a
+  /// sub-item to a tab by LABEL, not by position, and reads this from
+  /// outside the file -- see _subTab in dashboard_screen.dart.
+  static const tabLabels = [
+    'Admission Type', 'Quota', 'Community', 'Concession', 'Division', 'Reg No', 'TC Sequence',
+  ];
 
   @override
   State<AdmissionMasterScreen> createState() => _AdmissionMasterScreenState();
@@ -35,17 +54,26 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
 
   // Order matches the spec's primary trio first, then the project-specific
   // extras (Admission Type / Quota).
-  static const _tabLabels = [
-    'Admission Type', 'Quota', 'Community', 'Concession', 'Division', 'Admission No',
-  ];
   static const _tabIcons = [
-    'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'tag',
+    'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'tag', 'document-text',
   ];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: _tabLabels.length, vsync: this);
+    _tabController = TabController(
+        length: AdmissionMasterScreen.tabLabels.length,
+        vsync: this,
+        // clamp: a sub-index carried over from a screen with more tabs
+        // would otherwise be out of range here.
+        initialIndex: _startTab());
+  }
+
+  // A school has no Admission Type / Quota (tabs 0 and 1), so it opens at
+  // Community instead. College is unchanged.
+  int _startTab() {
+    final i = widget.initialTab.clamp(0, AdmissionMasterScreen.tabLabels.length - 1);
+    return (isSchool && i < 2) ? 2 : i;
   }
 
   @override
@@ -59,28 +87,30 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.showTabBar)
         ListenableBuilder(
           listenable: _tabController,
           builder: (context, _) {
             final selected = _tabController.index;
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (var i = 0; i < _tabLabels.length; i++) ...[
-                      PillTab(
-                        icon: _tabIcons[i],
-                        label: _tabLabels[i],
-                        selected: selected == i,
-                        onTap: () => _tabController.animateTo(i),
-                      ),
-                      if (i < _tabLabels.length - 1)
-                        SizedBox(width: PillTab.gap(context)),
-                    ],
-                  ],
-                ),
+              child: // Wrap, not a horizontal scroll view: the row can run past the
+              // window on a laptop screen, and a horizontal
+              // SingleChildScrollView has no scrollbar and ignores the mouse
+              // wheel on desktop, leaving the last tabs unreachable.
+              Wrap(
+                spacing: PillTab.gap(context),
+                runSpacing: 8,
+                children: [
+                  for (var i = 0; i < AdmissionMasterScreen.tabLabels.length; i++)
+                    if (!isSchool || i >= 2)
+                    PillTab(
+                      icon: _tabIcons[i],
+                      label: schoolTerm(AdmissionMasterScreen.tabLabels[i]),
+                      selected: selected == i,
+                      onTap: () => _tabController.animateTo(i),
+                    ),
+                ],
               ),
             );
           },
@@ -89,13 +119,16 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
         Expanded(
           child: TabBarView(
             controller: _tabController,
-            children: const [
-              MasterCrudPanel(table: 'admissiontype', idCol: 'adm_id', nameCol: 'admname', title: 'Admission Type', icon: 'user-tick', countLabel: 'types', importTabIndex: 0),
-              MasterCrudPanel(table: 'quota', idCol: 'quo_id', nameCol: 'quoname', title: 'Quota', icon: 'ticket', countLabel: 'quotas', importTabIndex: 1),
-              MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community', icon: 'people', countLabel: 'communities', importTabIndex: 9),
-              MasterCrudPanel(table: 'concessioncategory', idCol: 'con_id', nameCol: 'condesc', title: 'Concession', icon: 'discount-shape', countLabel: 'concessions', importTabIndex: 6, includeCreatedBy: false),
-              MasterCrudPanel(table: 'division', idCol: 'div_id', nameCol: 'divname', title: 'Division', icon: 'diagram', countLabel: 'divisions'),
-              _RegNoPanel(),
+            children: [
+              // School: no admissiontype / quota tables -- placeholders keep
+              // the tab indexes (resolved by label) unchanged.
+              if (isSchool) const SizedBox.shrink() else const MasterCrudPanel(table: 'admissiontype', idCol: 'adm_id', nameCol: 'admname', title: 'Admission Type', icon: 'user-tick', countLabel: 'types', importTabIndex: 0),
+              if (isSchool) const SizedBox.shrink() else const MasterCrudPanel(table: 'quota', idCol: 'quo_id', nameCol: 'quoname', title: 'Quota', icon: 'ticket', countLabel: 'quotas', importTabIndex: 1),
+              const MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community', icon: 'people', countLabel: 'communities', importTabIndex: 9),
+              const MasterCrudPanel(table: 'concessioncategory', idCol: 'con_id', nameCol: 'condesc', title: 'Concession', icon: 'discount-shape', countLabel: 'concessions', importTabIndex: 6, includeCreatedBy: false),
+              const MasterCrudPanel(table: 'division', idCol: 'div_id', nameCol: 'divname', title: 'Division', icon: 'diagram', countLabel: 'divisions', hideImport: true),
+              const _RegNoPanel(),
+              const _RegNoPanel(actname: 'TCNO', sequidDefault: 'TC', heading: 'TC'),
             ],
           ),
         ),
@@ -106,7 +139,12 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
 
 /// Register Number Sequencing — richer master (name, prefix/suffix, range, width).
 class _RegNoPanel extends StatefulWidget {
-  const _RegNoPanel();
+  const _RegNoPanel({this.actname = 'REGNO', this.sequidDefault = 'REG', this.heading = 'Register'});
+  // actname distinguishes register (REGNO) from TC (TCNO) sequences in the shared
+  // `sequence` table; heading labels the cards/dialogs.
+  final String actname;
+  final String sequidDefault;
+  final String heading;
 
   @override
   State<_RegNoPanel> createState() => _RegNoPanelState();
@@ -145,7 +183,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final rows = await AdmissionService.getRegSequences();
+    final rows = await AdmissionService.getRegSequences(actname: widget.actname);
     // Division options come from the Division master. Guard so a missing
     // division table (migration not yet run) doesn't break the sequence list.
     List<Map<String, dynamic>> divs = [];
@@ -185,13 +223,13 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
         'mod_id': 0,
         'yr_id': year['yr_id'],
         'yrlabel': yrLabel,
-        'actname': 'REGNO',
+        'actname': widget.actname,
         'seqname': name,
         'isprefix': _mode == 'Prefix' ? 'Y' : 'N',
         'seqprefix': affix, // NOT NULL — empty string when no affix
         'seqstart': start,
         'seqwidth': width,
-        'sequid': affix.isEmpty ? 'REG' : affix,
+        'sequid': affix.isEmpty ? widget.sequidDefault : affix,
         'seqcurno': 0,
         'seqend': _end.text.trim().isEmpty ? null : int.tryParse(_end.text.trim()),
         'division': _divisionVal,
@@ -207,7 +245,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
         _mode = null;
         _divisionVal = null;
       });
-      _snack('Register sequence added.', AppColors.success);
+      _snack('${widget.heading} sequence added.', AppColors.success);
       await _load();
     } catch (e) {
       _snack('Add failed. ${friendlyError(e)}', AppColors.error);
@@ -217,10 +255,31 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   }
 
   Future<void> _delete(int id, String name) async {
+    // A sequence that has issued numbers cannot be removed. seqcurno is the
+    // LAST number handed out -- it is created at 0 and only ever moves
+    // forward -- so anything above 0 means real documents are already
+    // carrying numbers from this series. Deleting it would let a new series
+    // start over and re-issue numbers that are already printed on a TC or an
+    // admission record.
+    final cur = ((_rows.firstWhere((r) => r['seq_id'].toString() == id.toString(),
+            orElse: () => const {})['seqcurno'] as num?) ?? 0).toInt();
+    if (cur > 0) {
+      if (mounted) {
+        await showMasterInUseDialog(context,
+            name: name,
+            count: cur,
+            noun: 'number',
+            detail: 'has already issued numbers, up to $cur.',
+            fix: 'Deleting it would let a new series start over and hand out '
+                'numbers that are already printed on issued documents.');
+      }
+      return;
+    }
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Register Sequence'),
+        title: Text('Delete ${widget.heading} Sequence'),
         content: Text('Remove "$name"?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -246,36 +305,15 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
 
   // ── design helpers (mirrors master_data_screen / master_crud_panel) ──
 
-  Widget _lbl(String text) =>
-      Text(text, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w800, color: Colors.black));
+  Widget _lbl(String text) => text.endsWith(' *')
+      ? AppUI.fieldLabel(text.substring(0, text.length - 2), required: true)
+      : AppUI.fieldLabel(text);
 
-  InputDecoration _filledFieldDec(String hint, {bool filled = false}) {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    final textSize = compact ? 11.0 : 14.0;
-    final hPad = compact ? 8.0 : 14.0;
-    final vPad = compact ? 5.0 : 14.0;
-    final radius = compact ? 5.0 : 8.0;
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6), fontSize: textSize),
-      contentPadding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: BorderSide(color: idle, width: 1.5)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radius), borderSide: const BorderSide(color: AppColors.accent, width: 1.5)),
-      filled: true,
-      fillColor: Colors.white,
-    );
-  }
+  InputDecoration _filledFieldDec(String hint, {bool filled = false}) =>
+      AppUI.field(context, hint, filled: filled);
 
-  TextStyle _fieldTextStyle() {
-    final compact = MediaQuery.of(context).size.width <= 1366;
-    return TextStyle(fontWeight: FontWeight.w500, fontSize: compact ? 11 : 14, color: const Color(0xFF555555));
-  }
-
-
-  TextStyle _hStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3);
-  TextStyle _cStyle() => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary);
+  TextStyle _hStyle() => AppUI.tableHead;
+  TextStyle _cStyle() => AppUI.cell;
 
   @override
   Widget build(BuildContext context) {
@@ -286,7 +324,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(width: 320.w, child: _form()),
-        SizedBox(width: 16.w),
+        SizedBox(width: AppUI.gap),
         Expanded(child: _list()),
       ],
     );
@@ -297,30 +335,24 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   /// "Admission Number Sequencing". Every field is `Column(_lbl + 6h + field)`.
   Widget _form() {
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: FocusTraversalGroup(
         child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const CardTitleBlock(icon: 'tag', title: 'Admission Number Sequencing', subtitle: 'set up the sequence for new admission numbers'),
+          CardTitleBlock(icon: 'tag', title: schoolTerm('${widget.heading} Number Sequencing'), subtitle: 'set up the numbering sequence'),
           SizedBox(height: 20.h),
           _lbl('Name *'),
-          SizedBox(height: 6.h),
           TextField(
             controller: _name,
-            style: _fieldTextStyle().copyWith(color: _name.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
             decoration: _filledFieldDec('Enter name', filled: _name.text.trim().isNotEmpty),
             onChanged: (_) => setState(() {}),
           ),
           SizedBox(height: 16.h),
-          _lbl('Mode'),
-          SizedBox(height: 6.h),
+          _lbl('Mode *'),
           DropdownButtonFormField<String>(
             initialValue: _mode,
             isExpanded: true,
@@ -328,24 +360,23 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
             borderRadius: BorderRadius.circular(12),
             elevation: 6,
             icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-            style: _fieldTextStyle(),
+            style: AppUI.fieldText(context, filled: _mode != null),
             decoration: _filledFieldDec('Select mode', filled: _mode != null),
             items: [
-              DropdownMenuItem(value: 'Prefix', child: Text('Prefix', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
-              DropdownMenuItem(value: 'Suffix', child: Text('Suffix', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary))),
+              DropdownMenuItem(value: 'Prefix', child: Text('Prefix', style: AppUI.fieldText(context))),
+              DropdownMenuItem(value: 'Suffix', child: Text('Suffix', style: AppUI.fieldText(context))),
             ],
             selectedItemBuilder: (context) => [
-              Align(alignment: Alignment.centerLeft, child: Text('Prefix', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
-              Align(alignment: Alignment.centerLeft, child: Text('Suffix', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent))),
+              Align(alignment: Alignment.centerLeft, child: Text('Prefix', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+              Align(alignment: Alignment.centerLeft, child: Text('Suffix', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
             ],
             onChanged: (v) => setState(() => _mode = v),
           ),
           SizedBox(height: 16.h),
           _lbl('Prefix / Suffix value'),
-          SizedBox(height: 6.h),
           TextField(
             controller: _affix,
-            style: _fieldTextStyle().copyWith(color: _affix.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600),
+            style: AppUI.fieldText(context, filled: _affix.text.trim().isNotEmpty),
             decoration: _filledFieldDec('e.g. ADM/', filled: _affix.text.trim().isNotEmpty),
             onChanged: (_) => setState(() {}),
           ),
@@ -357,8 +388,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _lbl('Start No'),
-                  SizedBox(height: 6.h),
-                  TextField(controller: _start, keyboardType: TextInputType.number, style: _fieldTextStyle().copyWith(color: _start.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec('1', filled: _start.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  TextField(controller: _start, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _start.text.trim().isNotEmpty), decoration: _filledFieldDec('1', filled: _start.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
               SizedBox(width: 8.w),
@@ -366,8 +396,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _lbl('End No'),
-                  SizedBox(height: 6.h),
-                  TextField(controller: _end, keyboardType: TextInputType.number, style: _fieldTextStyle().copyWith(color: _end.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec('-', filled: _end.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  TextField(controller: _end, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _end.text.trim().isNotEmpty), decoration: _filledFieldDec('-', filled: _end.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
               SizedBox(width: 8.w),
@@ -375,15 +404,13 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _lbl('Width'),
-                  SizedBox(height: 6.h),
-                  TextField(controller: _width, keyboardType: TextInputType.number, style: _fieldTextStyle().copyWith(color: _width.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), decoration: _filledFieldDec('4', filled: _width.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  TextField(controller: _width, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _width.text.trim().isNotEmpty), decoration: _filledFieldDec('4', filled: _width.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
             ],
           ),
           SizedBox(height: 16.h),
           _lbl('Division'),
-          SizedBox(height: 6.h),
           Builder(builder: (context) {
             final names = _divisionRows
                 .map((d) => (d['divname'] ?? '').toString())
@@ -398,7 +425,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
               borderRadius: BorderRadius.circular(12),
               elevation: 6,
               icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-              style: _fieldTextStyle(),
+              style: AppUI.fieldText(context, filled: value != null),
               decoration: _filledFieldDec(
                 names.isEmpty ? 'No divisions — add in Division tab' : 'Select division',
                 filled: value != null,
@@ -406,13 +433,13 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
               items: names
                   .map((name) => DropdownMenuItem(
                         value: name,
-                        child: Text(name, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                        child: Text(name, style: AppUI.fieldText(context)),
                       ))
                   .toList(),
               selectedItemBuilder: (context) => names
                   .map((name) => Align(
                         alignment: Alignment.centerLeft,
-                        child: Text(name, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                        child: Text(name, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)),
                       ))
                   .toList(),
               onChanged: (v) => setState(() => _divisionVal = v),
@@ -427,7 +454,6 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.add, size: 16),
               label: const Text('Add'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
             ),
           ),
         ],
@@ -440,29 +466,24 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   /// 16.w padding, full border) with title bar (tag icon + "Register Sequences"
   /// + count badge), then inner bordered table (8r, antiAlias).
   Widget _list() {
+    // Same table as every other sequence screen (Demand / Concession /
+    // Refund ...): SEQUENCE, PREFIX, PREVIEW, CURRENT -- plus delete, the only
+    // way to change a register sequence (it has no edit).
+    TextStyle h() => _hStyle();
+    TextStyle c() => _cStyle();
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           Padding(
-            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
+            padding: EdgeInsets.only(bottom: 12.h),
             child: Row(children: [
-              const CardTitleBlock(icon: 'tag', title: 'Register Sequences', subtitle: 'all admission number sequences in this institution'),
+              AppUI.iconTile('tag'),
+              SizedBox(width: 12.w),
+              Text('${widget.heading} Sequences', style: AppUI.cardTitle),
               SizedBox(width: 10.w),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8.r),
-                ),
-                child: Text('${_rows.length} sequences',
-                    style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
-              ),
+              AppUI.chip('${_rows.length} sequence${_rows.length == 1 ? '' : 's'}', AppStatus.info),
               const Spacer(),
             ]),
           ),
@@ -470,67 +491,77 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
             child: Container(
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8.r),
-                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Column(
                 children: [
                   Container(
                     color: AppColors.tableHeadBg,
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                    child: Row(
-                      children: [
-                        Expanded(flex: 3, child: Text('NAME', style: _hStyle())),
-                        Expanded(flex: 2, child: Text('DIVISION', style: _hStyle())),
-                        SizedBox(width: 64.w, child: Text('PRE/SUF', style: _hStyle())),
-                        SizedBox(width: 64.w, child: Text('AFFIX', style: _hStyle())),
-                        SizedBox(width: 56.w, child: Text('START', style: _hStyle())),
-                        SizedBox(width: 56.w, child: Text('END', style: _hStyle())),
-                        SizedBox(width: 36.w, child: Text('W', style: _hStyle())),
-                        SizedBox(width: 44.w, child: const SizedBox.shrink()),
-                      ],
-                    ),
+                    child: Row(children: [
+                      Expanded(flex: 3, child: Text('SEQUENCE', style: h())),
+                      SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
+                      SizedBox(width: 140.w, child: Text('PREVIEW', style: h())),
+                      SizedBox(width: 80.w, child: Text('CURRENT', textAlign: TextAlign.right, style: h())),
+                      SizedBox(width: 44.w),
+                    ]),
                   ),
                   Expanded(
                     child: _loading
                         ? const Center(child: CircularProgressIndicator())
                         : _rows.isEmpty
-                            ? Center(child: Text('No register sequences', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)))
-                            : ListView.separated(
-                                itemCount: _rows.length,
-                                separatorBuilder: (_, __) => Divider(height: 1, color: AppColors.border.withValues(alpha: 0.5)),
-                                itemBuilder: (_, i) {
-                                  final r = _rows[i];
-                                  final id = r['seq_id'] is int ? r['seq_id'] as int : int.tryParse(r['seq_id'].toString()) ?? 0;
-                                  final name = r['seqname']?.toString() ?? '';
-                                  final mode = (r['isprefix']?.toString() ?? 'Y') == 'Y' ? 'Prefix' : 'Suffix';
-                                  return Container(
-                                    color: i.isEven ? Colors.white : AppColors.surface,
-                                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 9.h),
-                                    child: Row(
-                                      children: [
-                                        Expanded(flex: 3, child: Text(name, style: _cStyle())),
-                                        Expanded(flex: 2, child: Text(r['division']?.toString() ?? '-', style: _cStyle(), overflow: TextOverflow.ellipsis)),
-                                        SizedBox(width: 64.w, child: Text(mode, style: _cStyle())),
-                                        SizedBox(width: 64.w, child: Text((r['seqprefix']?.toString().isEmpty ?? true) ? '-' : r['seqprefix'].toString(), style: _cStyle())),
-                                        SizedBox(width: 56.w, child: Text(r['seqstart']?.toString() ?? '-', style: _cStyle())),
-                                        SizedBox(width: 56.w, child: Text(r['seqend']?.toString() ?? '-', style: _cStyle())),
-                                        SizedBox(width: 36.w, child: Text(r['seqwidth']?.toString() ?? '-', style: _cStyle())),
+                            ? AppUI.empty(title: 'No ${widget.heading.toLowerCase()} sequence yet', why: 'Add one with the form on the left.', icon: 'tag')
+                            : ListView(children: [
+                                for (final r in _rows)
+                                  Builder(builder: (_) {
+                                    final id = r['seq_id'] is int ? r['seq_id'] as int : int.tryParse(r['seq_id'].toString()) ?? 0;
+                                    final name = r['seqname']?.toString() ?? '';
+                                    final division = r['division']?.toString() ?? '';
+                                    final isPrefix = (r['isprefix']?.toString() ?? 'Y') == 'Y';
+                                    final affix = r['seqprefix']?.toString() ?? '';
+                                    final cur = ((r['seqcurno'] as num?) ?? 0).toInt();
+                                    final start = ((r['seqstart'] as num?) ?? 1).toInt();
+                                    final w = ((r['seqwidth'] as num?) ?? 5).toInt();
+                                    // Nothing issued yet -> the next one is the start.
+                                    final num_ = (cur <= 0 ? start : cur + 1).toString().padLeft(w, '0');
+                                    return Container(
+                                      decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppColors.divider))),
+                                      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                                      child: Row(children: [
+                                        Expanded(
+                                          flex: 3,
+                                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                                            Text(name, style: c(), overflow: TextOverflow.ellipsis),
+                                            if (division.isNotEmpty && division != '-') Text(division, style: AppUI.muted, overflow: TextOverflow.ellipsis),
+                                          ]),
+                                        ),
+                                        SizedBox(
+                                          width: 90.w,
+                                          child: Text(affix.isEmpty ? '—' : (isPrefix ? affix : '$affix (suffix)'),
+                                              style: c().copyWith(fontWeight: FontWeight.w700, color: AppColors.primary), overflow: TextOverflow.ellipsis),
+                                        ),
+                                        SizedBox(
+                                          width: 140.w,
+                                          child: Text(isPrefix ? '$affix$num_' : '$num_$affix',
+                                              style: AppUI.label.copyWith(color: AppColors.primary), overflow: TextOverflow.ellipsis),
+                                        ),
+                                        SizedBox(width: 80.w, child: Text(cur <= 0 ? '0' : '$cur', textAlign: TextAlign.right, style: c())),
                                         SizedBox(
                                           width: 44.w,
                                           child: Center(
-                                            child: InkWell(
-                                              onTap: () => _delete(id, name),
-                                              borderRadius: BorderRadius.circular(6.r),
-                                              child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('trash', size: 16, color: AppColors.error)),
+                                            child: IconButton(
+                                              tooltip: 'Delete',
+                                              visualDensity: VisualDensity.compact,
+                                              onPressed: () => _delete(id, name),
+                                              icon: const AppIcon('trash', size: 16, color: AppColors.error),
                                             ),
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
+                                      ]),
+                                    );
+                                  }),
+                              ]),
                   ),
                 ],
               ),

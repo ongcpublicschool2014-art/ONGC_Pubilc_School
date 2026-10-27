@@ -7,14 +7,17 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:csv/csv.dart';
 import '../../widgets/app_icon.dart';
+import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
 import '../../utils/app_theme.dart';
+import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/formatters.dart';
 
@@ -54,6 +57,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   bool _isLoading = false;
   bool _isSaving = false;
+  // Save is enabled only after a successful Validate; reset whenever the data
+  // changes (new file / cleared) so the user must re-validate.
+  bool _isValidated = false;
 
   // Import state
   bool _showImport = false;
@@ -67,6 +73,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   List<String?> _mappings = [];
   int _importStep = 0; // 0=pick, 1=map, 2=importing, 3=done
   int _imported = 0;
+  /// Rows that will UPDATE a demand the student already has, rather than raise
+  /// a new one. Reported on the summary so a re-import's effect is visible
+  /// before anyone goes looking for duplicates.
+  int _willUpdate = 0;
   int _skipped = 0;
   int _total = 0;
   List<String> _importErrors = [];
@@ -77,9 +87,18 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   bool _loadingDemands = false;
   String? _drilldownClass;
   List<Map<String, dynamic>> _drilldownDemands = [];
+  // All active students of the drilled-down class — so students who have NO
+  // feedemand row still appear in the student-wise list (with a "No Demand" tag).
+  List<Map<String, dynamic>> _drilldownAllStudents = [];
   bool _loadingDrilldown = false;
   String? _drilldownStudent; // selected student adm no for 3rd level
   String? _drilldownStudentName; // selected student name for 3rd level
+
+  // Main class-list Course/Class filters + pagination
+  String? _courseFilter; // null = All Courses
+  String? _classFilter;  // null = All Classes
+  int _fdPage = 0;
+  int _fdPerPage = 20;
 
   // Search
   final _searchController = TextEditingController();
@@ -175,12 +194,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
       if (!mounted) return;
       final classes = results[0] as List<String>;
-      const classOrder = ['PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-      classes.sort((a, b) {
-        final aIdx = classOrder.indexOf(a);
-        final bIdx = classOrder.indexOf(b);
-        return (aIdx == -1 ? 999 : aIdx).compareTo(bIdx == -1 ? 999 : bIdx);
-      });
+      // Shared ordering (utils/class_sort.dart): course, then year, with TC
+      // batches last. The bare-grade list this replaced ranked every college
+      // class the same, so they fell back to database insertion order.
+      classes.sort(classCompare);
       setState(() {
         _classes = classes;
         _years = results[1] as List<Map<String, dynamic>>;
@@ -254,16 +271,35 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       _drilldownCourse = courseName;
       _loadingDrilldown = true;
       _drilldownDemands = [];
+      _drilldownAllStudents = [];
     });
     try {
-      final demands = await SupabaseService.getFeeDemandsByClass(insId, className);
+      // Also load every active student of the class so students with NO demand
+      // still show up in the student-wise list.
+      final results = await Future.wait<dynamic>([
+        SupabaseService.getFeeDemandsByClass(insId, className),
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+            .select('stuadmno, stuname, courname')
+            .eq('ins_id', insId)
+            .eq('stuclass', className)
+            .eq('activestatus', 1)
+            .eq('preadmission', 0)),  // next year's intake: advance screens only
+      ]);
+      final demands = List<Map<String, dynamic>>.from(results[0] as List);
+      var students = List<Map<String, dynamic>>.from(results[1] as List);
       // Filter by course if specified
       final filtered = courseName != null
           ? demands.where((d) => (d['courname']?.toString() ?? d['stuname_course'] ?? '') == courseName || courseName == 'Other').toList()
           : demands;
+      if (courseName != null && courseName != 'Other') {
+        students = students
+            .where((s) => (s['courname']?.toString() ?? '') == courseName)
+            .toList();
+      }
       if (mounted) {
         setState(() {
           _drilldownDemands = filtered;
+          _drilldownAllStudents = students;
           _loadingDrilldown = false;
         });
       }
@@ -289,8 +325,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         if (!masterData.hasClassFeeDemand) missing.add('Class Fee Demand');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Please import master data first: ${missing.join(', ')}'),
-            backgroundColor: Colors.red,
+            content: Text(schoolTerm('Please import master data first: ${missing.join(', ')}')),
+            backgroundColor: AppColors.error,
             duration: const Duration(seconds: 4),
           ),
         );
@@ -322,6 +358,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             .eq('ins_id', insId)
             .eq('stuadmno', admNo)
             .eq('activestatus', 1)
+            .eq('preadmission', 0)  // next year's intake: advance screens only
             .maybeSingle();
         stuId = stuResult?['stu_id'] as int?;
       }
@@ -389,6 +426,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           .eq('ins_id', insId)
           .eq('stuadmno', admNo)
           .eq('activestatus', 1)
+          .eq('preadmission', 0)  // next year's intake: advance screens only
           .maybeSingle();
       if (mounted && result != null) {
         setState(() => _selectedClass = result['stuclass']?.toString());
@@ -425,7 +463,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   // â”€â”€â”€ Import Logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   static String? _autoMapHeader(String header) {
-    final h = header.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final h = collegeTerm(header).toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
     const aliases = {
       'demno': 'demno', 'demandno': 'demno', 'demandnumber': 'demno', 'docno': 'demno',
       // "Type" = demand sequence type (ARREAR / DEMAND / REGULAR), NOT the fee type.
@@ -496,6 +534,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         _errorMsg = null;
         _rowErrors = {};
         _cellErrors = {};
+        _isValidated = false; // new file must be re-validated before Save
       });
       await _loadStudentMaster();
     } catch (e) {
@@ -518,7 +557,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           .fromSchema('students')
           .select('stuadmno, stuclass, courname')
           .eq('ins_id', insId)
-          .eq('activestatus', 1));
+          .eq('activestatus', 1)
+          .eq('preadmission', 0));  // next year's intake: advance screens only
       final map = <String, Map<String, String>>{};
       for (final s in (rows as List)) {
         final adm = (s['stuadmno']?.toString() ?? '').trim();
@@ -562,17 +602,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (admRaw != null && _importStudentByAdmno.isNotEmpty) {
       final student = _importStudentByAdmno[norm(admRaw)];
       if (student == null) {
-        errors['stuadmno'] = 'Roll No "$admRaw" not found in students master';
+        errors['stuadmno'] = '${schoolTerm('Roll No')} "$admRaw" not found in students master';
       } else {
         final clsRaw = _cellByKey(row, 'stuclass');
         if (clsRaw != null && (student['stuclass'] ?? '').isNotEmpty
             && norm(clsRaw) != norm(student['stuclass']!)) {
-          errors['stuclass'] = 'Class "$clsRaw" doesn\'t match student (registered as "${student['stuclass']}")';
+          errors['stuclass'] = schoolTerm('Class "$clsRaw" doesn\'t match student (registered as "${student['stuclass']}")');
         }
         final courRaw = _cellByKey(row, 'courname');
         if (courRaw != null && (student['courname'] ?? '').isNotEmpty
             && norm(courRaw) != norm(student['courname']!)) {
-          errors['courname'] = 'Course "$courRaw" doesn\'t match student (registered as "${student['courname']}")';
+          errors['courname'] = schoolTerm('Course "$courRaw" doesn\'t match student (registered as "${student['courname']}")');
         }
       }
     }
@@ -591,7 +631,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final detail = <String>[];
     fields.forEach((k, v) {
       if (v == 'Required') {
-        missing.add(_importFieldLabels[k] ?? k);
+        missing.add(schoolTerm(_importFieldLabels[k] ?? k));
       } else {
         detail.add(v);
       }
@@ -655,8 +695,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         if (!masterData.hasClassFeeDemand) missing.add('Class Fee Demand');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Please import master data first: ${missing.join(', ')}'),
-            backgroundColor: Colors.red,
+            content: Text(schoolTerm('Please import master data first: ${missing.join(', ')}')),
+            backgroundColor: AppColors.error,
             duration: const Duration(seconds: 4),
           ),
         );
@@ -668,6 +708,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       _importStep = 2;
       _imported = 0;
       _skipped = 0;
+      _willUpdate = 0;
       _total = _rows.length;
       _importErrors = [];
     });
@@ -693,7 +734,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         .fromSchema('students')
         .select('stu_id, stuadmno, courname')
         .eq('ins_id', insId)
-        .eq('activestatus', 1));
+        .eq('activestatus', 1)
+        .eq('preadmission', 0));  // next year's intake: advance screens only
     final stuMap = <String, int>{};
     final stuCourse = <int, String>{}; // stu_id -> course name (for the demand)
     for (final s in stuList) {
@@ -720,18 +762,18 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       if (desc.isNotEmpty && id != null) conMap[desc] = id;
     }
 
-    // 2b. Pre-fetch classfeedemand cf_id -> collectible, so an imported demand
-    // inherits the collectible flag of its class-fee template row (Class Fee Id).
-    final cfCollectible = <int, bool>{};
+    // 2b. Pre-fetch valid classfeedemand cf_ids so an imported demand's Class Fee
+    // Id can be validated against the class-fee templates (an unmatched id errors).
+    final cfIds = <int>{};
     try {
       final cfRows = await SupabaseService.fetchAll(() => SupabaseService
           .fromSchema('classfeedemand')
-          .select('cf_id, collectible'));
+          .select('cf_id'));
       for (final c in cfRows) {
         final id = c['cf_id'] as int?;
-        if (id != null) cfCollectible[id] = c['collectible'] == true;
+        if (id != null) cfIds.add(id);
       }
-    } catch (_) {/* classfeedemand may be empty — demands default to collectible */}
+    } catch (_) {/* classfeedemand may be empty — skip the cf_id check */}
 
     // 2c. Pre-fetch cla_id -> course name (class.cour_id -> course.courname), so
     // an imported demand's course is derived from its Class Id.
@@ -766,21 +808,64 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       }
     } catch (_) {/* feetype missing — skip the check */}
 
-    // 2e. Existing demands' paid amount, keyed by stu_id|feetype|term|yr_id, so a
-    // re-import's Due Amount can be validated to cover what's already collected +
-    // concession (a demand can't be reduced below its collections).
-    final paidByDemand = <String, double>{};
+    // 2d(ii). Pre-fetch valid Semester ids — a row whose Semester Id isn't one
+    // of this institution's semesters is REJECTED (a blank Semester Id is fine).
+    final semIds = <int>{};
+    try {
+      final smRows = await SupabaseService.fetchAll(() => SupabaseService
+          .fromSchema('semester').select('sem_id').eq('ins_id', insId).eq('activestatus', 1));
+      for (final s in smRows) {
+        final id = s['sem_id'] as int?;
+        if (id != null) semIds.add(id);
+      }
+    } catch (_) {/* semester master missing — skip the check */}
+
+    // 2e. The demands this student ALREADY has, keyed by
+    // stu_id|feetype|term|yr_id. Two things need it:
+    //
+    //   * the re-import guard below -- a demand cannot be reduced below what
+    //     has already been collected against it;
+    //   * UPDATE-INSTEAD-OF-DUPLICATE. fn_approve_tempfeedemand matches an
+    //     existing demand by DEMNO, so a staged row carrying a demand number
+    //     the database has never seen is always inserted. A sheet of rejected
+    //     rows carries NEWLY ALLOCATED numbers (or, once Excel has been near
+    //     it, none at all), so every row that was already billed came back as a
+    //     SECOND demand and doubled the student's balance. Stamping the
+    //     EXISTING demno onto the staged row makes that same trigger update the
+    //     demand in place, with no change to the database.
+    //
+    // A LIST, not one value: the same student can legitimately hold two
+    // demands for one fee type and term -- two instalments, a top-up raised
+    // separately, or an old class's bill left behind by a transfer. Those must
+    // never be silently merged, so a row that matches more than one and does
+    // not say which it means is reported instead of guessed at.
+    final existingDemands = <String, List<({String demno, double paid})>>{};
+    // ...and the same demands keyed by their NUMBER, because a row that
+    // carries one has already answered the question. A sheet exported from the
+    // system names the exact demand on every line; looking that up by student
+    // and fee type instead, and then refusing because the student happens to
+    // hold two, throws away the answer the row was handed.
+    final demandByNo = <String, ({int stuId, String feeType, double paid})>{};
     try {
       final fdRows = await SupabaseService.fetchAll(() => SupabaseService
           .fromSchema('feedemand')
-          .select('stu_id, demfeetype, demfeeterm, yr_id, paidamount')
+          .select('stu_id, demfeetype, demfeeterm, yr_id, paidamount, demno')
           .eq('ins_id', insId)
           .eq('activestatus', 1));
       for (final f in fdRows) {
         final sid = f['stu_id'] as int?;
         if (sid == null) continue;
-        paidByDemand['$sid|${f['demfeetype'] ?? ''}|${f['demfeeterm'] ?? ''}|${f['yr_id'] ?? ''}'] =
-            (f['paidamount'] as num?)?.toDouble() ?? 0;
+        final paid = (f['paidamount'] as num?)?.toDouble() ?? 0;
+        final dn = f['demno']?.toString().trim() ?? '';
+        final k = '$sid|${f['demfeetype'] ?? ''}|${f['demfeeterm'] ?? ''}|${f['yr_id'] ?? ''}';
+        (existingDemands[k] ??= []).add((demno: dn, paid: paid));
+        if (dn.isNotEmpty) {
+          demandByNo.putIfAbsent(dn, () => (
+            stuId: sid,
+            feeType: f['demfeetype']?.toString() ?? '',
+            paid: paid,
+          ));
+        }
       }
     } catch (_) {/* no existing demands */}
 
@@ -809,6 +894,20 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         if (feeId != null && feeIds.isNotEmpty && !feeIds.contains(feeId)) {
           _skipped++;
           _importErrors.add('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Fee Id $feeId not found in Fee Types — fix the file');
+          continue;
+        }
+        // Reject a row whose Class Fee Id doesn't match a class-fee template, so
+        // an unmatched id errors instead of importing an unlinked demand.
+        if (cfId != null && cfIds.isNotEmpty && !cfIds.contains(cfId)) {
+          _skipped++;
+          _importErrors.add(schoolTerm('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Class Fee Id $cfId not found in Class Fees — fix the file'));
+          continue;
+        }
+        // Reject a row whose Semester Id doesn't exist in this institution.
+        final semId = int.tryParse(_cellByKey(row, 'sem_id') ?? '');
+        if (semId != null && semIds.isNotEmpty && !semIds.contains(semId)) {
+          _skipped++;
+          _importErrors.add(schoolTerm('Adm ${_cellByKey(row, 'stuadmno') ?? ''}: Semester Id $semId not found in Semesters — fix the file'));
           continue;
         }
 
@@ -864,21 +963,76 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         }
         if (stuId == null) {
           _skipped++;
-          _importErrors.add('Row ${i + 2}: Roll No "$admNoRaw" not found in active students');
+          _importErrors.add('Row ${i + 2}: ${schoolTerm('Roll No')} "$admNoRaw" not found in active students');
           continue;
+        }
+
+        // Does this student already have this demand?
+        final demType = _cellByKey(row, 'demfeetype') ?? '';
+        final demTerm = _cellByKey(row, 'demfeeterm') ?? '';
+
+        String? existingDemno;
+        double existingPaid = 0;
+
+        // 1. THE ROW NAMES ITS DEMAND. A sheet exported from the system puts
+        //    the demand number on every line, and that settles it -- even for
+        //    a student holding two demands for the same fee, which is exactly
+        //    when the number matters most.
+        //
+        //    The owner is checked first. fn_approve_tempfeedemand matches on
+        //    demno + fee type and does NOT check the student, and demand
+        //    numbers have been reissued, so a number from an old sheet can
+        //    belong to somebody else entirely. Updating that would rewrite a
+        //    different student's bill.
+        final sheetDemno = _cellByKey(row, 'demno')?.trim() ?? '';
+        final named = sheetDemno.isEmpty ? null : demandByNo[sheetDemno];
+        if (named != null) {
+          if (named.stuId != stuId) {
+            _skipped++;
+            _importErrors.add('Adm $admNoRaw: Demand No "$sheetDemno" belongs '
+                'to another student — remove it from the row, or use that '
+                "student's own demand number.");
+            continue;
+          }
+          existingDemno = sheetDemno;
+          existingPaid = named.paid;
+        } else {
+          // 2. No usable number, so fall back to the student's demands for
+          //    this fee type / term / year.
+          final already =
+              existingDemands['$stuId|$demType|$demTerm|${yrId ?? ''}'] ??
+                  const [];
+          // More than one and nothing says which: merging two instalments
+          // would delete a bill, adding a third would double it.
+          if (already.length > 1) {
+            _skipped++;
+            _importErrors.add('Adm $admNoRaw: $demType / $demTerm already has '
+                '${already.length} demands (${already.map((e) => e.demno).join(", ")}). '
+                'Put the Demand No of the one you mean in the row, or fix them '
+                'in Fee Definition, then re-import.');
+            continue;
+          }
+          if (already.length == 1 && already.first.demno.isNotEmpty) {
+            existingDemno = already.first.demno;
+          }
+          existingPaid = already.isEmpty ? 0.0 : already.first.paid;
         }
 
         // Re-import guard: Due Amount must cover what's already paid on this
         // demand + its concession (else the balance would go negative / a demand
         // would be reduced below collections). First imports have paid = 0.
-        final demType = _cellByKey(row, 'demfeetype') ?? '';
-        final demTerm = _cellByKey(row, 'demfeeterm') ?? '';
-        final existingPaid = paidByDemand['$stuId|$demType|$demTerm|${yrId ?? ''}'] ?? 0;
         if (feeAmount + 0.005 < existingPaid + conAmount) {
           _skipped++;
           _importErrors.add('Adm $admNoRaw: Due Amount ${feeAmount.toStringAsFixed(0)} is less than paid (${existingPaid.toStringAsFixed(0)}) + concession (${conAmount.toStringAsFixed(0)})');
           continue;
         }
+
+        // existingDemno is now set either from the number the row carried or
+        // from the student's single matching demand, and is what makes the
+        // approval trigger update in place. A number the sheet carried that
+        // the database has never issued is dropped on purpose -- on a rejects
+        // sheet it was only ever a proposal.
+        if (existingDemno != null) _willUpdate++;
 
         final conName = _cellByKey(row, 'con_id');
         int? conId;
@@ -899,7 +1053,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         final data = {
           'ins_id': insId,
           'inscode': auth.inscode ?? '',
-          'demno': _cellByKey(row, 'demno'),
+          'demno': existingDemno ?? _cellByKey(row, 'demno'),
           // ARREAR / DEMAND. Null (regular import) -> feedemand trigger defaults to 'DEMAND'.
           'demseqtype': _cellByKey(row, 'demseqtype'),
           'stuadmno': admNoRaw,
@@ -916,13 +1070,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           'balancedue': balAmount,
           'duedate': dueParsed?.toIso8601String().split('T').first,
           'cla_id': claId,
-          'sem_id': int.tryParse(_cellByKey(row, 'sem_id') ?? ''),
+          'sem_id': semId,
           'fee_id': int.tryParse(_cellByKey(row, 'fee_id') ?? ''),
           'cf_id': cfId,
           // Original class for an arrear demand (differs from current stuclass).
           'arrearclass': _cellByKey(row, 'arrearclass'),
-          // collectible follows the class-fee template row (by Class Fee Id).
-          'collectible': cfId != null ? (cfCollectible[cfId] ?? true) : true,
+          // Once cf_id / fee_id / sem_id validate, the demand is a real amount
+          // owed and is always collectible — independent of the template's flag.
+          'collectible': true,
           'activestatus': 1,
           'createdat': now,
           'createdby': auth.userName,
@@ -981,6 +1136,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       _headers = [];
       _rows = [];
       _mappings = [];
+      _isValidated = false;
       _imported = 0;
       _skipped = 0;
       _total = 0;
@@ -1010,11 +1166,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      decoration: AppUI.card(),
       child: Column(
         children: [
           // Card header with title, buttons, breadcrumb, and search.
@@ -1025,9 +1177,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             child: Row(
               children: [
                 if (_drilldownClass == null && _drilldownStudent == null) ...[
-                  AppIcon('receipt-edit', color: AppColors.accent, size: 18),
-                  SizedBox(width: 10.w),
-                  Text('Fee Demand', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                  AppUI.iconTile('receipt-edit', size: 18),
+                  SizedBox(width: 12.w),
+                  Text('Fee Demand', style: AppUI.cardTitle),
                 ],
                 if (!_showImport) ...[
                   if (_drilldownClass != null || _drilldownStudent != null) ...[
@@ -1040,63 +1192,67 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         } else {
                           _drilldownClass = null;
                           _drilldownDemands = [];
+                          _drilldownAllStudents = [];
                         }
                         _searchQuery = '';
                         _searchController.clear();
                       }),
-                      borderRadius: BorderRadius.circular(8.r),
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
                       child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                        height: AppUI.controlHeight(context),
+                        padding: EdgeInsets.symmetric(horizontal: 14.w),
                         decoration: BoxDecoration(
-                          color: AppColors.accent,
-                          borderRadius: BorderRadius.circular(8.r),
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             AppIcon.linear('Chevron Left', size: 14, color: Colors.white),
                             SizedBox(width: 6.w),
-                            Text('Back', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: Colors.white)),
+                            Text('Back', style: AppUI.label.copyWith(color: Colors.white)),
                           ],
                         ),
                       ),
                     ),
                     SizedBox(width: 12.w),
-                    Container(width: 1, height: 18, color: AppColors.border),
+                    Container(width: 1, height: 18, color: AppColors.cardBorder),
                     SizedBox(width: 12.w),
                     // Breadcrumb path (plain text, not button-like)
-                    Text('Fee Demand', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                    Text('Fee Demand', style: AppUI.muted),
                     SizedBox(width: 6.w),
-                    AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
+                    AppIcon.linear('Chevron Right', size: 14, color: AppColors.textLight),
                     SizedBox(width: 6.w),
                     if (_drilldownStudent != null) ...[
-                      Text('${_drilldownCourse != null ? '$_drilldownCourse > ' : ''}$_drilldownClass', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary)),
+                      Text('${_drilldownCourse != null ? '$_drilldownCourse > ' : ''}$_drilldownClass', style: AppUI.muted),
                       SizedBox(width: 6.w),
-                      AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
+                      AppIcon.linear('Chevron Right', size: 14, color: AppColors.textLight),
                       SizedBox(width: 6.w),
                       Text(
                         '${_drilldownStudentName ?? ''} (${_drilldownStudent})',
-                        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                        style: AppUI.label,
                       ),
                     ] else
                       Text(
-                        'Class $_drilldownClass',
-                        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                        schoolTerm('Class $_drilldownClass'),
+                        style: AppUI.label,
                       ),
                   ] else ...[
-                    SizedBox(width: 16.w),
-                    Text(
+                    SizedBox(width: 12.w),
+                    AppUI.chip(
                       '${_classSummary.fold<int>(0, (sum, c) => sum + ((c['student_count'] as num?)?.toInt() ?? 0))} students',
-                      style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
+                      AppStatus.info,
                     ),
                   ],
                 ],
                 const Spacer(),
-                if (!_showImport) ...[
+                // Search / Import / Refresh only on the main list — not in the
+                // class or student drill-down.
+                if (!_showImport && _drilldownClass == null && _drilldownStudent == null) ...[
                   AppSearchField(
                     controller: _searchController,
-                    hintText: 'Search by class...',
-                    onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
+                    hintText: schoolTerm('Search by class...'),
+                    onChanged: (v) => setState(() { _searchQuery = v.trim().toLowerCase(); _fdPage = 0; }),
                     width: 260.w,
                     suffixIcon: _searchQuery.isNotEmpty
                         ? Padding(
@@ -1116,62 +1272,27 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   ),
                   SizedBox(width: 16.w),
                 ],
-                Builder(builder: (context) {
-                  // Hide the Import CSV/Excel button for institution Admin role.
-                  // Admins manage / approve demands; imports are an accountant
-                  // / super-admin action.
-                  final role = context.read<AuthProvider>().currentUser?.urname ?? '';
-                  if (role.toLowerCase() == 'admin') return const SizedBox.shrink();
-                  final compact = MediaQuery.of(context).size.width <= 1366;
-                  final btnHeight = compact ? 30.0 : 40.0;
-                  final iconSize = compact ? 12.0 : 16.0;
-                  final hPad = compact ? 10.0 : 18.0;
-                  final radius = compact ? 6.0 : 10.0;
-                  final textSize = compact ? 11.0 : 13.0;
-                  return SizedBox(
-                    height: btnHeight,
-                    child: ElevatedButton.icon(
-                      onPressed: () => setState(() {
-                        _showImport = !_showImport;
-                        if (!_showImport) _resetImport();
-                      }),
-                      icon: AppIcon(_showImport ? 'close-circle' : 'document-upload', size: iconSize, color: Colors.white),
-                      label: Text(_showImport ? 'Close Import' : 'Import CSV/Excel'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _showImport ? AppColors.error : AppColors.accent,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: EdgeInsets.symmetric(horizontal: hPad),
-                        textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-                      ),
-                    ),
+                if (_drilldownClass == null && _drilldownStudent == null)
+                  Builder(builder: (context) {
+                  // Fee Demand import is available to Admin as well as accountant
+                  // / super-admin (Admin can both manage/approve AND import demands).
+                  return ElevatedButton.icon(
+                    onPressed: () => setState(() {
+                      _showImport = !_showImport;
+                      if (!_showImport) _resetImport();
+                    }),
+                    icon: AppIcon(_showImport ? 'close-circle' : 'document-upload', size: AppBtn.iconSize(context), color: Colors.white),
+                    label: Text(_showImport ? 'Close Import' : 'Import CSV/Excel'),
+                    style: _showImport ? AppUI.danger(context) : null,
                   );
                 }),
-                if (!_showImport) ...[
+                if (!_showImport && _drilldownClass == null && _drilldownStudent == null) ...[
                   SizedBox(width: 8.w),
                   Builder(builder: (context) {
-                    final compact = MediaQuery.of(context).size.width <= 1366;
-                    final btnHeight = compact ? 30.0 : 40.0;
-                    final iconSize = compact ? 12.0 : 16.0;
-                    final hPad = compact ? 10.0 : 18.0;
-                    final radius = compact ? 6.0 : 10.0;
-                    final textSize = compact ? 11.0 : 13.0;
-                    return SizedBox(
-                      height: btnHeight,
-                      child: ElevatedButton.icon(
-                        onPressed: _loadFeeDemands,
-                        icon: AppIcon('refresh', size: iconSize, color: Colors.white),
-                        label: const Text('Refresh'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: EdgeInsets.symmetric(horizontal: hPad),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
-                          textStyle: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600),
-                        ),
-                      ),
+                    return OutlinedButton.icon(
+                      onPressed: _loadFeeDemands,
+                      icon: AppIcon('refresh', size: AppBtn.iconSize(context), color: AppColors.primary),
+                      label: const Text('Refresh'),
                     );
                   }),
                 ],
@@ -1194,12 +1315,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   Widget _buildForm() {
     return Container(
-      padding: EdgeInsets.all(20.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : Form(
@@ -1211,8 +1328,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     const CardTitleBlock(icon: 'receipt-2', title: 'Add Fee Demand', subtitle: 'create a new fee demand for a student'),
                     SizedBox(height: 20.h),
 
-                    // Admission No
-                    _buildLabel('Roll No *'),
+                    // Reg No
+                    _buildLabel(schoolTerm('Roll No *')),
                     TextFormField(
                       controller: _admNoController,
                       decoration: _inputDecoration('Enter admission number', filled: _admNoController.text.trim().isNotEmpty),
@@ -1223,7 +1340,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     SizedBox(height: 16.h),
 
                     // Class
-                    _buildLabel('Class'),
+                    _buildLabel(schoolTerm('Class')),
                     Builder(builder: (_) {
                       final seen = <String>{};
                       final items = <DropdownMenuItem<String>>[];
@@ -1238,7 +1355,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         borderRadius: BorderRadius.circular(12),
                         elevation: 6,
                         icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                        decoration: _inputDecoration('Select class', filled: value != null),
+                        decoration: _inputDecoration(schoolTerm('Select class'), filled: value != null),
                         items: items,
                         selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text((m.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)))).toList(),
                         onChanged: (v) => setState(() => _selectedClass = v),
@@ -1311,7 +1428,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildLabel('Semester'),
+                              _buildLabel(schoolTerm('Semester')),
                               TextFormField(
                                 controller: _feeTermController,
                                 decoration: _inputDecoration('Enter term', filled: _feeTermController.text.trim().isNotEmpty),
@@ -1403,7 +1520,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                           _dueDate != null
                               ? '${_dueDate!.day.toString().padLeft(2, '0')}/${_dueDate!.month.toString().padLeft(2, '0')}/${_dueDate!.year}'
                               : 'Select date',
-                          style: TextStyle(fontSize: 13.sp, color: _dueDate != null ? AppColors.accent : Colors.grey.shade400, fontWeight: _dueDate != null ? FontWeight.w600 : null),
+                          style: _dueDate != null
+                              ? AppUI.fieldText(context, filled: true)
+                              : AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500),
                         ),
                       ),
                     ),
@@ -1411,44 +1530,24 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
                     // Buttons
                     Builder(builder: (_) {
-                      const btnHeight = 48.0;
-                      final btnPadding = EdgeInsets.symmetric(horizontal: 28.w);
                       return Row(
                         children: [
                           Expanded(
-                            child: SizedBox(
-                              height: btnHeight,
-                              child: OutlinedButton.icon(
-                                onPressed: _resetForm,
-                                icon: const AppIcon('refresh', size: 16, color: AppColors.textPrimary),
-                                label: const Text('Clear', style: TextStyle(fontWeight: FontWeight.w600)),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppColors.textPrimary,
-                                  side: const BorderSide(color: AppColors.border),
-                                  padding: btnPadding,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                                ),
-                              ),
+                            child: OutlinedButton.icon(
+                              onPressed: _resetForm,
+                              icon: const AppIcon('refresh', size: 16, color: AppColors.primary),
+                              label: const Text('Clear'),
                             ),
                           ),
                           SizedBox(width: 12.w),
                           Expanded(
                             flex: 2,
-                            child: SizedBox(
-                              height: btnHeight,
-                              child: ElevatedButton.icon(
-                                onPressed: _isSaving ? null : _saveDemand,
-                                icon: _isSaving
-                                    ? SizedBox(width: 18.w, height: 18.h, child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                    : AppIcon('save-2', size: 18),
-                                label: Text(_isSaving ? 'Saving...' : 'Save Fee Demand', style: const TextStyle(fontWeight: FontWeight.w600)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.accent,
-                                  foregroundColor: Colors.white,
-                                  padding: btnPadding,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                                ),
-                              ),
+                            child: ElevatedButton.icon(
+                              onPressed: _isSaving ? null : _saveDemand,
+                              icon: _isSaving
+                                  ? SizedBox(width: 18.w, height: 18.h, child: const CircularProgressIndicator(strokeWidth: 2, color: AppColors.textLight))
+                                  : AppIcon('save-2', size: 18),
+                              label: Text(_isSaving ? 'Saving...' : 'Save Fee Demand'),
                             ),
                           ),
                         ],
@@ -1462,36 +1561,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   }
 
   Widget _buildLabel(String text) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 6.h),
-      child: Text(
-        text,
-        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
-      ),
+    // Callers pass "Roll No *" style labels; the kit draws the red star.
+    final req = text.trimRight().endsWith('*');
+    return AppUI.fieldLabel(
+      req ? text.trimRight().substring(0, text.trimRight().length - 1).trimRight() : text,
+      required: req,
     );
   }
 
   InputDecoration _inputDecoration(String hint, {bool filled = false}) {
-    final idle = filled ? AppColors.accent : AppColors.border;
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(fontSize: 13.sp, color: Colors.grey.shade400),
-      contentPadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10.r),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10.r),
-        borderSide: BorderSide(color: idle, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10.r),
-        borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
-      ),
-      filled: true,
-      fillColor: AppColors.surface,
-    );
+    return AppUI.field(context, hint, filled: filled);
   }
 
   Widget _buildDemandsList() {
@@ -1505,12 +1584,25 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   }
 
   List<Map<String, dynamic>> get _filteredClassSummary {
-    if (_searchQuery.isEmpty) return _classSummary;
     return _classSummary.where((c) {
-      final cls = c['stuclass']?.toString().toLowerCase() ?? '';
-      final course = c['courname']?.toString().toLowerCase() ?? '';
-      return cls.contains(_searchQuery) || course.contains(_searchQuery);
+      if (_courseFilter != null && (c['courname']?.toString() != _courseFilter)) return false;
+      if (_classFilter != null && (c['stuclass']?.toString() != _classFilter)) return false;
+      if (_searchQuery.isNotEmpty) {
+        final cls = c['stuclass']?.toString().toLowerCase() ?? '';
+        final course = c['courname']?.toString().toLowerCase() ?? '';
+        if (!cls.contains(_searchQuery) && !course.contains(_searchQuery)) return false;
+      }
+      return true;
     }).toList();
+  }
+
+  List<String> get _fdCourseOptions =>
+      (_classSummary.map((c) => c['courname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort());
+
+  List<String> get _fdClassOptions {
+    Iterable<Map<String, dynamic>> src = _classSummary;
+    if (_courseFilter != null) src = src.where((c) => c['courname']?.toString() == _courseFilter);
+    return (src.map((c) => c['stuclass']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort());
   }
 
   List<Map<String, dynamic>> get _filteredDrilldownDemands {
@@ -1567,7 +1659,31 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         g['unpaid_count'] = (g['unpaid_count'] as int) + 1;
       }
     }
-    final list = grouped.values.toList();
+    // Add students of this class who have NO feedemand row at all, so they still
+    // appear in the list (with a "No Demand" status and all-zero amounts).
+    for (final s in _drilldownAllStudents) {
+      final admNo = s['stuadmno']?.toString() ?? '';
+      if (admNo.isEmpty || grouped.containsKey(admNo)) continue;
+      grouped[admNo] = {
+        'stuadmno': admNo,
+        'stuname': s['stuname']?.toString() ?? '',
+        'courname': s['courname']?.toString(),
+        'total_demand': 0.0,
+        'total_concession': 0.0,
+        'total_paid': 0.0,
+        'total_pending': 0.0,
+        'total_fine': 0.0,
+        'demand_count': 0,
+        'paid_count': 0,
+        'unpaid_count': 0,
+        'no_demand': true,
+      };
+    }
+    // Order the student list alphabetically by name.
+    final list = grouped.values.toList()
+      ..sort((a, b) => (a['stuname']?.toString() ?? '')
+          .toLowerCase()
+          .compareTo((b['stuname']?.toString() ?? '').toLowerCase()));
     if (_searchQuery.isNotEmpty) {
       return list.where((s) {
         final admNo = s['stuadmno']?.toString().toLowerCase() ?? '';
@@ -1591,28 +1707,34 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   }
 
   Widget _buildClassCards() {
-    final summaries = _filteredClassSummary;
-    if (summaries.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppIcon('message-text', size: 48.sp, color: AppColors.textSecondary.withValues(alpha: 0.4)),
-            SizedBox(height: 8.h),
-            const Text('No fee demands found', style: TextStyle(color: AppColors.textSecondary)),
-          ],
-        ),
+    final all = _filteredClassSummary;
+    if (all.isEmpty) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+        child: Column(children: [
+          _fdFilterRow(),
+          SizedBox(height: 40.h),
+          AppUI.empty(icon: 'receipt-edit', title: 'No fee demands found', why: schoolTerm('Generate demands from the class fee template, or import them.')),
+        ]),
       );
     }
+    final pageCount = (all.length / _fdPerPage).ceil();
+    if (_fdPage >= pageCount) _fdPage = pageCount - 1;
+    if (_fdPage < 0) _fdPage = 0;
+    final start = _fdPage * _fdPerPage;
+    final summaries = all.sublist(start, (start + _fdPerPage).clamp(0, all.length));
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
-      child: Container(
+      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 12.h),
+      child: Column(children: [
+        _fdFilterRow(),
+        SizedBox(height: 12.h),
+        Expanded(child: Container(
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
         child: Column(
           children: [
@@ -1624,14 +1746,14 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               color: AppColors.tableHeadBg,
               child: Row(
                 children: [
-                  Expanded(child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                  Expanded(child: Text('CLASS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                  Expanded(child: Text('STUDENTS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
-                  Expanded(child: Text('TOTAL DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('CONCESSION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('COLLECTED', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                  Expanded(child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
+                  Expanded(child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                  Expanded(child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
+                  Expanded(child: Text('STUDENTS', style: AppUI.tableHead, textAlign: TextAlign.center)),
+                  Expanded(child: Text('TOTAL DEMAND', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                  Expanded(child: Text('CONCESSION', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                  Expanded(child: Text('COLLECTED', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                  Expanded(child: Text('FINE', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                  Expanded(child: Text('PENDING', style: AppUI.tableHead, textAlign: TextAlign.right)),
                   SizedBox(width: 32.w),
                 ],
               ),
@@ -1655,18 +1777,21 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     onTap: () => _loadDrilldown(className, courseName: s['courname']?.toString()),
                     child: Container(
                       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                      color: i.isEven ? Colors.white : AppColors.surface,
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        border: Border(bottom: BorderSide(color: AppColors.divider)),
+                      ),
                       child: Row(
                         children: [
-                          Expanded(child: Text(s['courname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                          Expanded(child: Text(className, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary))),
-                          Expanded(child: Text('$studentCount', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.center)),
-                          Expanded(child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
-                          Expanded(child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right)),
-                          Expanded(child: Text('${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right)),
-                          Expanded(child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right)),
-                          Expanded(child: Text('${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.warning), textAlign: TextAlign.right)),
-                          SizedBox(width: 32.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary)),
+                          Expanded(child: Text(s['courname']?.toString() ?? '-', style: AppUI.cell)),
+                          Expanded(child: Text(className, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700))),
+                          Expanded(child: Text('$studentCount', style: AppUI.cell, textAlign: TextAlign.center)),
+                          Expanded(child: Text('${_formatAmount(totalDemand)}', style: AppUI.money, textAlign: TextAlign.right)),
+                          Expanded(child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: AppUI.money, textAlign: TextAlign.right)),
+                          Expanded(child: Text('${_formatAmount(totalPaid)}', style: AppUI.money.copyWith(color: AppColors.success), textAlign: TextAlign.right)),
+                          Expanded(child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: AppUI.money.copyWith(color: totalFine > 0 ? AppColors.warning : AppColors.textLight), textAlign: TextAlign.right)),
+                          Expanded(child: Text('${_formatAmount(totalPending)}', style: AppUI.money.copyWith(color: AppColors.warning), textAlign: TextAlign.right)),
+                          SizedBox(width: 32.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textLight)),
                         ],
                       ),
                     ),
@@ -1678,28 +1803,106 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             // Total footer row
             Container(
               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppColors.tableHeadBg,
-                border: const Border(top: BorderSide(color: AppColors.border)),
+                border: Border(top: BorderSide(color: AppColors.cardBorder)),
               ),
               child: Row(
                 children: [
-                  Expanded(child: Text('TOTAL', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
+                  Expanded(child: Text('TOTAL', style: AppUI.tableHead.copyWith(color: AppColors.textPrimary))),
                   const Expanded(child: SizedBox.shrink()),
-                  Expanded(child: Text('${summaries.fold<int>(0, (sum, s) => sum + ((s['student_count'] as num?)?.toInt() ?? 0))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.center)),
-                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_demand'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
-                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_concession'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary), textAlign: TextAlign.right)),
-                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_paid'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.success), textAlign: TextAlign.right)),
-                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_fine'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.orange), textAlign: TextAlign.right)),
-                  Expanded(child: Text('${_formatAmount(summaries.fold<double>(0, (sum, s) => sum + ((s['total_pending'] as num?)?.toDouble() ?? 0)))}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.warning), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${all.fold<int>(0, (sum, s) => sum + ((s['student_count'] as num?)?.toInt() ?? 0))}', style: AppUI.money, textAlign: TextAlign.center)),
+                  Expanded(child: Text('${_formatAmount(all.fold<double>(0, (sum, s) => sum + ((s['total_demand'] as num?)?.toDouble() ?? 0)))}', style: AppUI.money.copyWith(fontWeight: FontWeight.w800), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(all.fold<double>(0, (sum, s) => sum + ((s['total_concession'] as num?)?.toDouble() ?? 0)))}', style: AppUI.money.copyWith(fontWeight: FontWeight.w800), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(all.fold<double>(0, (sum, s) => sum + ((s['total_paid'] as num?)?.toDouble() ?? 0)))}', style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.success), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(all.fold<double>(0, (sum, s) => sum + ((s['total_fine'] as num?)?.toDouble() ?? 0)))}', style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.warning), textAlign: TextAlign.right)),
+                  Expanded(child: Text('${_formatAmount(all.fold<double>(0, (sum, s) => sum + ((s['total_pending'] as num?)?.toDouble() ?? 0)))}', style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.warning), textAlign: TextAlign.right)),
                   SizedBox(width: 32.w),
                 ],
               ),
             ),
           ],
         ),
-      ),
+      )),
+      SizedBox(height: 10.h),
+      _fdPaginationBar(all.length, pageCount),
+    ]),
     );
+  }
+
+  // Course / Class filter row (main class list only).
+  Widget _fdFilterRow() {
+    return Row(children: [
+      _fdDropdown(schoolTerm('Course'), _courseFilter, schoolTerm('All Courses'), _fdCourseOptions, (v) => setState(() { _courseFilter = v; _classFilter = null; _fdPage = 0; })),
+      SizedBox(width: 14.w),
+      _fdDropdown(schoolTerm('Class'), _classFilter, schoolTerm('All Classes'), _fdClassOptions, (v) => setState(() { _classFilter = v; _fdPage = 0; })),
+      const Spacer(),
+    ]);
+  }
+
+  Widget _fdDropdown(String label, String? value, String hint, List<String> options, ValueChanged<String?> onChanged) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      AppUI.fieldLabel(label),
+      SizedBox(
+        width: 220.w,
+        child: DropdownButtonFormField<String>(
+          initialValue: options.contains(value) ? value : null,
+          isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
+          style: AppUI.fieldText(context, filled: options.contains(value)),
+          decoration: AppUI.field(context, hint, filled: options.contains(value)),
+          items: [
+            DropdownMenuItem<String>(value: null, child: Text(hint, overflow: TextOverflow.ellipsis)),
+            ...options.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))),
+          ],
+          onChanged: onChanged,
+        ),
+      ),
+    ]);
+  }
+
+  Widget _fdPaginationBar(int total, int pageCount) {
+    final from = total == 0 ? 0 : _fdPage * _fdPerPage + 1;
+    final to = ((_fdPage + 1) * _fdPerPage).clamp(0, total);
+    Widget navBtn(IconData ic, VoidCallback? onTap) => InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(width: 32, height: 32, alignment: Alignment.center, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)), child: Icon(ic, size: 18, color: onTap == null ? AppColors.textLight : AppColors.textPrimary)),
+        );
+    // Windowed page numbers around the current page (max 5).
+    final startPage = (_fdPage - 2).clamp(0, (pageCount - 5).clamp(0, pageCount)).toInt();
+    final endPage = (startPage + 5).clamp(0, pageCount).toInt();
+    return Row(children: [
+      Text(AppUI.showing(from, to, total), style: AppUI.muted),
+      const Spacer(),
+      navBtn(Icons.chevron_left, _fdPage > 0 ? () => setState(() => _fdPage--) : null),
+      SizedBox(width: 6.w),
+      for (int p = startPage; p < endPage; p++) ...[
+        InkWell(
+          onTap: () => setState(() => _fdPage = p),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(width: 32, height: 32, alignment: Alignment.center, decoration: BoxDecoration(color: p == _fdPage ? AppColors.primary : Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: p == _fdPage ? AppColors.primary : AppColors.border)), child: Text('${p + 1}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: p == _fdPage ? Colors.white : AppColors.textPrimary))),
+        ),
+        SizedBox(width: 6.w),
+      ],
+      navBtn(Icons.chevron_right, _fdPage < pageCount - 1 ? () => setState(() => _fdPage++) : null),
+      SizedBox(width: 14.w),
+      SizedBox(
+        width: 120.w,
+        child: DropdownButtonFormField<int>(
+          initialValue: _fdPerPage,
+          isExpanded: true,
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: AppUI.fieldText(context),
+          decoration: AppUI.field(context, ''),
+          items: const [10, 20, 50, 100].map((n) => DropdownMenuItem(value: n, child: Text('$n / page'))).toList(),
+          onChanged: (v) => setState(() { _fdPerPage = v ?? 20; _fdPage = 0; }),
+        ),
+      ),
+    ]);
   }
 
   String _formatDueDate(String dateStr) {
@@ -1723,18 +1926,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
     final students = _studentSummary;
     if (students.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppIcon('message-text', size: 48.sp, color: AppColors.textSecondary.withValues(alpha: 0.4)),
-            SizedBox(height: 8.h),
-            Text(
-              _searchQuery.isNotEmpty ? 'No matching students' : 'No students found',
-              style: const TextStyle(color: AppColors.textSecondary),
-            ),
-          ],
-        ),
+      return AppUI.empty(
+        icon: 'message-text',
+        title: _searchQuery.isNotEmpty ? 'No matching students' : 'No students found',
+        why: _searchQuery.isNotEmpty
+            ? 'Nothing in this class matches the search. Clear it to see every student.'
+            : 'This class has no students with fee demands yet. Use Back to pick another class.',
       );
     }
 
@@ -1744,8 +1941,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
         child: AppVerticalScrollbar(
                 header: Container(
@@ -1753,15 +1950,15 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 color: AppColors.tableHeadBg,
                 child: Row(
                   children: [
-                    Expanded(flex: 1, child: Text('ROLL NO', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 2, child: Text('NAME', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('COURSE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3))),
-                    Expanded(flex: 1, child: Text('DEMAND', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('CONCESSION', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('PAID', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('FINE', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('PENDING', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.right)),
-                    Expanded(flex: 1, child: Text('STATUS', style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3), textAlign: TextAlign.center)),
+                    Expanded(flex: 1, child: Text(schoolTerm('ROLL NO'), style: AppUI.tableHead)),
+                    Expanded(flex: 2, child: Text('NAME', style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                    Expanded(flex: 1, child: Text('DEMAND', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('CONCESSION', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('PAID', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('FINE', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('PENDING', style: AppUI.tableHead, textAlign: TextAlign.right)),
+                    Expanded(flex: 1, child: Text('STATUS', style: AppUI.tableHead, textAlign: TextAlign.center)),
                     SizedBox(width: 28.w),
                   ],
                 ),
@@ -1781,7 +1978,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final totalFine = (s['total_fine'] as double?) ?? 0;
                     final totalPending = (s['total_pending'] as double?) ?? 0;
                     final unpaidCount = (s['unpaid_count'] as int?) ?? 0;
+                    final noDemand = s['no_demand'] == true;
                     final allPaid = unpaidCount == 0;
+                    final statusLabel =
+                        noDemand ? 'No Demand' : (allPaid ? 'Paid' : 'Unpaid');
+                    final statusKind = noDemand
+                        ? AppStatus.neutral
+                        : (allPaid ? AppStatus.success : AppStatus.warning);
 
                     return InkWell(
                       onTap: () => setState(() {
@@ -1790,63 +1993,56 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _searchQuery = '';
                         _searchController.clear();
                       }),
-                      child: Padding(
+                      child: Container(
                         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: AppColors.divider)),
+                        ),
                         child: Row(
                           children: [
                             Expanded(
                               flex: 1,
-                              child: Text(admNo, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+                              child: Text(admNo, style: AppUI.cell.copyWith(fontWeight: FontWeight.w600, color: AppColors.primary)),
                             ),
                             Expanded(
                               flex: 2,
                               child: Text(
                                 name.isNotEmpty ? name : '-',
-                                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                                style: AppUI.cell.copyWith(fontWeight: FontWeight.w600),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text(s['courname']?.toString() ?? '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                              child: Text(s['courname']?.toString() ?? '-', style: AppUI.cell),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('${_formatAmount(totalDemand)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalDemand)}', style: AppUI.money, textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary), textAlign: TextAlign.right),
+                              child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: AppUI.money, textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('${_formatAmount(totalPaid)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.success), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalPaid)}', style: AppUI.money.copyWith(color: AppColors.success), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalFine > 0 ? Colors.orange : AppColors.textSecondary), textAlign: TextAlign.right),
+                              child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: AppUI.money.copyWith(color: totalFine > 0 ? AppColors.warning : AppColors.textLight), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
-                              child: Text('${_formatAmount(totalPending)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: totalPending > 0 ? AppColors.warning : AppColors.success), textAlign: TextAlign.right),
+                              child: Text('${_formatAmount(totalPending)}', style: AppUI.money.copyWith(color: totalPending > 0 ? AppColors.warning : AppColors.success), textAlign: TextAlign.right),
                             ),
                             Expanded(
                               flex: 1,
                               child: Center(
-                                child: Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-                                  decoration: BoxDecoration(
-                                    color: allPaid ? AppColors.success.withValues(alpha: 0.1) : AppColors.warning.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(6.r),
-                                  ),
-                                  child: Text(
-                                    allPaid ? 'Paid' : 'Unpaid',
-                                    style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w600, color: allPaid ? AppColors.success : AppColors.warning),
-                                  ),
-                                ),
+                                child: AppUI.chip(statusLabel, statusKind),
                               ),
                             ),
-                            SizedBox(width: 28.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textSecondary)),
+                            SizedBox(width: 28.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textLight)),
                           ],
                         ),
                       ),
@@ -1883,18 +2079,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         return _termIndex(ta).compareTo(_termIndex(tb));
       });
     if (demands.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppIcon('message-text', size: 48.sp, color: AppColors.textSecondary.withValues(alpha: 0.4)),
-            SizedBox(height: 8.h),
-            Text(
-              _searchQuery.isNotEmpty ? 'No matching records' : 'No fee demands found',
-              style: const TextStyle(color: AppColors.textSecondary),
-            ),
-          ],
-        ),
+      return AppUI.empty(
+        icon: 'message-text',
+        title: _searchQuery.isNotEmpty ? 'No matching records' : 'No fee demands found',
+        why: _searchQuery.isNotEmpty
+            ? 'Nothing matches the search. Clear it to see every demand.'
+            : 'This student has no fee demands yet. Use Back to pick another student.',
       );
     }
 
@@ -1917,31 +2107,35 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8.r),
-          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          border: Border.all(color: AppColors.cardBorder),
         ),
-        child: Builder(builder: (context) {
-          // Fixed pixel widths: S No. stays narrow; every other column is an
-          // equal fixed width. The 40 is the 20px row padding on each side.
-          const widths = <double>[70, 200, 200, 200, 200, 200, 200, 200, 200, 200];
+        child: LayoutBuilder(builder: (context, constraints) {
+          // Right-sized base widths so the whole table (through STATUS) fits
+          // the viewport without the DUE DATE column being clipped at the
+          // screen edge. The 40 is the 20px row padding on each side. Order:
+          // S No, SEMESTER, FEE TYPE, AMOUNT, CONCESSION, PAID, FINE, BALANCE,
+          // DUE DATE, STATUS.
+          const baseWidths = <double>[60, 120, 170, 120, 130, 120, 100, 120, 140, 110];
+          final naturalWidth = baseWidths.reduce((a, b) => a + b) + 40;
+          // When the viewport is wider than the natural table, scale every
+          // column up proportionally so the table fills the space (no empty
+          // gutter on the right); when it's narrower, keep natural widths and
+          // let the row scroll horizontally.
+          final avail = constraints.maxWidth;
+          final scale = (avail.isFinite && avail > naturalWidth)
+              ? avail / naturalWidth
+              : 1.0;
+          final widths = [for (final w in baseWidths) w * scale];
           final tableWidth = widths.reduce((a, b) => a + b) + 40;
           const headers = <String>[
             'S No.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'CONCESSION', 'PAID',
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
           ];
-          final hStyle = TextStyle(
-              fontSize: 12.sp,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
-              letterSpacing: 0.3);
-          final cStyle = TextStyle(
-              fontSize: 13.sp,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary);
-          final tStyle = TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14.sp,
-              color: AppColors.textPrimary);
+          final hStyle = AppUI.tableHead;
+          final cStyle = AppUI.cell;
+          final mStyle = AppUI.money;
+          final tStyle = AppUI.money.copyWith(fontWeight: FontWeight.w800);
           // AMOUNT/CONCESSION/PAID/FINE/BALANCE are right-aligned.
           bool rightAlign(int i) => i >= 3 && i <= 7;
           Widget cell(int i, Widget child) => SizedBox(
@@ -1959,6 +2153,39 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   ),
                 ),
               );
+
+          bool isArrear(Map<String, dynamic> d) =>
+              (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+          final regulars = demands.where((d) => !isArrear(d)).toList();
+          final arrears = demands.where(isArrear).toList();
+          // Display items: a section banner (String) then its demand rows, so
+          // the type is always shown — even a single fee gets REGULAR/ARREAR.
+          // Serial numbers restart at 1 within each section.
+          final rowItems = <Object>[];
+          final serials = <int>[];
+          void addGroup(String label, List<Map<String, dynamic>> list) {
+            rowItems.add(label);
+            serials.add(0);
+            for (int k = 0; k < list.length; k++) {
+              rowItems.add(list[k]);
+              serials.add(k + 1);
+            }
+          }
+          if (regulars.isNotEmpty && arrears.isNotEmpty) {
+            addGroup('REGULAR FEES', regulars);
+            addGroup('ARREAR FEES', arrears);
+          } else {
+            addGroup(arrears.isNotEmpty ? 'ARREAR FEES' : 'REGULAR FEES', demands);
+          }
+          Widget bannerRow(String title) => Container(
+                width: tableWidth,
+                color: AppColors.primaryLight,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8.h),
+                alignment: Alignment.centerLeft,
+                child: Text(title,
+                    style: AppUI.caps.copyWith(color: AppColors.primary)),
+              );
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
@@ -1972,21 +2199,24 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     EdgeInsets.symmetric(horizontal: 20, vertical: 12.h),
                 child: Row(children: [
                   for (int i = 0; i < headers.length; i++)
-                    cell(i, Text(headers[i], style: hStyle)),
+                    cell(i, Text(schoolTerm(headers[i]), style: hStyle)),
                 ]),
               ),
-              Container(height: 1, color: AppColors.border),
+              Container(height: 1, color: AppColors.divider),
               // Scrolling body.
               Expanded(
                 child: AppVerticalScrollbar(
                   builder: (context, sc) => ListView.separated(
                   controller: sc,
-                  itemCount: demands.length,
-                  separatorBuilder: (_, __) => Divider(
+                  itemCount: rowItems.length,
+                  separatorBuilder: (_, __) => const Divider(
                       height: 1,
-                      color: AppColors.border.withValues(alpha: 0.5)),
+                      color: AppColors.divider),
                   itemBuilder: (_, i) {
-                    final d = demands[i];
+                    final item = rowItems[i];
+                    if (item is String) return bannerRow(item);
+                    final d = item as Map<String, dynamic>;
+                    final serial = serials[i];
                     final term = d['demfeeterm']?.toString() ?? '-';
                     final feeType = d['demfeetype']?.toString() ?? '-';
                     final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
@@ -2002,23 +2232,23 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final dueDate = d['duedate']?.toString() ?? '-';
                     final formattedDueDate = _formatDueDate(dueDate);
                     return Container(
-                      color: i.isEven ? Colors.white : AppColors.surface,
+                      color: Colors.white,
                       padding: EdgeInsets.symmetric(
                           horizontal: 20, vertical: 11.h),
                       child: Row(children: [
-                        cell(0, Text('${i + 1}', style: cStyle)),
+                        cell(0, Text('$serial', style: cStyle)),
                         cell(1, Text(term, style: cStyle)),
                         cell(2, Text(feeType, style: cStyle)),
                         cell(3,
-                            Text('${_formatAmount(amt)}', style: cStyle)),
+                            Text('${_formatAmount(amt)}', style: mStyle)),
                         cell(
                             4,
                             Text(con > 0 ? '${_formatAmount(con)}' : '-',
-                                style: cStyle)),
+                                style: mStyle)),
                         cell(
                             5,
                             Text('${_formatAmount(paid)}',
-                                style: cStyle)),
+                                style: mStyle)),
                         cell(
                             6,
                             Text(
@@ -2026,37 +2256,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                     ? '${_formatAmount(fineDisplay)}'
                                     : '-',
                                 style: fineDisplay > 0
-                                    ? TextStyle(
-                                        fontSize: 13.sp,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.orange)
-                                    : cStyle)),
+                                    ? mStyle.copyWith(color: AppColors.warning)
+                                    : mStyle)),
                         cell(
                             7,
                             Text('${_formatAmount(bal)}',
-                                style: cStyle)),
+                                style: mStyle)),
                         cell(8, Text(formattedDueDate, style: cStyle)),
                         cell(
                             9,
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: isPaid
-                                    ? AppColors.success
-                                        .withValues(alpha: 0.1)
-                                    : AppColors.warning
-                                        .withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8.r),
-                              ),
-                              child: Text(isPaid ? 'Paid' : 'Pending',
-                                  style: TextStyle(
-                                      fontSize: 12.sp,
-                                      fontWeight: FontWeight.w700,
-                                      color: isPaid
-                                          ? AppColors.success
-                                          : AppColors.warning)),
-                            )),
+                            AppUI.chip(isPaid ? 'Paid' : 'Pending',
+                                isPaid ? AppStatus.success : AppStatus.warning)),
                       ]),
                     );
                   },
@@ -2064,7 +2274,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                 ),
               ),
               // Total - pinned footer.
-              Container(height: 1, color: AppColors.border),
+              Container(height: 1, color: AppColors.cardBorder),
               Container(
                 color: AppColors.tableHeadBg,
                 padding:
@@ -2109,12 +2319,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     if (_importStep == 3) return _buildImportDoneStep();
 
     return Container(
-      padding: EdgeInsets.all(16.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10.r),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2126,85 +2332,62 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   _showImport = false;
                   _resetImport();
                 }),
-                borderRadius: BorderRadius.circular(MediaQuery.of(context).size.width <= 1366 ? 6 : 10),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 child: Builder(builder: (context) {
-                  final compact = MediaQuery.of(context).size.width <= 1366;
-                  final hPad = compact ? 10.0 : 14.0;
-                  final radius = compact ? 6.0 : 10.0;
-                  final textSize = compact ? 11.0 : 13.0;
+                  final compact = AppUI.compact(context);
+                  final hPad = compact ? 12.0 : 14.0;
                   final innerGap = compact ? 4.0 : 6.0;
                   return Container(
                     height: AppBtn.height(context),
                     padding: EdgeInsets.symmetric(horizontal: hPad),
                     decoration: BoxDecoration(
-                      color: AppColors.accent,
-                      borderRadius: BorderRadius.circular(radius),
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(AppUI.controlRadius),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         AppIcon.linear('Chevron Left', size: AppBtn.iconSize(context), color: Colors.white),
                         SizedBox(width: innerGap),
-                        Text('Back', style: TextStyle(fontSize: textSize, fontWeight: FontWeight.w600, color: Colors.white)),
+                        Text('Back', style: AppUI.label.copyWith(color: Colors.white)),
                       ],
                     ),
                   );
                 }),
               ),
               SizedBox(width: 12.w),
-              AppIcon('document-upload', size: 20, color: AppColors.accent),
-              SizedBox(width: 8.w),
-              Text('Import Fee Demands', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w700)),
+              AppUI.iconTile('document-upload', size: 18),
+              SizedBox(width: 12.w),
+              Text('Import Fee Demands', style: AppUI.cardTitle),
               const Spacer(),
               if (_fileName != null)
-                Text(_fileName!, style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+                Text(_fileName!, style: AppUI.muted),
               SizedBox(width: 12.w),
               ElevatedButton.icon(
                 onPressed: _pickFile,
                 icon: AppIcon('document-upload', size: 16),
                 label: const Text('Import'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
               SizedBox(width: 8.w),
               Builder(builder: (_) {
                 final hasErrors = _rows.isNotEmpty && _cellErrors.isNotEmpty;
-                return ElevatedButton.icon(
+                return OutlinedButton.icon(
                   onPressed: hasErrors ? _exportRowsWithErrors : _exportTemplate,
                   icon: AppIcon(hasErrors ? 'document-download' : 'grid-1', size: 16),
                   label: Text(hasErrors ? 'Export with Errors' : 'Format to Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF217346),
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                    textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                  ),
                 );
               }),
               SizedBox(width: 8.w),
-              ElevatedButton.icon(
+              OutlinedButton.icon(
                 onPressed: _exportSampleData,
                 icon: AppIcon('document-download', size: 16),
                 label: const Text('Sample Data'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE65100),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
             ],
           ),
           if (_errorMsg != null) ...[
             SizedBox(height: 8.h),
-            Text(_errorMsg!, style: TextStyle(color: AppColors.error, fontSize: 13.sp)),
+            Text(_errorMsg!, style: AppUI.body.copyWith(fontSize: 13.sp, color: AppColors.error)),
           ],
           SizedBox(height: 12.h),
 
@@ -2212,8 +2395,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(8.r),
+                border: Border.all(color: AppColors.cardBorder),
+                borderRadius: BorderRadius.circular(AppUI.controlRadius),
               ),
               clipBehavior: Clip.hardEdge,
               child: Scrollbar(
@@ -2230,9 +2413,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   Container(
                     decoration: BoxDecoration(
                       color: AppColors.tableHeadBg,
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(7.r),
-                        topRight: Radius.circular(7.r),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(AppUI.controlRadius - 1),
+                        topRight: Radius.circular(AppUI.controlRadius - 1),
                       ),
                     ),
                     child: Row(
@@ -2240,37 +2423,30 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         _gridHeaderCell('S.No', width: _wSno, center: true),
                         _gridHeaderCell('Demand No', width: _wDemno),
                         _gridHeaderCell('Type', width: _wType),
-                        _gridHeaderCell('Roll No *', width: _wRoll),
-                        _gridHeaderCell('Class *', width: _wClass),
-                        _gridHeaderCell('Semester *', width: _wSem),
+                        _gridHeaderCell(schoolTerm('Roll No *'), width: _wRoll),
+                        _gridHeaderCell(schoolTerm('Class *'), width: _wClass),
+                        _gridHeaderCell(schoolTerm('Semester *'), width: _wSem),
                         _gridHeaderCell('Fee Type *', width: _wFeeType),
                         _gridHeaderCell('Year *', width: _wYear),
                         _gridHeaderCell('Due Amt *', width: _wDueAmt, center: true),
                         _gridHeaderCell('Con. Cat', width: _wConCat),
                         _gridHeaderCell('Con. Amt', width: _wConAmt, center: true),
                         _gridHeaderCell('Due Date *', width: _wDueDate, center: true),
-                        _gridHeaderCell('Class Id', width: _wClaId, center: true),
+                        _gridHeaderCell(schoolTerm('Class Id'), width: _wClaId, center: true),
                         _gridHeaderCell('Sem Id', width: _wSemId, center: true),
                         _gridHeaderCell('Fee Id', width: _wFeeId, center: true),
                         _gridHeaderCell('CF Id', width: _wCfId, center: true),
-                        _gridHeaderCell('Arrear Class', width: _wArrear),
+                        _gridHeaderCell(schoolTerm('Arrear Class'), width: _wArrear),
                       ],
                     ),
                   ),
                   // Data rows
                   Expanded(
                     child: _rows.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AppIcon('element-4', size: 48.sp, color: AppColors.textSecondary.withValues(alpha: 0.3)),
-                                SizedBox(height: 8.h),
-                                Text('No data loaded', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                                SizedBox(height: 4.h),
-                                Text('Click Browse to load a CSV or Excel file', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
-                              ],
-                            ),
+                        ? AppUI.empty(
+                            icon: 'element-4',
+                            title: 'No data loaded',
+                            why: 'Click Browse to load a CSV or Excel file',
                           )
                         : ListView.builder(
                             itemCount: _rows.length,
@@ -2287,12 +2463,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                   child: Tooltip(
                                     message: rowTooltip,
                                     child: Container(
-                                      color: const Color(0xFFFCE4E4),
+                                      color: AppColors.errorBg,
                                       alignment: center ? Alignment.center : Alignment.centerLeft,
                                       padding: EdgeInsets.symmetric(horizontal: 8.w),
                                       child: Text(
                                         _mappedCell(row, key),
-                                        style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                                        style: AppUI.cell.copyWith(fontWeight: FontWeight.w600, color: AppColors.error),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
@@ -2301,7 +2477,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                               }
                               return Container(
                                 padding: EdgeInsets.symmetric(vertical: 12.h),
-                                color: isEven ? Colors.white : AppColors.surface,
+                                decoration: BoxDecoration(
+                                  color: isEven ? Colors.white : AppColors.surface,
+                                  border: const Border(bottom: BorderSide(color: AppColors.divider)),
+                                ),
                                 child: Row(
                                   children: [
                                     _gridDataCell('${index + 1}', width: _wSno, center: true),
@@ -2350,40 +2529,24 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             children: [
               Text(
                 '${_rows.length} rows',
-                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                style: AppUI.muted,
               ),
               const Spacer(),
               TextButton.icon(
                 onPressed: _rows.isEmpty ? null : () => _validateImportData(),
                 icon: AppIcon.linear('tick-circle', size: 16),
                 label: const Text('Validate'),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary,
-                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500),
-                ),
               ),
               SizedBox(width: 8.w),
               ElevatedButton.icon(
-                onPressed: _rows.isNotEmpty && _mappings.contains('stuadmno') && _mappings.contains('feeamount') ? _startImport : null,
+                // Enabled only after a successful Validate (no row errors).
+                onPressed: _isValidated && _rows.isNotEmpty && _mappings.contains('stuadmno') && _mappings.contains('feeamount') ? _startImport : null,
                 icon: AppIcon('save-2', size: 16),
                 label: const Text('Save'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
               ),
               SizedBox(width: 8.w),
               OutlinedButton(
                 onPressed: _resetImport,
-                style: OutlinedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-                  textStyle: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600),
-                ),
                 child: const Text('Close'),
               ),
             ],
@@ -2409,15 +2572,15 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final child = Container(
       padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 12.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
-      decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: AppColors.border)),
+      decoration: const BoxDecoration(
+        border: Border(right: BorderSide(color: AppColors.divider)),
       ),
       child: Text(
         text.toUpperCase(),
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: 0.3.w),
+        style: AppUI.tableHead,
       ),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
@@ -2427,10 +2590,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final child = Container(
       padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
-      decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: AppColors.border.withValues(alpha: 0.3))),
+      decoration: const BoxDecoration(
+        border: Border(right: BorderSide(color: AppColors.divider)),
       ),
-      child: Text(text, style: TextStyle(fontSize: 13.sp, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+      child: Text(text, style: AppUI.cell, overflow: TextOverflow.ellipsis),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
   }
@@ -2511,23 +2674,22 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     // Remove default Sheet1
     excel.delete('Sheet1');
 
-    // Asterisk marks columns the importer requires (matches _requiredFields:
-    // stuadmno, stuclass, demfeetype, yr_id, demfeeterm, feeamount, duedate).
+    // BUILT FROM THE FIELD LIST, not typed out again.
+    //
+    // This template used to carry its own hand-written array of 14 headings
+    // while the preview grid, the Sample Data sheet and the importer all work
+    // from the 16 in _importFieldKeys. It was missing "Type" and "Arrear
+    // Class", so a sheet filled in from the downloaded template could not
+    // describe an arrear at all, and its columns no longer lined up with the
+    // grid the user was looking at. Deriving all three from one list is the
+    // only way they stay in step.
+    //
+    // The asterisk is likewise derived: it marks exactly the columns in
+    // _requiredFields, so adding a required field cannot leave the template
+    // claiming it is optional.
     final headers = [
-      'Demand No',
-      'Roll No *',
-      'Class *',
-      'Semester *',
-      'Fee Type *',
-      'Fee Year *',
-      'Due Amount *',
-      'Con. Category',
-      'Concession Amount',
-      'Due Date *',
-      'Class Id',
-      'Semester id',
-      'Fee Id',
-      'Class Fee Id',
+      for (final k in _importFieldKeys)
+        '${_importFieldLabels[k] ?? k}${_requiredFields.contains(k) ? ' *' : ''}',
     ];
 
     final headerStyle = xl.CellStyle(
@@ -2536,11 +2698,21 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       bold: true,
     );
 
-    const columnWidths = [16.0, 18.0, 14.0, 14.0, 16.0, 12.0, 14.0, 16.0, 18.0, 14.0, 10.0, 12.0, 10.0, 12.0];
+    // Per field, so a reordered or added column cannot shift every width after
+    // it the way a positional list did.
+    const widthByKey = <String, double>{
+      'demno': 16, 'demseqtype': 12, 'stuadmno': 18, 'stuclass': 20,
+      'demfeeterm': 14, 'demfeetype': 22, 'yr_id': 14, 'feeamount': 14,
+      'con_id': 16, 'conamount': 18, 'duedate': 14, 'cla_id': 10,
+      'sem_id': 12, 'fee_id': 10, 'cf_id': 13, 'arrearclass': 18,
+    };
+    final columnWidths = [
+      for (final k in _importFieldKeys) widthByKey[k] ?? 14.0,
+    ];
 
     for (int i = 0; i < headers.length; i++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-      cell.value = xl.TextCellValue(headers[i]);
+      cell.value = xl.TextCellValue(schoolTerm(headers[i]));
       cell.cellStyle = headerStyle;
       sheet.setColumnWidth(i, columnWidths[i]);
     }
@@ -2597,7 +2769,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
     for (int i = 0; i < headers.length; i++) {
       final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-      cell.value = xl.TextCellValue(headers[i]);
+      cell.value = xl.TextCellValue(schoolTerm(headers[i]));
       cell.cellStyle = headerStyle;
       sheet.setColumnWidth(i, 18);
     }
@@ -2645,6 +2817,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     setState(() {
       _rowErrors = rowErrors;
       _cellErrors = cellErrors;
+      // Save unlocks only when validation passes with zero row errors.
+      _isValidated = rowErrors.isEmpty && _rows.isNotEmpty;
     });
     if (rowErrors.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2663,21 +2837,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       child: Container(
         width: 400.w,
         padding: EdgeInsets.all(32.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10.r),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const CircularProgressIndicator(),
             SizedBox(height: 20.h),
-            Text('Importing... ${_imported + _skipped} / $_total', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600)),
+            Text('Importing... ${_imported + _skipped} / $_total', style: AppUI.body.copyWith(fontWeight: FontWeight.w700)),
             SizedBox(height: 12.h),
-            LinearProgressIndicator(value: progress, backgroundColor: AppColors.border, valueColor: const AlwaysStoppedAnimation(AppColors.accent)),
+            LinearProgressIndicator(value: progress, backgroundColor: AppColors.divider, valueColor: const AlwaysStoppedAnimation(AppColors.primary)),
             SizedBox(height: 8.h),
-            Text('$_imported imported, $_skipped skipped', style: TextStyle(fontSize: 13.sp, color: AppColors.textSecondary)),
+            Text('$_imported imported, $_skipped skipped', style: AppUI.muted),
           ],
         ),
       ),
@@ -2689,32 +2859,41 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       child: Container(
         width: 500.w,
         padding: EdgeInsets.all(32.w),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10.r),
-          border: Border.all(color: AppColors.border),
-        ),
+        decoration: AppUI.card(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             AppIcon('tick-circle', size: 64.sp, color: AppColors.success),
             SizedBox(height: 16.h),
-            Text('Import Complete', style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700)),
+            Text('Import Complete', style: AppUI.cardTitle),
             SizedBox(height: 12.h),
-            Text('$_imported imported successfully, $_skipped skipped', style: TextStyle(fontSize: 13.sp)),
+            Text('$_imported imported successfully, $_skipped skipped',
+                textAlign: TextAlign.center,
+                style: AppUI.body),
+            // Say how many of those were UPDATES. Without it a re-import reads
+            // as "218 imported" whether it raised 218 new demands or refreshed
+            // 218 existing ones, and the difference is the whole ledger.
+            if (_willUpdate > 0) ...[
+              SizedBox(height: 4.h),
+              Text(
+                  '$_willUpdate updated a demand the student already had'
+                  ' · ${_imported - _willUpdate} newly raised',
+                  textAlign: TextAlign.center,
+                  style: AppUI.muted),
+            ],
             if (_importErrors.isNotEmpty) ...[
               SizedBox(height: 16.h),
               Container(
                 height: 150.h,
                 padding: EdgeInsets.all(12.w),
                 decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(8.r),
+                  color: AppColors.errorBg,
+                  borderRadius: BorderRadius.circular(AppUI.controlRadius),
                 ),
                 child: ListView(
                   children: _importErrors.map((e) => Padding(
                     padding: EdgeInsets.only(bottom: 4.h),
-                    child: Text(e, style: TextStyle(fontSize: 13.sp, color: AppColors.error)),
+                    child: Text(e, style: AppUI.body.copyWith(fontSize: 13.sp, color: AppColors.error)),
                   )).toList(),
                 ),
               ),
@@ -2722,12 +2901,6 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             SizedBox(height: 20.h),
             ElevatedButton(
               onPressed: _resetImport,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(horizontal: 28.w, vertical: 20.h),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
-              ),
               child: const Text('Done'),
             ),
           ],

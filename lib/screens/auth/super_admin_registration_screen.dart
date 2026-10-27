@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
+import '../../widgets/app_ui.dart';
 
 /// Clean message out of a FunctionException (or any other failure).
 String _friendlyError(Object e) {
@@ -189,10 +190,7 @@ class _SuperAdminRegistrationScreenState
               width: 480.w,
               padding: EdgeInsets.all(36.w),
               margin: EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16.r),
-              ),
+              decoration: AppUI.card(),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -203,17 +201,13 @@ class _SuperAdminRegistrationScreenState
                   Text(
                     'Set up Super Admin',
                     textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
-                        ),
+                    style: AppUI.pageTitle,
                   ),
                   SizedBox(height: 6.h),
                   Text(
                     'This is a one-time setup. Create the office master account that manages all institutions.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 12.sp),
+                    style: AppUI.muted,
                   ),
                   SizedBox(height: 24.h),
                   _field(_trustNameController, 'Trust Name *',
@@ -250,15 +244,9 @@ class _SuperAdminRegistrationScreenState
                       ),
                       SizedBox(width: 8.w),
                       SizedBox(
-                        height: 48.h,
+                        height: AppUI.controlHeight(context),
                         child: ElevatedButton(
                           onPressed: _sendingOtp ? null : _sendOtp,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.accent,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8.r)),
-                          ),
                           child: _sendingOtp
                               ? SizedBox(
                                   height: 16.h,
@@ -267,10 +255,7 @@ class _SuperAdminRegistrationScreenState
                                       strokeWidth: 2,
                                       valueColor: AlwaysStoppedAnimation<Color>(
                                           Colors.white)))
-                              : Text(_otpSent ? 'Resend' : 'Send OTP',
-                                  style: TextStyle(
-                                      fontSize: 12.sp,
-                                      fontWeight: FontWeight.w600)),
+                              : Text(_otpSent ? 'Resend' : 'Send OTP'),
                         ),
                       ),
                     ],
@@ -279,8 +264,7 @@ class _SuperAdminRegistrationScreenState
                     SizedBox(height: 6.h),
                     Text(
                       'OTP sent to ${_maskedPhone ?? 'your mobile'}.',
-                      style: TextStyle(
-                          color: AppColors.success, fontSize: 11.sp),
+                      style: AppUI.muted.copyWith(color: AppColors.success),
                     ),
                     SizedBox(height: 10.h),
                     TextField(
@@ -291,11 +275,7 @@ class _SuperAdminRegistrationScreenState
                         FilteringTextInputFormatter.digitsOnly,
                         LengthLimitingTextInputFormatter(6),
                       ],
-                      style: TextStyle(
-                          fontSize: 16.sp,
-                          letterSpacing: 4,
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w400),
+                      style: AppUI.fieldText(context).copyWith(letterSpacing: 4),
                       decoration: _inputDec('Enter 6-digit OTP *',
                           prefixIcon: const Icon(Icons.sms_outlined),
                           hint: '6-digit OTP',
@@ -336,20 +316,20 @@ class _SuperAdminRegistrationScreenState
                     Container(
                       padding: EdgeInsets.all(10.w),
                       decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(8.r),
-                        border: Border.all(color: Colors.red.shade200),
+                        color: AppColors.errorBg,
+                        borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         children: [
                           Icon(Icons.error_outline,
-                              size: 16.sp, color: Colors.red.shade700),
+                              size: 16.sp, color: AppColors.error),
                           SizedBox(width: 8.w),
                           Expanded(
                             child: Text(_error!,
-                                style: TextStyle(
-                                    color: Colors.red.shade700,
-                                    fontSize: 12.sp)),
+                                style: AppUI.body.copyWith(
+                                    color: AppColors.error,
+                                    fontSize: 13.sp)),
                           ),
                         ],
                       ),
@@ -358,13 +338,7 @@ class _SuperAdminRegistrationScreenState
                   SizedBox(height: 20.h),
                   ElevatedButton(
                     onPressed: _submitting ? null : _register,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 14.h),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8.r)),
-                    ),
+                    style: AppUI.primary(context),
                     child: _submitting
                         ? SizedBox(
                             height: 20.h,
@@ -375,10 +349,7 @@ class _SuperAdminRegistrationScreenState
                                   AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
                           )
-                        : Text('Create Super Admin',
-                            style: TextStyle(
-                                fontSize: 15.sp,
-                                fontWeight: FontWeight.w600)),
+                        : const Text('Create Super Admin'),
                   ),
                 ],
               ),
@@ -401,36 +372,18 @@ class _SuperAdminRegistrationScreenState
     );
   }
 
-  /// Text style for a field's value — standard dark colour at normal weight.
-  TextStyle _valueStyle(bool filled) => const TextStyle(
-        color: AppColors.textPrimary,
-        fontWeight: FontWeight.w400,
-      );
+  /// Text style for a field's value (the kit field text).
+  TextStyle _valueStyle(bool filled) => AppUI.fieldText(context);
 
-  /// Standard decoration: grey border idle, navy (primary) border on focus.
-  /// Width 1.5. Shows an in-field placeholder. The [filled] param is retained
-  /// but no longer affects the border.
+  /// The kit field with a floating label, placeholder and the caller's
+  /// prefix/suffix icons.
   InputDecoration _inputDec(String label,
       {Widget? prefixIcon, Widget? suffixIcon, String? hint, bool filled = false}) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      hintStyle: TextStyle(color: AppColors.textPrimary.withValues(alpha: 0.6)),
-      prefixIcon: prefixIcon,
+    return AppUI.field(context, hint ?? '', label: label, filled: filled).copyWith(
+      prefixIcon: prefixIcon == null
+          ? null
+          : Padding(padding: const EdgeInsets.only(left: 12, right: 8), child: prefixIcon),
       suffixIcon: suffixIcon,
-      isDense: true,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8.r),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8.r),
-        borderSide: const BorderSide(color: AppColors.border, width: 1.5),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8.r),
-        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
-      ),
     );
   }
 }

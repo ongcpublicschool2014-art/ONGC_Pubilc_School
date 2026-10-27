@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 
-import './app_icon.dart';
+import './app_ui.dart';
 class QuickActionsWidget extends StatelessWidget {
   final VoidCallback? onAddStudent;
 
@@ -19,7 +19,7 @@ class QuickActionsWidget extends StatelessWidget {
       _QuickAction(
         icon: 'receipt-2',
         label: 'Collect Fee',
-        color: AppColors.secondary,
+        color: AppColors.success,
       ),
       _QuickAction(
         icon: 'volume-high',
@@ -29,24 +29,17 @@ class QuickActionsWidget extends StatelessWidget {
       _QuickAction(
         icon: 'chart-2',
         label: 'View Reports',
-        color: AppColors.primaryLight,
+        color: AppColors.demand,
       ),
     ];
 
     return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
+      padding: EdgeInsets.all(AppUI.cardPad),
+      decoration: AppUI.card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Quick Actions',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
+          Text('Quick Actions', style: AppUI.cardTitle),
           const SizedBox(height: 18),
           Wrap(
             spacing: 12,
@@ -87,9 +80,6 @@ class _QuickActionChipState extends State<_QuickActionChip> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('${widget.action.label} — Coming soon!'),
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
                 duration: const Duration(seconds: 1),
               ),
             );
@@ -100,40 +90,21 @@ class _QuickActionChipState extends State<_QuickActionChip> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: _isHovered
-                ? widget.action.color.withValues(alpha: 0.08)
-                : AppColors.surface,
-            borderRadius: BorderRadius.circular(12),
+                ? widget.action.color.withValues(alpha: 0.06)
+                : Colors.white,
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
             border: Border.all(
               color: _isHovered
                   ? widget.action.color.withValues(alpha: 0.3)
-                  : AppColors.border,
+                  : AppColors.cardBorder,
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: widget.action.color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: AppIcon(
-                  widget.action.icon,
-                  size: 16,
-                  color: widget.action.color,
-                ),
-              ),
+              AppUI.iconTile(widget.action.icon, color: widget.action.color, size: 16),
               const SizedBox(width: 10),
-              Text(
-                widget.action.label,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 13,
-                    ),
-              ),
+              Text(widget.action.label, style: AppUI.label),
             ],
           ),
         ),
