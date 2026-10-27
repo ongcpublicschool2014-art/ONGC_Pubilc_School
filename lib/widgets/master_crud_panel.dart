@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../utils/app_text.dart';
 import '../utils/app_theme.dart';
 import '../utils/auth_provider.dart';
 import '../utils/friendly_error.dart';
@@ -24,7 +25,7 @@ class MasterCrudPanel extends StatefulWidget {
   /// 'discount-shape'). Defaults to 'category' if not provided.
   final String icon;
   /// Plural noun for the count badge ("X groups", "X communities", ...).
-  /// Defaults to '${title.toLowerCase()}s'.
+  /// Defaults to the lower-case plural of [title].
   final String? countLabel;
   /// When set, an "Import" button is shown that opens the bulk Excel/CSV
   /// importer ([MasterImportScreen]) at this tab index (0 = Admission Type,
@@ -62,6 +63,16 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
 
   @override
   bool get wantKeepAlive => true;
+
+  /// Display plural of the title: "Community" -> "Communities",
+  /// "Quota" -> "Quotas". Display only.
+  String get _pluralTitle {
+    final t = widget.title;
+    if (t.length > 1 && t.endsWith('y') && !'aeiou'.contains(t[t.length - 2].toLowerCase())) {
+      return '${t.substring(0, t.length - 1)}ies';
+    }
+    return '${t}s';
+  }
 
   @override
   void initState() {
@@ -102,7 +113,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
   Future<void> _add() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      _snack('Enter a ${widget.title.toLowerCase()} name.', AppColors.warning);
+      _snack('Enter the ${widget.title.toLowerCase()} name.', AppColors.warning);
       return;
     }
     if (_rows.any((r) => (r[widget.nameCol]?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() &&
@@ -131,7 +142,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       _editId = null;
       await _load();
     } catch (e) {
-      _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save the ${widget.title.toLowerCase()}. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -176,7 +187,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${widget.title}'),
-        content: Text('Remove "$name"?'),
+        content: Text('Delete "$name"? This cannot be undone.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
@@ -189,10 +200,10 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     if (ok != true) return;
     try {
       await AdmissionService.deleteMasterRow(widget.table, widget.idCol, id);
-      _snack('${widget.title} removed.', AppColors.success);
+      _snack('${widget.title} deleted.', AppColors.success);
       await _load();
     } catch (e) {
-      _snack('Delete failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not delete "$name". ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -288,7 +299,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       if (seen.add(n.toLowerCase())) names.add(n);
     }
     if (names.isEmpty) {
-      _snack('Nothing to import.', AppColors.warning);
+      _snack('Nothing to import. Paste at least one name, one per line.', AppColors.warning);
       return;
     }
 
@@ -316,13 +327,13 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       }
       await _load();
       _snack(
-        'Imported $added ${widget.title.toLowerCase()}${added == 1 ? '' : 's'}'
+        'Imported $added ${added == 1 ? widget.title.toLowerCase() : _pluralTitle.toLowerCase()}'
         '${skipped > 0 ? ', skipped $skipped duplicate${skipped == 1 ? '' : 's'}' : ''}.',
         AppColors.success,
       );
     } catch (e) {
       await _load();
-      _snack('Import stopped after $added added. ${friendlyError(e)}', AppColors.error);
+      _snack('Import stopped after $added record${added == 1 ? ' was' : 's were'} added. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -345,7 +356,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     return ElevatedButton.icon(
       onPressed: _saving ? null : _openImport,
       icon: AppIcon('document-upload', size: AppBtn.iconSize(context), color: Colors.white),
-      label: const Text('Import CSV/Excel'),
+      label: const Text(AppText.import),
     );
   }
 
@@ -355,7 +366,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     return ElevatedButton.icon(
       onPressed: _saving ? null : _bulkImport,
       icon: AppIcon('document-upload', size: AppBtn.iconSize(context), color: Colors.white),
-      label: const Text('Import'),
+      label: const Text(AppText.import),
     );
   }
 
@@ -402,7 +413,9 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
             onChanged: (_) => setState(() {}),
             onSubmitted: (_) => _add(),
           ),
-          SizedBox(height: 18.h),
+          SizedBox(height: 16.h),
+          AppUI.requiredNote(),
+          SizedBox(height: 12.h),
           Row(
             children: [
               Expanded(
@@ -429,7 +442,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
   /// List card: the kit card with a title block, count chip, optional
   /// Import button, and the inner bordered table.
   Widget _listPanel() {
-    final countLabel = widget.countLabel ?? '${widget.title.toLowerCase()}s';
+    final countLabel = widget.countLabel ?? _pluralTitle.toLowerCase();
     return Container(
       padding: EdgeInsets.all(AppUI.cardPad),
       decoration: AppUI.card(),
@@ -438,7 +451,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
           Padding(
             padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
             child: Row(children: [
-              CardTitleBlock(icon: widget.icon, title: '${widget.title}s', subtitle: 'all ${widget.title.toLowerCase()} records'),
+              CardTitleBlock(icon: widget.icon, title: _pluralTitle, subtitle: 'all ${widget.title.toLowerCase()} records'),
               SizedBox(width: 10.w),
               AppUI.chip('${_rows.length} $countLabel', AppStatus.info),
               const Spacer(),
@@ -462,7 +475,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                       children: [
                         SizedBox(width: 50.w, child: Text('S NO.', style: _hStyle())),
                         Expanded(child: Text(widget.title.toUpperCase(), style: _hStyle())),
-                        SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _hStyle())),
+                        SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _hStyle())),
                       ],
                     ),
                   ),

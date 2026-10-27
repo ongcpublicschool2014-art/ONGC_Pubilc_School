@@ -7,6 +7,8 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/app_text.dart';
+import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
@@ -146,7 +148,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Save failed: $e'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not save the settings. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -197,7 +199,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
                         child: const CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
                     : const AppIcon('document', size: 16, color: Colors.white),
-                label: Text(_saving ? 'Saving…' : 'Save Changes'),
+                label: Text(_saving ? 'Saving…' : AppText.save),
               ),
             ]),
           ),
@@ -294,7 +296,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       tint: AppColors.accent,
       state: _admMode == 'AUTO' ? 'AUTOMATIC' : 'MANUAL',
       title: 'Admission Number',
-      desc: 'How the register / admission number is filled on the Admission and Fast Admission forms.',
+      desc: schoolTerm('How the register number is filled on the Admission Entry and Fast Admission forms.'),
       // Two mutually exclusive modes with a one-line consequence each: a
       // segmented control says that in a third of the height two radio blocks
       // took, and the preview shows what the field will actually do.
@@ -352,7 +354,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         controller: _lhName[id],
         enabled: !_saving,
         style: AppUI.fieldText(context),
-        decoration: _lhDec("Name — blank keeps the institution's"),
+        decoration: _lhDec("Enter letterhead name (leave blank to use the institution's)"),
       ),
       SizedBox(height: 6.h),
       TextField(
@@ -360,7 +362,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         enabled: !_saving,
         maxLines: 2,
         style: AppUI.fieldText(context),
-        decoration: _lhDec('Address'),
+        decoration: _lhDec('Enter letterhead address (optional)'),
       ),
       SizedBox(height: 6.h),
       // The printed header image. Receipts used to pick this by matching the
@@ -376,7 +378,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
             controller: _lhBanner[id],
             enabled: !_saving,
             style: AppUI.fieldText(context),
-            decoration: _lhDec('Header image — asset path or https URL'),
+            decoration: _lhDec('Enter header image path or https URL'),
           ),
         ),
         SizedBox(width: 6.w),
@@ -415,12 +417,12 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
           child: _lhBanner[id]!.text.trim().startsWith('http')
               ? Image.network(_lhBanner[id]!.text.trim(),
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Text('Image not reachable',
+                  errorBuilder: (_, __, ___) => Text('Image could not be loaded. Check the URL.',
                       style: AppUI.muted.copyWith(color: AppColors.error)))
               : Image.asset(_lhBanner[id]!.text.trim(),
                   fit: BoxFit.contain,
                   errorBuilder: (_, __, ___) => Text(
-                      'No such bundled image',
+                      'Bundled image not found. Check the asset path.',
                       style: AppUI.muted.copyWith(color: AppColors.error))),
         ),
       ],
@@ -439,7 +441,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         icon: busy
             ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.upload_rounded, size: 16),
-        label: Text(busy ? 'Uploading...' : (has ? 'Replace header image' : 'Upload header image')),
+        label: Text(busy ? 'Uploading...' : (has ? 'Replace Header Image' : 'Upload Header Image')),
       ),
       SizedBox(width: 8.w),
       if (has)
@@ -450,7 +452,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         )
       else
         Flexible(
-          child: Text('PNG or JPG, wide (about 4:1). None = name + address header.',
+          child: Text('PNG or JPG, about 4:1 wide. Without an image, the name and address are printed.',
               overflow: TextOverflow.ellipsis,
               style: AppUI.muted),
         ),
@@ -471,7 +473,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     setState(() => _uploading = id);
     try {
       final bytes = f.bytes ?? await File(f.path!).readAsBytes();
-      if (bytes.length > 2 * 1024 * 1024) throw Exception('Image is over 2 MB -- use a smaller file.');
+      if (bytes.length > 2 * 1024 * 1024) throw const _UploadRefused('The image is larger than 2 MB. Choose a smaller file.');
       final ext = (f.extension ?? 'png').toLowerCase() == 'jpeg' ? 'jpg' : (f.extension ?? 'png').toLowerCase();
       final code = (auth.inscode ?? 'ins$insId').replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
       final path = 'letterheads/${code}_fg$id.$ext';
@@ -488,7 +490,9 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Upload failed: $e'), backgroundColor: AppColors.error));
+            SnackBar(
+                content: Text(e is _UploadRefused ? e.message : 'Could not upload the image. ${friendlyError(e)}'),
+                backgroundColor: AppColors.error));
       }
     } finally {
       if (mounted) setState(() => _uploading = null);
@@ -506,7 +510,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Remove failed: $e'), backgroundColor: AppColors.error));
+            SnackBar(content: Text('Could not remove the header image. ${friendlyError(e)}'), backgroundColor: AppColors.error));
       }
     } finally {
       if (mounted) setState(() => _uploading = null);
@@ -541,8 +545,8 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       chip: const AppIcon('tag', size: 17, color: AppColors.demand),
       tint: AppColors.demand,
       state: _miscFgs.isEmpty ? 'ALL GROUPS' : '${_miscFgs.length} GROUPS',
-      title: 'Misc Collection',
-      desc: 'Which fee groups the Misc Collection counter may collect under. '
+      title: 'Miscellaneous Collection',
+      desc: 'Which fee groups the Miscellaneous Collection counter may collect under. '
           'Tick none to allow every group that owns a fee type.',
       // Chips, not a checkbox list: the groups are few and short, and they read
       // as the row of chips the Misc counter itself shows.
@@ -616,17 +620,17 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       state: '${_advRoute.values.where((v) => v != null).length}/3 SET',
       title: 'Advance Settlement',
       desc: 'Which fee group each kind of advance is banked under. The group '
-          'decides the bank account (Fee Master → Fee Group) and, for an online '
-          'payment, the Paytm merchant registered against that account (Setup → '
-          'Bank Details).',
+          'decides the bank account (Setup → Fee Master → Fee Group) and, for an '
+          'online payment, the Paytm merchant registered against that account '
+          '(Setup → Bank Accounts).',
       child: Column(children: [
-        _advRouteRow('M', 'Mess advance',
+        _advRouteRow('M', 'Mess Advance',
             'Collected for the mess. Normally the hostel group.'),
         Divider(height: 18.h, color: AppColors.divider),
-        _advRouteRow('S', 'Student advance',
+        _advRouteRow('S', 'Student Advance',
             'Held against a student, spent later at Fee Collection.'),
         Divider(height: 18.h, color: AppColors.divider),
-        _advRouteRow('A', 'Admission advance',
+        _advRouteRow('A', 'Admission Advance',
             'Itemised against fee types — used only when none of them '
             'resolves a group.'),
       ]),
@@ -653,8 +657,8 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
               SizedBox(width: 5.w),
               Expanded(
                 child: Text(
-                    'No bank account is mapped to ${chosen['fgdesc']} — an '
-                    'advance routed there is banked nowhere.',
+                    'No bank account is assigned to ${chosen['fgdesc']}, so advances '
+                    'routed there are not banked. Assign one in Setup → Bank Accounts.',
                     style: AppUI.muted.copyWith(
                         fontWeight: FontWeight.w600,
                         color: AppColors.warning)),
@@ -696,7 +700,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
             items: [
               DropdownMenuItem<int?>(
                 value: null,
-                child: Text('Work it out from the names',
+                child: Text('Automatic (from fee group names)',
                     style: AppUI.fieldText(context).copyWith(color: AppColors.textLight)),
               ),
               for (final g in _feeGroups)
@@ -727,7 +731,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       desc: 'Controls how outstanding dues are prioritised at the collection counter.',
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Collect arrear before regular', style: AppUI.label.copyWith(fontSize: 14.sp)),
+          Text('Collect Arrears Before Regular Fees', style: AppUI.label.copyWith(fontSize: 14.sp)),
           SizedBox(height: 3.h),
           Text('When a student has arrear dues, the collection screen opens on Arrear first so arrears are cleared before regular fees.',
               style: AppUI.muted),
@@ -791,4 +795,11 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       ),
     ]);
   }
+}
+
+/// A header image the app refuses before uploading (too large). Its message
+/// is written for the user, so it is shown as it is.
+class _UploadRefused implements Exception {
+  const _UploadRefused(this.message);
+  final String message;
 }

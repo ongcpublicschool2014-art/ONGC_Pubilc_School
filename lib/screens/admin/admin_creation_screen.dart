@@ -7,6 +7,7 @@ import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../models/institution_user_model.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/app_text.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
@@ -114,7 +115,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Designation Name', style: AppUI.label),
+              Text('Designation Name *', style: AppUI.label),
               SizedBox(height: 6.h),
               TextField(
                 controller: controller,
@@ -122,7 +123,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 style: AppUI.fieldText(context, filled: controller.text.trim().isNotEmpty),
                 onChanged: (v) {
                   final overflow = v.trim().length > 50;
-                  final next = overflow ? 'Designation must be less than 50 characters' : null;
+                  final next = overflow ? 'Designation name must be 50 characters or fewer' : null;
                   setDialogState(() => nameError = next);
                 },
                 decoration: AppUI.field(context, 'Enter designation name', filled: controller.text.trim().isNotEmpty).copyWith(
@@ -165,7 +166,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   return;
                 }
                 if (name.length > 50) {
-                  setDialogState(() => nameError = 'Designation cannot exceed 50 characters');
+                  setDialogState(() => nameError = 'Designation name must be 50 characters or fewer');
                   return;
                 }
                 final auth = Provider.of<AuthProvider>(ctx, listen: false);
@@ -201,7 +202,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedDesignation == null || _selectedRole == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields')),
+        const SnackBar(content: Text('Select a staff designation and a role.')),
       );
       return;
     }
@@ -238,7 +239,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('User created successfully!'),
+            content: Text('User created.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -337,7 +338,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
 
     if (roleName.isEmpty || desName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields')),
+        const SnackBar(content: Text('Select a staff designation and a role.')),
       );
       return;
     }
@@ -377,7 +378,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Update failed. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+        SnackBar(content: Text('Could not update the user. ${friendlyError(e)}'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -396,7 +397,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   color: AppColors.accent, size: 18),
               SizedBox(width: 10.w),
               Text(
-                'User Creation',
+                'Users',
                 style: AppUI.cardTitle,
               ),
             ],
@@ -495,12 +496,12 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   _selectedDesId = match['des_id'] as int?;
                 });
               },
-              validator: (v) => v == null || v == '__add_new__' ? 'Required' : null,
+              validator: (v) => v == null || v == '__add_new__' ? 'Select a staff designation' : null,
             ),
             SizedBox(height: 16.h),
 
             // Designation Report To
-            Text('Designation Report To',
+            Text('Reports To',
                 style: AppUI.label),
             SizedBox(height: 6.h),
             DropdownButtonFormField<int>(
@@ -551,7 +552,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                   .map((r) => Align(alignment: Alignment.centerLeft, child: Text(r['urname'] as String, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
                   .toList(),
               onChanged: (v) => setState(() => _selectedRole = v),
-              validator: (v) => v == null ? 'Required' : null,
+              validator: (v) => v == null ? 'Select a role' : null,
             ),
             SizedBox(height: 16.h),
 
@@ -567,8 +568,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               autovalidateMode: AutovalidateMode.onUserInteraction,
               validator: (v) {
                 final s = v?.trim() ?? '';
-                if (s.isEmpty) return 'Required';
-                if (s.length > 50) return 'User name must be less than 50 characters';
+                if (s.isEmpty) return 'Enter the user name';
+                if (s.length > 50) return 'User name must be 50 characters or fewer';
                 return null;
               },
             ),
@@ -580,13 +581,13 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             SizedBox(height: 6.h),
             TextFormField(
               controller: _emailController,
-              decoration: _inputDecoration(context, 'Enter email', filled: _emailController.text.trim().isNotEmpty),
+              decoration: _inputDecoration(context, 'Enter email address', filled: _emailController.text.trim().isNotEmpty),
               style: _inputTextStyle(context, filled: _emailController.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
                 final s = v?.trim() ?? '';
-                if (s.isEmpty) return 'Required';
+                if (s.isEmpty) return 'Enter an email address';
                 final emailRe = RegExp(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$');
                 if (!emailRe.hasMatch(s)) return 'Enter a valid email address';
                 return null;
@@ -610,8 +611,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               ],
               validator: (v) {
                 final s = v?.trim() ?? '';
-                if (s.isEmpty) return 'Required';
-                if (s.length != 10) return 'Phone must be 10 digits';
+                if (s.isEmpty) return 'Enter a phone number';
+                if (s.length != 10) return 'Enter a 10-digit phone number';
                 return null;
               },
             ),
@@ -624,7 +625,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             TextFormField(
               controller: _passwordController,
               decoration: _inputDecoration(context,
-                      _editingUser == null ? 'Enter password' : 'Leave blank to keep current',
+                      _editingUser == null ? 'Enter password' : 'Leave blank to keep the current password',
                       filled: _passwordController.text.trim().isNotEmpty)
                   .copyWith(
                 suffixIcon: IconButton(
@@ -643,12 +644,14 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               validator: (v) {
                 final s = v ?? '';
                 // While editing, blank means "keep the current password".
-                if (s.isEmpty) return _editingUser == null ? 'Required' : null;
+                if (s.isEmpty) return _editingUser == null ? 'Enter a password' : null;
                 if (s.length < 8) return 'Password must be at least 8 characters';
                 return null;
               },
             ),
-            SizedBox(height: 24.h),
+            SizedBox(height: 16.h),
+            AppUI.requiredNote(),
+            SizedBox(height: 12.h),
 
             // Buttons - full-width pair (Clear + Create User) sharing the
             // form row 50/50.
@@ -880,7 +883,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 SizedBox(width: 12.w),
                 Container(width: 1, height: 18, color: AppColors.divider),
                 SizedBox(width: 12.w),
-                Text('User Creation', style: AppUI.muted),
+                Text('Users', style: AppUI.muted),
                 SizedBox(width: 6.w),
                 AppIcon.linear('Chevron Right', size: 14, color: AppColors.textSecondary),
                 SizedBox(width: 6.w),
@@ -929,7 +932,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
           const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
           detailRow('Reports To', reportTo ?? 'None', icon: 'profile-circle'),
           const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
-          detailRow('Start Date', '${u.usestadate.day.toString().padLeft(2, '0')}/${u.usestadate.month.toString().padLeft(2, '0')}/${u.usestadate.year}', icon: 'calendar-1'),
+          detailRow('Start Date', formatDmy(u.usestadate), icon: 'calendar-1'),
           if (u.usecategory != null && u.usecategory!.isNotEmpty) ...[
             const Divider(height: 1, indent: 20, endIndent: 20, color: AppColors.divider),
             detailRow('Category', u.usecategory!, icon: 'category'),
@@ -984,7 +987,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               maxLines: 3,
               style: AppUI.fieldText(context, filled: reasonController.text.trim().isNotEmpty),
               onChanged: (_) => setDialogState(() {}),
-              decoration: AppUI.field(context, 'Enter reason...', label: 'Reason for termination *', filled: reasonController.text.trim().isNotEmpty),
+              decoration: AppUI.field(context, 'Enter the reason for termination', label: 'Reason for termination *', filled: reasonController.text.trim().isNotEmpty),
             ),
           ],
         ),
@@ -1029,7 +1032,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
         _fetchUsers();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to terminate user'), backgroundColor: AppColors.error),
+          const SnackBar(content: Text('Could not terminate the user. Please try again.'), backgroundColor: AppColors.error),
         );
       }
     }

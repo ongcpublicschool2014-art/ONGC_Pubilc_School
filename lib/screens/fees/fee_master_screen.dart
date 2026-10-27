@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/fee_kind.dart';
 import '../../utils/class_sort.dart';
@@ -76,6 +77,13 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
     'empty-wallet-add',
   ];
 
+  /// What a tab shows. [FeeMasterScreen.tabLabels] are routing keys and stay
+  /// as they are; only the displayed text spells out "No." in full.
+  static String _tabText(String key) {
+    final t = schoolTerm(key);
+    return t.endsWith(' No') ? '$t.' : t;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -118,7 +126,7 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
                     for (var i = 0; i < FeeMasterScreen.tabLabels.length; i++)
                       PillTab(
                         icon: _tabIcons[i],
-                        label: schoolTerm(FeeMasterScreen.tabLabels[i]),
+                        label: _tabText(FeeMasterScreen.tabLabels[i]),
                         selected: selected == i,
                         onTap: () => _tabController.animateTo(i),
                       ),
@@ -137,15 +145,15 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
               _SemesterPanel(),
               _DemandSequencePanel(),
               // Concession No + (school) Arrear Concession No in one frame.
-              _DemandSequencePanel(actname: 'CONNO', defaultPrefix: 'CN', title: 'Concession No', withArrear: true),
-              _DemandSequencePanel(actname: 'REFNO', defaultPrefix: 'RF', title: 'Refund No'),
+              _DemandSequencePanel(actname: 'CONNO', defaultPrefix: 'CN', title: 'Concession No.', withArrear: true),
+              _DemandSequencePanel(actname: 'REFNO', defaultPrefix: 'RF', title: 'Refund No.'),
               _ClassFeeDemandPanel(),
               PaymentSequenceTab(),
               FineRulesTab(),
               _ClassMatchPanel(),
               _AdvanceFeePanel(),
               // Advance Fee Collection's own receipt series (school).
-              _DemandSequencePanel(actname: 'ADVFEENO', defaultPrefix: 'AF', title: 'Advance Receipt No'),
+              _DemandSequencePanel(actname: 'ADVFEENO', defaultPrefix: 'AF', title: 'Advance Receipt No.'),
             ],
           ),
         ),
@@ -335,8 +343,8 @@ Future<bool> _confirmDelete(BuildContext ctx, String what) async {
   final ok = await showDialog<bool>(
     context: ctx,
     builder: (c) => AlertDialog(
-      title: Text('Delete $what'),
-      content: Text('Remove this $what?'),
+      title: const Text('Confirm Delete'),
+      content: Text('Delete this $what?'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
         TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
@@ -420,7 +428,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
     final name = _name.text.trim();
     if (name.isEmpty) return _snack(context, 'Enter a group name.', AppColors.warning);
     if (_rows.any((r) => (r['fgdesc']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() && (r['fg_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
-      return _snack(context, '"$name" already exists.', AppColors.warning);
+      return _snack(context, '"$name" already exists. Enter a different fee group name.', AppColors.warning);
     }
     setState(() => _saving = true);
     try {
@@ -446,7 +454,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
       _hostelOnly = false;
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not save the fee group. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -468,7 +476,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
       await SupabaseService.deleteSchemaRow('feegroup', 'fg_id', id);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not delete the fee group. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -521,7 +529,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                       ),
                       SizedBox(width: 4.w),
                       Expanded(
-                        child: Text('Hostellers only', style: AppUI.label),
+                        child: Text('Hostellers Only', style: AppUI.label),
                       ),
                     ]),
                   ),
@@ -537,14 +545,16 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                     child: ElevatedButton.icon(
                       onPressed: _saving ? null : _add,
                       icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
-                      label: Text(_editId != null ? 'Update' : 'Add'),
+                      label: Text(_editId != null ? AppText.update : AppText.save),
                     ),
                   ),
                   if (_editId != null) ...[
                     SizedBox(width: 8.w),
-                    OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text('Cancel')),
+                    OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text(AppText.cancel)),
                   ],
                 ]),
+                SizedBox(height: 10.h),
+                AppUI.requiredNote(),
               ],
             )),
           ),
@@ -711,7 +721,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return _snack(context, 'Enter a fee name.', AppColors.warning);
-    if (_fgId == null) return _snack(context, 'Add a Fee Group first.', AppColors.warning);
+    if (_fgId == null) return _snack(context, 'Add a fee group first (Fee Master > Fee Group).', AppColors.warning);
     setState(() => _saving = true);
     try {
       if (_editId != null) {
@@ -766,7 +776,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _editId = null;
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not save the fee type. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -778,7 +788,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
     final _used = await countReferencing('feedemand', [('fee_id', id), ('demfeetype', _name)]);
     if (_used > 0) {
       if (mounted) {
-        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: 'A demand has already been raised for it.');
+        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: 'Fee demands have already been raised for this fee type, so it cannot be deleted.');
       }
       return;
     }
@@ -788,7 +798,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       await SupabaseService.deleteSchemaRow('feetype', 'fee_id', id);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not delete the fee type. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -816,12 +826,12 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _lbl('Fee Name *'),
+                  _lbl('Fee Type Name *'),
                   SizedBox(height: 6.h),
                   TextField(
                       controller: _name,
                       style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
-                      decoration: _filledFieldDec(context, 'Enter fee name', filled: _name.text.trim().isNotEmpty),
+                      decoration: _filledFieldDec(context, 'Enter fee type name', filled: _name.text.trim().isNotEmpty),
                       onChanged: (_) => setState(() {})),
                   SizedBox(height: 16.h),
                   _lbl('Short Name'),
@@ -866,7 +876,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                     elevation: 6,
                     style: _fieldTextStyle(context),
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select option', filled: _fine != null),
+                    decoration: _filledFieldDec(context, 'Select whether a fine applies', filled: _fine != null),
                     items: [
                       DropdownMenuItem(value: 'No', child: Text('No', style: AppUI.fieldText(context))),
                       DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
@@ -881,7 +891,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                     onChanged: (v) => setState(() => _fine = v),
                   ),
                   SizedBox(height: 16.h),
-                  _lbl('Type'),
+                  _lbl('Fee Category'),
                   SizedBox(height: 6.h),
                   // A LIST, not free text. The stored value is a three-letter
                   // code and reports key off it exactly -- the DCB Register
@@ -903,7 +913,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                     elevation: 6,
                     style: _fieldTextStyle(context),
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select type',
+                    decoration: _filledFieldDec(context, 'Select fee category',
                         filled: _type.text.trim().isNotEmpty),
                     items: [
                       for (final k in kFeeKinds)
@@ -931,16 +941,16 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                     controller: _payseq,
                     keyboardType: TextInputType.number,
                     style: AppUI.fieldText(context, filled: _payseq.text.trim().isNotEmpty),
-                    decoration: _filledFieldDec(context, 'Blank = 100 (normal) · lower is paid first', filled: _payseq.text.trim().isNotEmpty),
+                    decoration: _filledFieldDec(context, 'e.g. 100 (leave blank for normal)', filled: _payseq.text.trim().isNotEmpty),
                     onChanged: (_) => setState(() {}),
                   ),
                   SizedBox(height: 4.h),
                   Text(
-                    'A fee can only be paid once every fee with a LOWER priority '
-                    'is cleared. 10 = paid first (e.g. Bus), 100 = normal (the '
-                    'default when left blank), '
-                    '900 = paid last (e.g. Exam). Arrears always clear before the '
-                    'same student\'s current-year fees.',
+                    'A fee can be paid only after every fee with a lower priority '
+                    'number is cleared. 10 = paid first (e.g. Bus), 100 = normal '
+                    '(default when blank), '
+                    '900 = paid last (e.g. Exam). Arrears are always cleared before '
+                    'the same student\'s current-year fees.',
                     style: AppUI.muted.copyWith(height: 1.35),
                   ),
                   SizedBox(height: 16.h),
@@ -954,7 +964,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                     elevation: 6,
                     style: _fieldTextStyle(context),
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select option', filled: _partial != null),
+                    decoration: _filledFieldDec(context, 'Select whether part payment is allowed', filled: _partial != null),
                     items: [
                       DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
                       DropdownMenuItem(value: 'No', child: Text('No — full amount only', style: AppUI.fieldText(context))),
@@ -975,14 +985,16 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                       child: ElevatedButton.icon(
                         onPressed: _saving ? null : _add,
                         icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
-                        label: Text(_editId != null ? 'Update' : 'Add'),
+                        label: Text(_editId != null ? AppText.update : AppText.save),
                       ),
                     ),
                     if (_editId != null) ...[
                       SizedBox(width: 8.w),
-                      OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text('Cancel')),
+                      OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text(AppText.cancel)),
                     ],
                   ]),
+                  SizedBox(height: 10.h),
+                  AppUI.requiredNote(),
                 ],
               )),
             ),
@@ -999,8 +1011,8 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
             action: _importButton(context, title: 'Fee Type', tabIndex: 5, disabled: _saving, onReturn: _load),
             headerCells: [
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
-              Expanded(flex: 3, child: Text('FEE NAME', style: _h())),
-              SizedBox(width: 80.w, child: Text('SHORT', style: _h())),
+              Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
+              SizedBox(width: 90.w, child: Text('SHORT NAME', style: _h())),
               Expanded(flex: 2, child: Text('FEE GROUP', style: _h())),
               SizedBox(width: 60.w, child: Text('FINE', style: _h())),
               SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
@@ -1022,7 +1034,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                             child: Row(children: [
                               SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
                               Expanded(flex: 3, child: Text(r['feedesc']?.toString() ?? '', style: _c())),
-                              SizedBox(width: 80.w, child: Text(r['feeshort']?.toString() ?? '', style: _c())),
+                              SizedBox(width: 90.w, child: Text(r['feeshort']?.toString() ?? '', style: _c())),
                               Expanded(flex: 2, child: Text(_fgName[r['fg_id']] ?? '', style: _c())),
                               SizedBox(width: 60.w, child: Text(fine, style: _c())),
                               SizedBox(
@@ -1133,7 +1145,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return _snack(context, schoolTerm('Enter a semester name.'), AppColors.warning);
-    if (_type == null) return _snack(context, 'Select a type.', AppColors.warning);
+    if (_type == null) return _snack(context, schoolTerm('Select a semester type.'), AppColors.warning);
     if (_rows.any((r) => (r['semname']?.toString().trim().toLowerCase() ?? '') == name.toLowerCase() && (r['sem_id']?.toString() ?? '') != (_editId?.toString() ?? ''))) {
       return _snack(context, '"$name" already exists.', AppColors.warning);
     }
@@ -1180,7 +1192,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       _editId = null;
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the semester.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1192,7 +1204,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
     final _used = await countReferencing('feedemand', [('sem_id', id), ('demfeeterm', _name)]);
     if (_used > 0) {
       if (mounted) {
-        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: 'A demand has already been raised for that term.');
+        await showMasterInUseDialog(context, name: _name, count: _used, noun: 'fee demand', fix: schoolTerm('Fee demands have already been raised for this semester, so it cannot be deleted.'));
       }
       return;
     }
@@ -1202,7 +1214,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
       await SupabaseService.deleteSchemaRow('semester', 'sem_id', id);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not delete the semester.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -1274,7 +1286,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                     decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty),
                     onChanged: (_) => setState(() {})),
                 SizedBox(height: 16.h),
-                _lbl('Type *'),
+                _lbl(schoolTerm('Semester Type *')),
                 SizedBox(height: 6.h),
                 DropdownButtonFormField<String>(
                   initialValue: _type,
@@ -1284,7 +1296,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                   elevation: 6,
                   style: _fieldTextStyle(context),
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, 'Select type', filled: _type != null),
+                  decoration: _filledFieldDec(context, schoolTerm('Select semester type'), filled: _type != null),
                   items: _typeLabels.entries
                       .map((e) => DropdownMenuItem(value: e.key, child: Text(schoolTerm(e.value), style: AppUI.fieldText(context))))
                       .toList(),
@@ -1309,14 +1321,16 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                     child: ElevatedButton.icon(
                       onPressed: _saving ? null : _add,
                       icon: Icon(_editId != null ? Icons.save : Icons.add, size: 16),
-                      label: Text(_editId != null ? 'Update' : 'Add'),
+                      label: Text(_editId != null ? AppText.update : AppText.save),
                     ),
                   ),
                   if (_editId != null) ...[
                     SizedBox(width: 8.w),
-                    OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text('Cancel')),
+                    OutlinedButton(onPressed: _saving ? null : _cancelEdit, child: const Text(AppText.cancel)),
                   ],
                 ]),
+                SizedBox(height: 10.h),
+                AppUI.requiredNote(),
               ],
             )),
           ),
@@ -1328,12 +1342,12 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
             title: schoolTerm('Semesters'),
             subtitle: 'all collection cycles in this institution',
             count: _rows.length,
-            countLabel: 'terms',
+            countLabel: schoolTerm('semesters'),
             action: _importButton(context, title: schoolTerm('Semester'), tabIndex: 8, disabled: _saving, onReturn: _load),
             headerCells: [
               Expanded(child: Text('S NO.', style: _h())),
               Expanded(child: Text(schoolTerm('SEMESTER NAME'), style: _h())),
-              Expanded(child: Text('SHORT', style: _h())),
+              Expanded(child: Text('SHORT NAME', style: _h())),
               Expanded(child: Text('TYPE', style: _h())),
               Expanded(child: Text('START DATE', style: _h())),
               Expanded(child: Text('END DATE', style: _h())),
@@ -1532,7 +1546,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack(context, 'Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack(context, 'Could not load the advance fee details. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -1594,7 +1608,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     final seen = <String>{};
     for (final l in lines) {
       if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
-        return _snack(context, '${l.feeType} is entered twice with the same Applicable To.', AppColors.warning);
+        return _snack(context, '${l.feeType} is entered twice with the same Applicable To. Remove one row or change its Applicable To.', AppColors.warning);
       }
     }
     setState(() => _saving = true);
@@ -1629,13 +1643,13 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
       final opt = lines.where((l) => _optional.contains(l.feeType)).length;
       _snack(
           context,
-          'Saved ${lines.length} advance fee line(s) -- $raised advance demand(s) raised for the students.'
-          '${opt > 0 ? ' $opt optional fee line(s) are not raised -- add them per student in Fee Definition.' : ''}',
+          'Saved ${lines.length} advance fee line(s); $raised advance demand(s) raised.'
+          '${opt > 0 ? ' $opt optional fee line(s) were not raised. Add them per student in Fee Collection > Fee Definition.' : ''}',
           opt > 0 ? AppColors.warning : AppColors.success);
       await _load();
       if (mounted) setState(_reload);
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not save the advance fees. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1645,7 +1659,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
   /// (the reason has been shown).
   List<_AdvLine>? _readyLines() {
     if (_term == null || _due == null) {
-      _snack(context, schoolTerm('Select the semester and Pay On or Before first.'), AppColors.warning);
+      _snack(context, schoolTerm('Select the semester and the Pay On or Before date first.'), AppColors.warning);
       return null;
     }
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
@@ -1656,7 +1670,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     final seen = <String>{};
     for (final l in lines) {
       if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
-        _snack(context, '${l.feeType} is entered twice with the same Applicable To.', AppColors.warning);
+        _snack(context, '${l.feeType} is entered twice with the same Applicable To. Remove one row or change its Applicable To.', AppColors.warning);
         return null;
       }
     }
@@ -1746,8 +1760,8 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     _snack(
       context,
       fails.isEmpty
-          ? schoolTerm('Copied ${lines.length} advance fee line(s) to $done ${_type == 0 ? 'class(es)' : 'course(s)'} -- $raised advance demand(s) raised.')
-          : 'Copied to $done, ${fails.length} failed. ${fails.first}',
+          ? schoolTerm('Copied ${lines.length} advance fee line(s) to $done ${_type == 0 ? 'class(es)' : 'course(s)'}; $raised advance demand(s) raised.')
+          : 'Copied to $done; could not copy to ${fails.length}. ${fails.first}',
       fails.isEmpty ? AppColors.success : AppColors.error,
     );
     await _load();
@@ -1767,7 +1781,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
           final q = query.trim().toLowerCase();
           final options = targets.where((t) => q.isEmpty || t.$2.toLowerCase().contains(q)).toList();
           return AlertDialog(
-            title: Text(schoolTerm(_type == 0 ? 'Copy fees to classes' : 'Copy fees to courses'),
+            title: Text(schoolTerm(_type == 0 ? 'Copy Fees to Classes' : 'Copy Fees to Courses'),
                 style: AppUI.cardTitle),
             content: SizedBox(
               width: 360.w,
@@ -1782,7 +1796,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                   child: TextField(
                     autofocus: true,
                     style: AppUI.fieldText(context),
-                    decoration: AppUI.field(context, schoolTerm(_type == 0 ? 'Search class' : 'Search course'), leadingIcon: 'search-normal'),
+                    decoration: AppUI.field(context, schoolTerm(_type == 0 ? 'Search by class name' : 'Search by course name'), leadingIcon: 'search-normal'),
                     onChanged: (v) => setLocal(() => query = v),
                   ),
                 ),
@@ -1799,13 +1813,13 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                                 all ? picked.remove(t.$1) : picked.add(t.$1);
                               }
                             }),
-                    child: Text(options.isNotEmpty && options.every((t) => picked.contains(t.$1)) ? 'Clear all' : 'Select all'),
+                    child: Text(options.isNotEmpty && options.every((t) => picked.contains(t.$1)) ? 'Clear All' : 'Select All'),
                   ),
                 ]),
                 if (options.isEmpty)
                   Padding(
                     padding: EdgeInsets.only(top: 24.h),
-                    child: AppUI.empty(title: 'Nothing to copy to'),
+                    child: AppUI.empty(title: schoolTerm(_type == 0 ? 'No other classes to copy to' : 'No other courses to copy to')),
                   ),
                 for (final t in options)
                   CheckboxListTile(
@@ -1869,7 +1883,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
   Widget build(BuildContext context) {
     super.build(context);
     if (!isSchool) {
-      return AppUI.empty(title: 'Advance Fee Demand is used on the school database only.');
+      return AppUI.empty(title: 'Advance Fee Demand is available for schools only.');
     }
     if (_loading) return const Center(child: CircularProgressIndicator());
 
@@ -1887,12 +1901,12 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                 Text('Advance Fee Demand', style: AppUI.cardTitle),
                 SizedBox(height: 2.h),
-                Text(schoolTerm('Next year\'s fees for each class -- Save raises the advance demands for its students'),
+                Text(schoolTerm('Next year\'s fees for each class. Saving raises the advance demands for its students.'),
                     style: AppUI.muted),
               ]),
             ),
             if (_nextYear.isNotEmpty) ...[
-              AppUI.chip('Year $_nextYear', AppStatus.info),
+              AppUI.chip('Academic Year $_nextYear', AppStatus.info),
               SizedBox(width: 14.w),
             ],
             if (MediaQuery.of(context).size.width > 1100)
@@ -1916,7 +1930,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               // (or holding pre-admission students) are offered.
               Expanded(
                 child: _drop<int>(
-                    _matchedCourses.isEmpty ? 'Match sections first' : schoolTerm('Next Year Course'),
+                    _matchedCourses.isEmpty ? 'Match sections first in Section Matching' : schoolTerm('Select next year course'),
                     _cour,
                     [
                       for (final c in _matchedCourses)
@@ -1934,7 +1948,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               if (_type == 0) ...[
                 Expanded(
                   child: _drop<int>(
-                      schoolTerm('Next Year Class'),
+                      schoolTerm('Select next year class'),
                       _cla,
                       [for (final c in _matchedSections) (_id(c['cla_id'])!, '${c['claname']}')],
                       (v) => setState(() {
@@ -1946,7 +1960,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                 SizedBox(width: 8.w),
               ],
               Expanded(
-                child: _drop<String>(schoolTerm('Select Semester'), _term, [for (final t in _terms) ('${t['semname']}', '${t['semname']}')],
+                child: _drop<String>(schoolTerm('Select semester'), _term, [for (final t in _terms) ('${t['semname']}', '${t['semname']}')],
                     (v) => setState(() {
                           _term = v;
                           _reload();
@@ -1957,7 +1971,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               // FEE GROUP -- narrows the fee-type picker and the rows shown;
               // it does not reload the grid (typed amounts stay).
               Expanded(
-                child: _drop<int>('Select Fee Group', _fg, [for (final g in _feeGroups) (_id(g['fg_id'])!, '${g['fgdesc']}')],
+                child: _drop<int>('Select fee group', _fg, [for (final g in _feeGroups) (_id(g['fg_id'])!, '${g['fgdesc']}')],
                     (v) => setState(() => _fg = v),
                     icon: 'receipt-discount'),
               ),
@@ -1978,7 +1992,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                       suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
                     child: Text(
-                      _due == null ? 'Pay On or Before' : '${_due!.day.toString().padLeft(2, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.year}',
+                      _due == null ? 'Select pay on or before date' : '${_due!.day.toString().padLeft(2, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.year}',
                       overflow: TextOverflow.ellipsis,
                       style: _due == null
                           ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)
@@ -2008,7 +2022,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               child: OutlinedButton.icon(
                 onPressed: _saving ? null : _copyFee,
                 icon: const Icon(Icons.copy_all, size: 15),
-                label: const Text('Copy Fee'),
+                label: const Text('Copy Fees'),
               ),
             ),
           ]),
@@ -2027,7 +2041,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                   SizedBox(width: 140.w, child: Text('AMOUNT', textAlign: TextAlign.right, style: _h())),
                   SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
                   SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
-                  SizedBox(width: 150.w, child: Text('DAYSCHOLAR / HOSTLER', textAlign: TextAlign.center, style: _h())),
+                  SizedBox(width: 170.w, child: Text('DAY SCHOLAR / HOSTELLER', textAlign: TextAlign.center, style: _h())),
                   SizedBox(width: 44.w),
                 ]),
               ),
@@ -2063,7 +2077,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                   ),
                   SizedBox(width: 12.w),
                   Flexible(
-                    child: Text('Applicable To: Both means everyone. Save raises the advance demands -- collect them in Advance Fee Collection.',
+                    child: Text('Applicable To "Both" means every student. Saving raises the advance demands; collect them in Advance Fee Collection.',
                         overflow: TextOverflow.ellipsis, style: AppUI.muted),
                   ),
                   const Spacer(),
@@ -2236,11 +2250,11 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
         ),
         SizedBox(width: 120.w, child: _flag(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
         SizedBox(width: 120.w, child: _flag(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
-        SizedBox(width: 150.w, child: _flag(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+        SizedBox(width: 170.w, child: _flag(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
         SizedBox(
           width: 44.w,
           child: IconButton(
-            tooltip: 'Remove row',
+            tooltip: AppText.deleteRow,
             visualDensity: VisualDensity.compact,
             onPressed: _saving
                 ? null
@@ -2318,7 +2332,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack(context, 'Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack(context, '${schoolTerm('Could not load the class matching.')} ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -2377,7 +2391,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
     }
     if (_cur == _next) return _snack(context, schoolTerm('The next course must be a different course.'), AppColors.warning);
     final rows = _pick.entries.where((e) => e.value != null).toList();
-    if (rows.isEmpty) return _snack(context, schoolTerm('Pick a next class for at least one class.'), AppColors.warning);
+    if (rows.isEmpty) return _snack(context, schoolTerm('Select the next class for at least one class.'), AppColors.warning);
     setState(() => _saving = true);
     try {
       // Replace this standard's matches as a whole.
@@ -2392,23 +2406,23 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
         });
       }
       if (!mounted) return;
-      _snack(context, schoolTerm('Saved ${rows.length} class match(es) for ${_courseName(_cur)} -> ${_courseName(_next)}.'), AppColors.success);
+      _snack(context, schoolTerm('Class matching saved for ${_courseName(_cur)} to ${_courseName(_next)} (${rows.length} class(es)).'), AppColors.success);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the class matching.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _deleteStandard(int cour) async {
-    if (!await _confirmDelete(context, schoolTerm('the matching for ${_courseName(cour)}'))) return;
+    if (!await _confirmDelete(context, schoolTerm('class matching for ${_courseName(cour)}'))) return;
     try {
       await SupabaseService.deleteSchemaRowsWhere('classmatch', {'curcourseid': cour});
       if (_cur == cour) _cur = null;
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not delete the class matching.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -2434,7 +2448,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
   Widget build(BuildContext context) {
     super.build(context);
     if (!isSchool) {
-      return AppUI.empty(title: 'Class Matching is used on the school database only.');
+      return AppUI.empty(title: 'Class Matching is available for schools only.');
     }
     if (_loading) return const Center(child: CircularProgressIndicator());
     final cur = _sectionsOf(_cur);
@@ -2459,11 +2473,11 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             CardTitleBlock(icon: 'arrow-swap-horizontal', title: schoolTerm('Class Matching'), subtitle: schoolTerm('Which class each class moves into at promotion')),
             SizedBox(height: 18.h),
-            _lbl(schoolTerm('Current Course')),
+            _lbl(schoolTerm('Current Course *')),
             SizedBox(height: 6.h),
             _courseDrop(schoolTerm('Select current course'), _cur, (v) => setState(() => _selectCurrent(v))),
             SizedBox(height: 14.h),
-            _lbl(schoolTerm('Next Course')),
+            _lbl(schoolTerm('Next Course *')),
             SizedBox(height: 6.h),
             _courseDrop(schoolTerm('Select next course'), _next, (v) => setState(() => _selectNext(v)), exclude: _cur),
             SizedBox(height: 16.h),
@@ -2523,6 +2537,8 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
             ),
             SizedBox(height: 14.h),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              AppUI.requiredNote(),
+              const Spacer(),
               OutlinedButton(
                 onPressed: _saving ? null : () => setState(() => _selectCurrent(_cur)),
                 child: const Text('Cancel'),
@@ -2629,7 +2645,7 @@ class _FeeLine {
 
 const Map<int, String> _kNobLabels = {3: 'Both', 1: 'New', 2: 'Old'};
 const Map<int, String> _kBgbLabels = {3: 'Both', 1: 'Boy', 2: 'Girl'};
-const Map<int, String> _kDhbLabels = {3: 'Both', 1: 'Dayscholar', 2: 'Hostler'};
+const Map<int, String> _kDhbLabels = {3: 'Both', 1: AppText.dayScholar, 2: AppText.hosteller};
 
 class _ClassFeeDemandPanel extends StatefulWidget {
   const _ClassFeeDemandPanel();
@@ -3053,7 +3069,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 
   Future<void> _save() async {
     if (_cls == null || _sem == null || _due == null) {
-      return _snack(context, schoolTerm('Select Class, Semester and Pay-On-or-Before date.'), AppColors.warning);
+      return _snack(context, schoolTerm('Select the class, semester and Pay On or Before date.'), AppColors.warning);
     }
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Add at least one fee line.', AppColors.warning);
@@ -3085,7 +3101,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       }
     } catch (e) {
       if (mounted) setState(() => _saving = false);
-      return _snack(context, 'Save failed clearing old rows. ${friendlyError(e)}', AppColors.error);
+      return _snack(context, 'Could not replace the saved fee lines. ${friendlyError(e)}', AppColors.error);
     }
 
     for (final cls in targets) {
@@ -3152,7 +3168,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             : noneTicked
                 ? schoolTerm('Saved $done fee line(s) to the class template. None ticked ALL, so no student demands were created.')
                 : noStudents
-                    ? 'Saved $done fee line(s), but no student matched — no demands created.'
+                    ? 'Saved $done fee line(s). No student matched, so no demands were created.'
                         '${_rosterDiag != null ? ' ($_rosterDiag)' : ''}'
                     : 'Saved $done fee line(s)$secNote • $demCount demand(s) sent for approval.',
         (noneTicked || noStudents) ? AppColors.warning : AppColors.success,
@@ -3167,7 +3183,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       });
     }
     await _load();
-    if (fails.isNotEmpty && mounted) _snack(context, 'Saved $done, ${fails.length} failed. ${fails.first}', AppColors.error);
+    if (fails.isNotEmpty && mounted) _snack(context, 'Saved $done fee line(s); ${fails.length} could not be saved. ${fails.first}', AppColors.error);
   }
 
   /// Stage a tempfeedemand row for every active student in the class × each
@@ -3439,7 +3455,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       }
     }
     if (_sem == null || _due == null) {
-      return _snack(context, schoolTerm('Select Semester and Pay-On-or-Before before copying.'), AppColors.warning);
+      return _snack(context, schoolTerm('Select the semester and Pay On or Before date before copying.'), AppColors.warning);
     }
     final picked = await _pickTargetClasses();
     if (picked == null || picked.isEmpty) return;
@@ -3490,7 +3506,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
           ? copiedTicked
               ? schoolTerm('Copied fees to $classesDone class(es) • $demTotal demand(s) staged.')
               : schoolTerm('Copied fees to $classesDone class(es). No line is ticked ALL, so no student demands were created.')
-          : 'Copied to $classesDone, ${fails.length} failed. ${fails.first}',
+          : 'Copied to $classesDone; could not copy to ${fails.length}. ${fails.first}',
       fails.isEmpty ? (copiedTicked ? AppColors.success : AppColors.warning) : AppColors.error,
     );
     await _load();
@@ -3512,7 +3528,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
           final q = copyQuery.trim().toLowerCase();
           final options = _classNames.where((c) => c != _cls && (q.isEmpty || c.toLowerCase().contains(q))).toList();
           return AlertDialog(
-            title: Text(schoolTerm('Copy fees to classes'), style: AppUI.cardTitle),
+            title: Text(schoolTerm('Copy Fees to Classes'), style: AppUI.cardTitle),
             content: SizedBox(
               width: 360.w,
               height: 360.h,
@@ -3529,7 +3545,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                           child: TextField(
                             autofocus: true,
                             style: AppUI.fieldText(context),
-                            decoration: AppUI.field(context, schoolTerm('Search class'), leadingIcon: 'search-normal'),
+                            decoration: AppUI.field(context, schoolTerm('Search by class name'), leadingIcon: 'search-normal'),
                             onChanged: (v) => setLocal(() => copyQuery = v),
                           ),
                         ),
@@ -3569,7 +3585,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     final used = await countReferencing('feedemand', [('cf_id', id)]);
     if (used > 0) {
       if (mounted) {
-        await showMasterInUseDialog(context, name: 'this fee line', count: used, noun: 'fee demand', fix: 'A demand has already been raised from it.');
+        await showMasterInUseDialog(context, name: 'this fee line', count: used, noun: 'fee demand', fix: 'Fee demands have already been raised from this fee line, so it cannot be deleted.');
       }
       return;
     }
@@ -3579,7 +3595,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       await SupabaseService.deleteSchemaRow('classfeedemand', 'cf_id', id, soft: false);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, 'Could not delete the fee line. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -3772,7 +3788,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       focusNode: focus,
                       style: AppUI.fieldText(context, filled: true),
                       decoration:
-                          _filledFieldDec(context, schoolTerm('Select Class'), filled: _cls != null, leadingIcon: 'teacher').copyWith(suffixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary)),
+                          _filledFieldDec(context, schoolTerm('Search or select class'), filled: _cls != null, leadingIcon: 'teacher').copyWith(suffixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary)),
                       onChanged: (v) {
                         final m = _matchOne(_classNames, v);
                         if (m != null && m != _cls)
@@ -3822,8 +3838,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   elevation: 6,
                   style: _fieldTextStyle(context),
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, schoolTerm('Select Semester'), filled: _sem != null, leadingIcon: 'book'),
-                  hint: Text(schoolTerm('Select Semester'),
+                  decoration: _filledFieldDec(context, schoolTerm('Select semester'), filled: _sem != null, leadingIcon: 'book'),
+                  hint: Text(schoolTerm('Select semester'),
                       overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
                   items: _semesters
                       .map((e) =>
@@ -3932,8 +3948,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   elevation: 6,
                   style: _fieldTextStyle(context),
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, 'Select Fee Group', filled: _fgFilter != null, leadingIcon: 'receipt-discount'),
-                  hint: Text('Select Fee Group',
+                  decoration: _filledFieldDec(context, 'Select fee group', filled: _fgFilter != null, leadingIcon: 'receipt-discount'),
+                  hint: Text('Select fee group',
                       overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
                   items: [
                     ..._feeGroups.map((g) => DropdownMenuItem(
@@ -3980,7 +3996,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
                     child: Text(
-                      _due == null ? 'Pay On or Before' : _fmt(_due!),
+                      _due == null ? 'Select pay on or before date' : _fmt(_due!),
                       overflow: TextOverflow.ellipsis,
                       style: _due == null ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight) : AppUI.fieldText(context, filled: true),
                     ),
@@ -4029,7 +4045,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                   child: OutlinedButton.icon(
                     onPressed: _saving ? null : _copyFee,
                     icon: const Icon(Icons.copy_all, size: 15),
-                    label: const Text('Copy Fee'),
+                    label: const Text('Copy Fees'),
                   ),
                 ),
                 SizedBox(width: 8.w),
@@ -4054,7 +4070,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       if (isSchool) ...[
                         SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
                         SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
-                        SizedBox(width: 150.w, child: Text('DAYSCHOLAR / HOSTLER', textAlign: TextAlign.center, style: _h())),
+                        SizedBox(width: 170.w, child: Text('DAY SCHOLAR / HOSTELLER', textAlign: TextAlign.center, style: _h())),
                       ] else
                         SizedBox(width: 70.w, child: Text('ALL', textAlign: TextAlign.center, style: _h())),
                       SizedBox(width: 44.w, child: Text('', style: _h())),
@@ -4210,7 +4226,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                               if (isSchool) ...[
                                 SizedBox(width: 120.w, child: _flagDrop(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
                                 SizedBox(width: 120.w, child: _flagDrop(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
-                                SizedBox(width: 150.w, child: _flagDrop(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+                                SizedBox(width: 170.w, child: _flagDrop(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
                               ] else
                               SizedBox(
                                   width: 70.w,
@@ -4228,7 +4244,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                               SizedBox(
                                   width: 44.w,
                                   child: IconButton(
-                                    tooltip: 'Remove row',
+                                    tooltip: AppText.deleteRow,
                                     visualDensity: VisualDensity.compact,
                                     // By identity: `i` indexes the FILTERED view, so
                                     // removeAt(i) would delete a different row whenever a
@@ -4264,7 +4280,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       SizedBox(width: 12.w),
                       Flexible(
                           child: Text(isSchool
-                                  ? 'Regular fees are raised for the students they fit (Both = everyone). Optional fees are not -- add them per student in Fee Collection -> Fee Definition.'
+                                  ? 'Regular fees are raised for the students they apply to ("Both" = everyone). Optional fees are not; add them per student in Fee Collection > Fee Definition.'
                                   : schoolTerm('Tick ALL to raise this fee as a demand for every student — untick to keep it on the class template only'),
                               overflow: TextOverflow.ellipsis, style: AppUI.muted)),
                       const Spacer(),
@@ -4340,7 +4356,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 /// default DExx/NNNNN — see migrations/add_demno_sequence.sql (the set_dem_id /
 /// set_temp_id triggers read this row).
 class _DemandSequencePanel extends StatefulWidget {
-  const _DemandSequencePanel({this.actname = 'DEMNO', this.defaultPrefix = 'DM', this.title = 'Demand No', this.withArrear = false});
+  const _DemandSequencePanel({this.actname = 'DEMNO', this.defaultPrefix = 'DM', this.title = 'Demand No.', this.withArrear = false});
   // actname distinguishes the demand (DEMNO), concession (CONNO), refund
   // (REFNO) and advance (ADVNO) single-sequence rows in the shared
   // `sequence` table.
@@ -4364,7 +4380,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
   /// (actname, default prefix, title) of every series this frame manages.
   List<(String, String, String)> get _series => [
         (widget.actname, widget.defaultPrefix, widget.title),
-        if (widget.withArrear && isSchool) ('ARRCONNO', 'AC', 'Arrear Concession No'),
+        if (widget.withArrear && isSchool) ('ARRCONNO', 'AC', 'Arrear Concession No.'),
       ];
   String get _act => _series[_active].$1;
   String get _title => _series[_active].$3;
@@ -4484,7 +4500,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
         _load();
       }
     } catch (e) {
-      if (mounted) _snack(context, friendlyError(e), AppColors.error);
+      if (mounted) _snack(context, 'Could not save the sequence. ${friendlyError(e)}', AppColors.error);
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -4519,7 +4535,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
             AppUI.cardHeader(
               icon: 'tag',
               title: '$_title Sequence',
-              subtitle: 'one ${_title.toLowerCase()} sequence for the whole institution',
+              subtitle: 'One $_title sequence for the whole institution',
             ),
             SizedBox(height: 20.h),
             _lbl('Prefix *'),
@@ -4532,18 +4548,18 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               onChanged: (_) => setState(() {}),
             ),
             SizedBox(height: 16.h),
-            _lbl('Number Width'),
+            _lbl('Number of Digits'),
             SizedBox(height: 6.h),
             TextField(
               controller: _widthCtrl,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               style: AppUI.fieldText(context, filled: _widthCtrl.text.trim().isNotEmpty),
-              decoration: _filledFieldDec(context, '5', filled: _widthCtrl.text.trim().isNotEmpty),
+              decoration: _filledFieldDec(context, 'e.g. 5', filled: _widthCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
             SizedBox(height: 16.h),
-            _lbl(exists ? 'Start Number (locked)' : 'Start Number'),
+            _lbl(exists ? 'Start Number (Locked)' : 'Start Number'),
             SizedBox(height: 6.h),
             TextField(
               controller: _startCtrl,
@@ -4551,7 +4567,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               enabled: !exists, // the start is locked once the counter is running
               style: AppUI.fieldText(context, filled: _startCtrl.text.trim().isNotEmpty),
-              decoration: _filledFieldDec(context, '1', filled: _startCtrl.text.trim().isNotEmpty),
+              decoration: _filledFieldDec(context, 'e.g. 1', filled: _startCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
             SizedBox(height: 12.h),
@@ -4561,7 +4577,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               child: Row(children: [
                 Text('Preview:  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
                 Expanded(
-                    child: Text(_prefixCtrl.text.trim().isEmpty ? '—' : _preview,
+                    child: Text(_prefixCtrl.text.trim().isEmpty ? 'Enter a prefix to see the preview' : _preview,
                         style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.primary), overflow: TextOverflow.ellipsis)),
               ]),
             ),
@@ -4571,9 +4587,11 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               child: ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
                 icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Icon(exists ? Icons.save_rounded : Icons.add, size: 16),
-                label: Text(exists ? 'Update' : 'Create'),
+                label: Text(exists ? AppText.update : AppText.save),
               ),
             ),
+            SizedBox(height: 10.h),
+            AppUI.requiredNote(),
           ],
         ),
       ),
@@ -4615,7 +4633,7 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
                 child: s == null
                     ? Align(alignment: Alignment.centerLeft, child: AppUI.chip('Not set', AppStatus.warning))
                     : Text('$prefix${start.toString().padLeft(width, '0')}', style: AppUI.label.copyWith(color: AppColors.primary))),
-            SizedBox(width: 80.w, child: Text(s == null ? '—' : '${(s['seqcurno'] as num?)?.toInt() ?? 0}', textAlign: TextAlign.right, style: c())),
+            SizedBox(width: 100.w, child: Text(s == null ? '—' : '${(s['seqcurno'] as num?)?.toInt() ?? 0}', textAlign: TextAlign.right, style: c())),
           ]),
         ),
       );
@@ -4651,12 +4669,12 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
                       Expanded(flex: 3, child: Text('SEQUENCE', style: h())),
                       SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
                       SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
-                      SizedBox(width: 80.w, child: Text('CURRENT', textAlign: TextAlign.right, style: h())),
+                      SizedBox(width: 100.w, child: Text('LAST ISSUED', textAlign: TextAlign.right, style: h())),
                     ]),
                   ),
                   Expanded(
                     child: !multi && _rows[widget.actname] == null
-                        ? AppUI.empty(title: 'No ${widget.title.toLowerCase()} sequence yet', why: 'Set a prefix and starting number on the left and save.')
+                        ? AppUI.empty(title: 'No ${widget.title} sequence set up yet', why: 'Set a prefix and starting number on the left and save.')
                         : ListView(children: [for (var i = 0; i < _series.length; i++) row(i)]),
                   ),
                 ],

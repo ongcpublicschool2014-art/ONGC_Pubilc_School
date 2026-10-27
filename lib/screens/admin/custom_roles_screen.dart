@@ -81,7 +81,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         _fetchRoles();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save role'), backgroundColor: AppColors.error),
+          const SnackBar(content: Text('Could not save the role. Please try again.'), backgroundColor: AppColors.error),
         );
       }
     } catch (e) {
@@ -89,7 +89,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
       // custuserroles before the session-gated RPC is deployed).
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save role'), backgroundColor: AppColors.error),
+          const SnackBar(content: Text('Could not save the role. Please try again.'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -127,7 +127,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
         _fetchRoles();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete role'), backgroundColor: AppColors.error),
+          const SnackBar(content: Text('Could not delete the role. Please try again.'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -172,10 +172,12 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                       controller: _nameController,
                       style: AppUI.fieldText(context, filled: _nameController.text.trim().isNotEmpty),
                       onChanged: (_) => setState(() {}),
-                      decoration: _inputDecoration('Role Name', filled: _nameController.text.trim().isNotEmpty),
-                      validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                      decoration: _inputDecoration('Role Name *', filled: _nameController.text.trim().isNotEmpty),
+                      validator: (v) => v == null || v.trim().isEmpty ? 'Enter a role name' : null,
                     ),
-                    SizedBox(height: 24.h),
+                    SizedBox(height: 16.h),
+                    AppUI.requiredNote(),
+                    SizedBox(height: 12.h),
                     Row(
                       children: [
                         Expanded(
@@ -238,7 +240,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                       children: [
                         SizedBox(width: 40.w, child: Text('S NO.', style: _th())),
                         Expanded(flex: 3, child: Text('ROLE NAME', style: _th())),
-                        Expanded(flex: 2, child: Text('INS CODE', style: _th())),
+                        Expanded(flex: 2, child: Text('INSTITUTION CODE', style: _th())),
                         SizedBox(width: 80.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _th())),
                       ],
                     ),

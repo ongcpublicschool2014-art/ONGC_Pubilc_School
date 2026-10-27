@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -233,7 +234,7 @@ Future<bool> _confirmDelete(BuildContext ctx, String what) async {
     context: ctx,
     builder: (c) => AlertDialog(
       title: Text(schoolTerm('Delete $what')),
-      content: Text(schoolTerm('Remove this $what?')),
+      content: Text(schoolTerm('Delete this $what? This cannot be undone.')),
       actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
         TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
@@ -285,7 +286,7 @@ Widget _importButton(BuildContext context, {
               await onReturn();
             },
       icon: AppIcon('document-upload', size: iconSize, color: Colors.white),
-      label: const Text('Import CSV/Excel'),
+      label: const Text(AppText.import),
     ),
   );
 }
@@ -409,7 +410,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       _feeLevel = 'SECTION';
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the course.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -438,7 +439,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       await SupabaseService.deleteSchemaRow('course', 'cour_id', id);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not delete the course.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -480,7 +481,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
                     style: _fieldTextStyle(context, filled: true),
-                    decoration: _filledFieldDec(context, 'Standard type', filled: true),
+                    decoration: _filledFieldDec(context, 'Select standard type', filled: true),
                     items: _stdTypes
                         .map((k) => DropdownMenuItem(value: k, child: Text(_stdTypeLabels[k]!, overflow: TextOverflow.ellipsis,
                             style: AppUI.fieldText(context))))
@@ -504,10 +505,10 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                     dropdownColor: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     style: _fieldTextStyle(context, filled: true),
-                    decoration: _filledFieldDec(context, 'Fee demand by', filled: true),
+                    decoration: _filledFieldDec(context, 'Select fee demand level', filled: true),
                     items: const [
-                      DropdownMenuItem(value: 'SECTION', child: Text('Section -- each section its own fees')),
-                      DropdownMenuItem(value: 'STANDARD', child: Text('Standard -- same fees for all sections')),
+                      DropdownMenuItem(value: 'SECTION', child: Text('Section — each section has its own fees')),
+                      DropdownMenuItem(value: 'STANDARD', child: Text('Standard — same fees for all sections')),
                     ],
                     selectedItemBuilder: (context) => [
                       for (final t in const ['Section', 'Standard'])
@@ -519,7 +520,9 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                   Text('How Section Fee Demand and Advance Fee Demand are defined for this standard.',
                       style: AppUI.muted.copyWith(height: 1.3)),
                 ],
-                SizedBox(height: 18.h),
+                SizedBox(height: 16.h),
+                AppUI.requiredNote(),
+                SizedBox(height: 12.h),
                 Row(children: [
                   Expanded(
                     child: ElevatedButton.icon(
@@ -551,13 +554,13 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
               Expanded(child: Text(schoolTerm('COURSE'), style: _h())),
               if (isSchool) SizedBox(width: 110.w, child: Text('TYPE', style: _h())),
-              if (isSchool) SizedBox(width: 100.w, child: Text('FEE BY', style: _h())),
-              SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
+              if (isSchool) SizedBox(width: 120.w, child: Text('FEE DEMAND BY', style: _h())),
+              SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                    ? AppUI.empty(title: schoolTerm('No courses'), why: schoolTerm('Add a course with the form on the left, or use Import CSV/Excel.'), icon: 'teacher')
+                    ? AppUI.empty(title: schoolTerm('No courses'), why: schoolTerm('Add a course with the form on the left, or click Import.'), icon: 'teacher')
                     : ListView.separated(
                         itemCount: _rows.length,
                         separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
@@ -574,7 +577,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                                 SizedBox(width: 110.w, child: Text(_stdTypeShort[r['classtype']?.toString()] ?? 'Promotional', style: _c())),
                               if (isSchool)
                                 SizedBox(
-                                  width: 100.w,
+                                  width: 120.w,
                                   child: Align(
                                     alignment: Alignment.centerLeft,
                                     child: r['feelevel']?.toString() == 'STANDARD'
@@ -783,7 +786,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
       _courId = keepStd; // adding A, B, C in a row: keep the standard picked
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the class.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -835,7 +838,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
       // user to come back and edit, every add re-links the course's chain.
       if (savedCourId != null) await _autoChainCourse(savedCourId);
     } catch (e) {
-      if (mounted) _snack(context, 'Save failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the class.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -884,7 +887,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
     if (linked > 0) {
       await _load();
       if (mounted) {
-        _snack(context, 'Linked $linked class${linked == 1 ? '' : 'es'} to its succeeding class.', AppColors.success);
+        _snack(context, 'Linked $linked class${linked == 1 ? '' : 'es'} to the next class in the course.', AppColors.success);
       }
     }
   }
@@ -909,7 +912,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
       await SupabaseService.deleteSchemaRow('class', 'cla_id', id);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, 'Delete failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not delete the class.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -930,7 +933,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _lbl('Course'),
+                _lbl('Course *'),
                 SizedBox(height: 6.h),
                 DropdownButtonFormField<String>(
                   initialValue: _courId,
@@ -968,11 +971,11 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   ),
                   if (_courId != null && _section.text.trim().isNotEmpty) ...[
                     SizedBox(height: 6.h),
-                    Text('Saved as "${_courName[_courId] ?? ''} ${_section.text.trim().toUpperCase()}"',
+                    Text('Will be saved as "${_courName[_courId] ?? ''} ${_section.text.trim().toUpperCase()}"',
                         style: AppUI.muted),
                   ],
                 ] else ...[
-                _lbl('Class Name *'),
+                _lbl('Class Level *'),
                 SizedBox(height: 6.h),
                 DropdownButtonFormField<String>(
                   initialValue: _classLevel,
@@ -982,7 +985,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   borderRadius: BorderRadius.circular(12),
                   elevation: 6,
                   style: _fieldTextStyle(context, filled: _classLevel != null),
-                  decoration: _filledFieldDec(context, 'Select class', filled: _classLevel != null),
+                  decoration: _filledFieldDec(context, 'Select class level', filled: _classLevel != null),
                   items: _classLevels
                       .map((lvl) => DropdownMenuItem(value: lvl, child: Text(lvl, style: AppUI.fieldText(context))))
                       .toList(),
@@ -1004,7 +1007,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   borderRadius: BorderRadius.circular(12),
                   elevation: 6,
                   style: _fieldTextStyle(context, filled: true),
-                  decoration: _filledFieldDec(context, 'Class type', filled: true),
+                  decoration: _filledFieldDec(context, 'Select class type', filled: true),
                   items: _classTypes
                       .map((k) => DropdownMenuItem(
                           value: k,
@@ -1051,7 +1054,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                     borderRadius: BorderRadius.circular(12),
                     elevation: 6,
                     style: _fieldTextStyle(context, filled: succValue != null),
-                    decoration: _filledFieldDec(context, 'Auto — links when next class is added', filled: succValue != null),
+                    decoration: _filledFieldDec(context, 'Linked automatically when the next class is added', filled: succValue != null),
                     items: [
                       DropdownMenuItem<String>(
                         value: '',
@@ -1080,11 +1083,13 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                               'once the next one exists.')
                       : _classType == 'TERMINAL'
                           ? 'The final year of the course, so it promotes to nothing.'
-                          : 'A TC class, holding students who have left. Never promoted from.',
+                          : 'A TC class for students who have left. Students in it are never promoted.',
                   style: AppUI.muted.copyWith(height: 1.3),
                 ),
                 ], // end college-only succeeding class
-                SizedBox(height: 18.h),
+                SizedBox(height: 16.h),
+                AppUI.requiredNote(),
+                SizedBox(height: 12.h),
                 Row(children: [
                   Expanded(
                     child: ElevatedButton.icon(
@@ -1116,14 +1121,14 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
               Expanded(flex: 2, child: Text(schoolTerm('COURSE'), style: _h())),
               Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: _h())),
-              if (!isSchool) Expanded(flex: 2, child: Text('SUCCEEDING', style: _h())),
+              if (!isSchool) Expanded(flex: 2, child: Text('SUCCEEDING CLASS', style: _h())),
               if (!isSchool) SizedBox(width: 110.w, child: Text('TYPE', style: _h())),
-              SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
+              SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                    ? AppUI.empty(title: schoolTerm('No classes'), why: schoolTerm('Add a class with the form on the left, or use Import CSV/Excel.'), icon: 'book-1')
+                    ? AppUI.empty(title: schoolTerm('No classes'), why: schoolTerm('Add a class with the form on the left, or click Import.'), icon: 'book-1')
                     : ListView.separated(
                         itemCount: _rows.length,
                         separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),

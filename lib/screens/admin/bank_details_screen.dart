@@ -80,7 +80,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       _fetchFeeGroups();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to assign bank account'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Could not assign the bank account. Please try again.'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -222,7 +222,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       _fetchBanks();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to save bank account'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Could not save the bank account. Please try again.'), backgroundColor: AppColors.error),
       );
     }
   }
@@ -251,9 +251,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Cannot remove this bank account'),
+          title: const Text('Cannot Delete This Bank Account'),
           content: Text(
-              '"${b['banname']}" (${b['banaccno']}) carries a Paytm merchant id, '
+              '"${b['banname']}" (${b['banaccno']}) carries a Paytm merchant ID, '
               'so online payments are collected through it.\n\n'
               'Every online payment ever made to this account is matched back to '
               'Paytm using this record. Removing it would leave any payment still '
@@ -263,7 +263,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('OK')),
+                child: const Text('Close')),
           ],
         ),
       );
@@ -294,7 +294,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           count: inUse,
           noun: 'fee group',
           fix: 'Point those fee groups at another bank account first, in '
-              'Setup > Fee Master > Fee Group.',
+              'Setup → Fee Master → Fee Group.',
         );
         return;
       }
@@ -312,8 +312,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete bank account?'),
-        content: Text('Remove "${b['banname']}" (${b['banaccno']})? Existing fee groups and payments referencing it stay intact but the account stops appearing in dropdowns.'),
+        title: const Text('Delete Bank Account'),
+        content: Text('Delete "${b['banname']}" (${b['banaccno']})? Past payments that used it are kept, but the account will no longer appear in dropdowns.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
@@ -328,7 +328,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     if (await SupabaseService.deleteBank(banId)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bank account removed'), backgroundColor: AppColors.success),
+        const SnackBar(content: Text('Bank account deleted'), backgroundColor: AppColors.success),
       );
       if (_editingBanId == banId) _resetForm();
       setState(() => _selectedBank = null);
@@ -395,7 +395,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                   TextButton.icon(
                     onPressed: _resetForm,
                     icon: const AppIcon('add', size: 14, color: AppColors.primary),
-                    label: const Text('New'),
+                    label: const Text('Add New Account'),
                   ),
               ],
             ),
@@ -405,13 +405,13 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             // balanced; the second slot is left empty when an odd field
             // doesn't have a natural partner.
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('Bank Name', _nameController, hint: 'IOB', required: true, validator: _vName)),
+              Expanded(child: _labelledField('Bank Name', _nameController, hint: 'e.g. Indian Overseas Bank', required: true, validator: _vName)),
               SizedBox(width: 16.w),
-              Expanded(child: _labelledField('Branch', _branchController, hint: 'Cuddalore Main', required: true, validator: _vBranch)),
+              Expanded(child: _labelledField('Branch', _branchController, hint: 'e.g. Cuddalore Main', required: true, validator: _vBranch)),
             ]),
             SizedBox(height: 16.h),
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('IFSC Code', _ifscController, hint: 'IOBA0001234', required: true,
+              Expanded(child: _labelledField('IFSC Code', _ifscController, hint: 'e.g. IOBA0001234', required: true,
                 inputFormatters: [
                   LengthLimitingTextInputFormatter(11),
                   FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
@@ -419,22 +419,22 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                 ],
                 validator: _vIfsc)),
               SizedBox(width: 16.w),
-              Expanded(child: _labelledField('Account Holder', _accHolderController, hint: 'KCET College', required: true, validator: _vAccHolder)),
+              Expanded(child: _labelledField('Account Holder Name', _accHolderController, hint: 'Enter account holder name', required: true, validator: _vAccHolder)),
             ]),
             SizedBox(height: 16.h),
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('Account Number', _accNoController, hint: '1234567890', required: true,
+              Expanded(child: _labelledField('Account Number', _accNoController, hint: 'Enter account number', required: true,
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(18)],
                 validator: _vAccNo)),
               SizedBox(width: 16.w),
-              Expanded(child: _labelledField('Mobile', _mobileController, hint: '10-digit mobile', keyboardType: TextInputType.phone,
+              Expanded(child: _labelledField('Mobile Number', _mobileController, hint: 'Enter 10-digit mobile number', keyboardType: TextInputType.phone,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
                 validator: _vMobile)),
             ]),
             SizedBox(height: 16.h),
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('Email', _emailController, hint: 'finance@school.in', keyboardType: TextInputType.emailAddress, validator: _vEmail)),
+              Expanded(child: _labelledField('Email', _emailController, hint: 'e.g. finance@school.in', keyboardType: TextInputType.emailAddress, validator: _vEmail)),
               SizedBox(width: 16.w),
               Expanded(child: _labelledField('Address Line 1', _addr1Controller, required: true, validator: _vAddr1)),
             ]),
@@ -449,8 +449,8 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             // account. Fee groups mapped to this bank route their Paytm payment
             // to this MID. Leave blank to use the app's default MID.
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('Paytm MID (online settlement)', _paytmMidController,
-                hint: 'e.g. rJWzOr10770674724816 — blank = default',
+              Expanded(child: _labelledField('Paytm Merchant ID', _paytmMidController,
+                hint: 'Leave blank to use the default merchant ID',
                 inputFormatters: [
                   LengthLimitingTextInputFormatter(40),
                   FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
@@ -458,7 +458,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               SizedBox(width: 16.w),
               const Expanded(child: SizedBox.shrink()),
             ]),
-            SizedBox(height: 24.h),
+            SizedBox(height: 16.h),
+            AppUI.requiredNote(),
+            SizedBox(height: 12.h),
 
             Row(
               children: [
@@ -484,7 +486,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                             size: AppBtn.iconSize(context),
                             color: Colors.white,
                           ),
-                    label: Text(_editingBanId != null ? 'Update' : 'Add Bank'),
+                    label: Text(_editingBanId != null ? 'Update' : 'Add Bank Account'),
                   ),
                 ),
               ],
@@ -526,56 +528,56 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   // â”€â”€ Validators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   String? _vName(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length > 45) return 'Bank name must be less than 45 characters';
+    if (s.isEmpty) return 'Enter the bank name';
+    if (s.length > 45) return 'Bank name must be 45 characters or fewer';
     return null;
   }
   String? _vBranch(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length > 80) return 'Branch must be less than 80 characters';
+    if (s.isEmpty) return 'Enter the branch name';
+    if (s.length > 80) return 'Branch name must be 80 characters or fewer';
     return null;
   }
   String? _vIfsc(String? v) {
     final s = (v ?? '').trim().toUpperCase();
-    if (s.isEmpty) return 'Required';
-    if (!RegExp(r'^[A-Z]{4}0[A-Z0-9]{6}$').hasMatch(s)) return 'IFSC must be 11 chars (e.g. IOBA0001234)';
+    if (s.isEmpty) return 'Enter the IFSC code';
+    if (!RegExp(r'^[A-Z]{4}0[A-Z0-9]{6}$').hasMatch(s)) return 'Enter a valid 11-character IFSC code (e.g. IOBA0001234)';
     return null;
   }
   String? _vAccHolder(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length > 50) return 'Account holder must be less than 50 characters';
+    if (s.isEmpty) return 'Enter the account holder name';
+    if (s.length > 50) return 'Account holder name must be 50 characters or fewer';
     return null;
   }
   String? _vAccNo(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
+    if (s.isEmpty) return 'Enter the account number';
     if (s.length < 9 || s.length > 18) return 'Account number must be 9 to 18 digits';
     return null;
   }
   String? _vMobile(String? v) {
     final s = v?.trim() ?? '';
     if (s.isEmpty) return null;
-    if (s.length != 10) return 'Mobile must be 10 digits';
+    if (s.length != 10) return 'Enter a 10-digit mobile number';
     return null;
   }
   String? _vEmail(String? v) {
     final s = v?.trim() ?? '';
     if (s.isEmpty) return null;
     if (!RegExp(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$').hasMatch(s)) return 'Enter a valid email address';
-    if (s.length > 60) return 'Email must be less than 60 characters';
+    if (s.length > 60) return 'Email must be 60 characters or fewer';
     return null;
   }
   String? _vAddr1(String? v) {
     final s = v?.trim() ?? '';
-    if (s.isEmpty) return 'Required';
-    if (s.length > 50) return 'Address must be less than 50 characters';
+    if (s.isEmpty) return 'Enter address line 1';
+    if (s.length > 50) return 'Address must be 50 characters or fewer';
     return null;
   }
   String? _vAddrOpt(String? v) {
     final s = v?.trim() ?? '';
-    if (s.length > 50) return 'Address must be less than 50 characters';
+    if (s.length > 50) return 'Address must be 50 characters or fewer';
     return null;
   }
 
@@ -602,7 +604,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
             Padding(
               padding: EdgeInsets.symmetric(vertical: 8.h),
               child: AppUI.empty(
-                title: 'No fee groups yet. Import fee groups in Master Data first.',
+                title: 'No fee groups yet. Add them in Setup → Fee Master → Fee Group first.',
                 icon: 'category-2',
               ),
             )
@@ -666,13 +668,13 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                               dropdownColor: Colors.white,
                               borderRadius: BorderRadius.circular(12),
                               elevation: 6,
-                              decoration: _inputDecoration(context, '- No account -', filled: currentBanId != null),
+                              decoration: _inputDecoration(context, 'Select bank account', filled: currentBanId != null),
                               style: _inputTextStyle(context, filled: currentBanId != null),
-                              hint: Text('- No account -', style: _inputTextStyle(context)),
+                              hint: Text('Select bank account', style: _inputTextStyle(context)),
                               items: [
                                 DropdownMenuItem<int?>(
                                   value: null,
-                                  child: Text('- No account -', style: _inputTextStyle(context)),
+                                  child: Text('Not assigned', style: _inputTextStyle(context)),
                                 ),
                                 for (final b in _banks)
                                   DropdownMenuItem<int?>(
@@ -685,7 +687,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                                   ),
                               ],
                               selectedItemBuilder: (context) => [
-                                Align(alignment: Alignment.centerLeft, child: Text('- No account -', overflow: TextOverflow.ellipsis, style: _inputTextStyle(context, filled: true))),
+                                Align(alignment: Alignment.centerLeft, child: Text('Not assigned', overflow: TextOverflow.ellipsis, style: _inputTextStyle(context, filled: true))),
                                 for (final b in _banks)
                                   Align(alignment: Alignment.centerLeft, child: Text('${b['banname']} • ${b['banaccno']}', overflow: TextOverflow.ellipsis, style: _inputTextStyle(context, filled: true))),
                               ],
@@ -745,7 +747,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                       SizedBox(width: 16.w),
                       AppUI.th('BANK', flex: 3),
                       AppUI.th('BRANCH', flex: 2),
-                      AppUI.th('A/C NO.', flex: 3),
+                      AppUI.th('ACCOUNT NO.', flex: 3),
                       SizedBox(width: 30.w),
                     ],
                   ),

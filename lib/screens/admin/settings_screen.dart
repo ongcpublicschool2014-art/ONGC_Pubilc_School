@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
@@ -794,7 +795,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sequence created for $fgDesc'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('Receipt sequence created for $fgDesc.'), backgroundColor: AppColors.success),
         );
         _fetchData();
       }
@@ -817,7 +818,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
     if (_feeGroups.isEmpty) {
       return Padding(
         padding: EdgeInsets.all(24.w),
-        child: AppUI.empty(title: 'No fee groups found', why: 'Import fee groups first in Master Data.', icon: 'receipt-1'),
+        child: AppUI.empty(title: 'No fee groups found', why: 'Add fee groups first in Setup > Fee Master > Fee Group.', icon: 'receipt-1'),
       );
     }
 
@@ -885,7 +886,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               Expanded(child: Text('Receipt Sequence', style: AppUI.cardTitle)),
             ]),
             SizedBox(height: 4.h),
-            Text('set up the receipt-number sequence for a fee group', style: AppUI.muted),
+            Text('Set up the receipt number sequence for a fee group', style: AppUI.muted),
             SizedBox(height: 20.h),
             _lbl('Fee Group *'),
             SizedBox(height: 6.h),
@@ -915,14 +916,14 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               decoration: _dec('e.g. TF', filled: _prefixController.text.trim().isNotEmpty),
             ),
             SizedBox(height: 16.h),
-            _lbl('Number Width'),
+            _lbl('Number of Digits'),
             SizedBox(height: 6.h),
             TextField(
               controller: _widthController,
               keyboardType: TextInputType.number,
               onChanged: (_) => setState(() {}),
               style: AppUI.fieldText(context, filled: _widthController.text.trim().isNotEmpty),
-              decoration: _dec('5', filled: _widthController.text.trim().isNotEmpty),
+              decoration: _dec('e.g. 5', filled: _widthController.text.trim().isNotEmpty),
             ),
             SizedBox(height: 12.h),
             Container(
@@ -930,7 +931,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
               child: Row(children: [
                 Text('Preview:  ', style: AppUI.muted),
-                Expanded(child: Text(_prefixController.text.trim().isEmpty ? '—' : preview, style: AppUI.money.copyWith(color: AppColors.primary), overflow: TextOverflow.ellipsis)),
+                Expanded(child: Text(_prefixController.text.trim().isEmpty ? 'Enter a prefix to see the preview' : preview, style: AppUI.money.copyWith(color: AppColors.primary), overflow: TextOverflow.ellipsis)),
               ]),
             ),
             SizedBox(height: 18.h),
@@ -939,9 +940,11 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               child: ElevatedButton.icon(
                 onPressed: (_isSaving || available.isEmpty) ? null : _createFromForm,
                 icon: _isSaving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.add, size: 16),
-                label: const Text('Create'),
+                label: const Text(AppText.save),
               ),
             ),
+            SizedBox(height: 10.h),
+            AppUI.requiredNote(),
           ],
         ),
       ),
@@ -983,12 +986,12 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
                       Expanded(flex: 3, child: Text('FEE GROUP', style: h())),
                       SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
                       SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
-                      SizedBox(width: 80.w, child: Text('CURRENT', textAlign: TextAlign.right, style: h())),
+                      SizedBox(width: 100.w, child: Text('LAST ISSUED', textAlign: TextAlign.right, style: h())),
                     ]),
                   ),
                   Expanded(
                     child: rows.isEmpty
-                        ? AppUI.empty(title: 'No payment sequences yet', why: 'Create one with the form on the left.', icon: 'receipt-1')
+                        ? AppUI.empty(title: 'No receipt sequences yet', why: 'Create one with the form on the left.', icon: 'receipt-1')
                         : ListView.separated(
                             itemCount: rows.length,
                             separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
@@ -1004,7 +1007,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
                                   Expanded(flex: 3, child: Text(fgName[s['fg_id']] ?? s['actname']?.toString() ?? '', style: c(), overflow: TextOverflow.ellipsis)),
                                   SizedBox(width: 90.w, child: Text(prefix, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, color: AppColors.primary))),
                                   SizedBox(width: 120.w, child: Text(preview, style: AppUI.cell.copyWith(color: AppColors.primary))),
-                                  SizedBox(width: 80.w, child: Text('${s['seqcurno'] ?? 0}', textAlign: TextAlign.right, style: c())),
+                                  SizedBox(width: 100.w, child: Text('${s['seqcurno'] ?? 0}', textAlign: TextAlign.right, style: c())),
                                 ]),
                               );
                             },
@@ -1148,24 +1151,24 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
 
     if (ruleName.isEmpty || fromDays == null || fineValue == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill Rule Name, From Days, and Fine Value'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Enter the rule name, from days and fine value.'), backgroundColor: AppColors.error),
       );
       return;
     }
     if (_feeType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select fee type'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Select a fee type.'), backgroundColor: AppColors.error),
       );
       return;
     }
     if (_fineType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select fine type'), backgroundColor: AppColors.error),
+        const SnackBar(content: Text('Select a fine type.'), backgroundColor: AppColors.error),
       );
       return;
     }
     if (ruleName.length > 50) {
-      setState(() => _ruleNameError = 'Rule name must be less than 50 characters');
+      setState(() => _ruleNameError = 'Rule name must be 50 characters or fewer');
       return;
     }
 
@@ -1181,6 +1184,8 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
       'createdby': auth.userName ?? 'Admin',
     };
 
+    // _clearForm() below resets _editingId, so remember which message to show.
+    final wasEditing = _editingId != null;
     try {
       if (_editingId != null) {
         await SupabaseService.saveSchemaRow('finerule', data, pkCol: 'fr_id', pkVal: _editingId!);
@@ -1191,7 +1196,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
       _loadRules();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_editingId != null ? 'Rule updated' : 'Rule created'), backgroundColor: AppColors.success),
+          SnackBar(content: Text(wasEditing ? 'Fine rule updated.' : 'Fine rule created.'), backgroundColor: AppColors.success),
         );
       }
     } catch (e) {
@@ -1215,7 +1220,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
     try {
       await SupabaseService.deleteSchemaRow('finerule', 'fr_id', frId);
       _loadRules();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rule deleted'), backgroundColor: AppColors.success));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Fine rule deleted.'), backgroundColor: AppColors.success));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError(e)), backgroundColor: AppColors.error));
     }
@@ -1256,13 +1261,13 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                     style: _fieldTextStyle(filled: _ruleNameCtrl.text.trim().isNotEmpty),
                     onChanged: (v) {
                       final overflow = v.trim().length > 50;
-                      final next = overflow ? 'Rule name must be less than 50 characters' : null;
+                      final next = overflow ? 'Rule name must be 50 characters or fewer' : null;
                       setState(() => _ruleNameError = next);
                     },
-                    decoration: _fieldDecoration(hint: 'e.g., 1 Week Overdue', filled: _ruleNameCtrl.text.trim().isNotEmpty).copyWith(errorText: _ruleNameError, errorMaxLines: 3),
+                    decoration: _fieldDecoration(hint: 'e.g. 1 week overdue', filled: _ruleNameCtrl.text.trim().isNotEmpty).copyWith(errorText: _ruleNameError, errorMaxLines: 3),
                   ),
                   SizedBox(height: 14.h),
-                  _fieldLabel('Fee Type'),
+                  _fieldLabel('Fee Type', required: true),
                   SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     value: _feeType,
@@ -1292,7 +1297,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                               keyboardType: TextInputType.number,
                               style: _fieldTextStyle(filled: _fromDaysCtrl.text.trim().isNotEmpty),
                               onChanged: (_) => setState(() {}),
-                              decoration: _fieldDecoration(hint: '1', filled: _fromDaysCtrl.text.trim().isNotEmpty),
+                              decoration: _fieldDecoration(hint: 'e.g. 1', filled: _fromDaysCtrl.text.trim().isNotEmpty),
                             ),
                           ],
                         ),
@@ -1309,7 +1314,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                               keyboardType: TextInputType.number,
                               style: _fieldTextStyle(filled: _toDaysCtrl.text.trim().isNotEmpty),
                               onChanged: (_) => setState(() {}),
-                              decoration: _fieldDecoration(hint: '7', filled: _toDaysCtrl.text.trim().isNotEmpty),
+                              decoration: _fieldDecoration(hint: 'Leave blank for no upper limit', filled: _toDaysCtrl.text.trim().isNotEmpty),
                             ),
                           ],
                         ),
@@ -1317,7 +1322,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                     ],
                   ),
                   SizedBox(height: 14.h),
-                  _fieldLabel('Fine Type'),
+                  _fieldLabel('Fine Type', required: true),
                   SizedBox(height: 6.h),
                   DropdownButtonFormField<String>(
                     value: _fineType,
@@ -1329,24 +1334,30 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                     style: _fieldTextStyle(filled: _fineType != null),
                     decoration: _fieldDecoration(hint: 'Select fine type', filled: _fineType != null),
                     items: const [
-                      DropdownMenuItem(value: 'FIXED', child: Text('Fixed Amount (Rs.)')),
+                      DropdownMenuItem(value: 'FIXED', child: Text('Fixed Amount (₹)')),
                       DropdownMenuItem(value: 'PERCENT', child: Text('Percentage (%)')),
                     ],
                     selectedItemBuilder: (context) => [
-                      Align(alignment: Alignment.centerLeft, child: Text('Fixed Amount (Rs.)', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+                      Align(alignment: Alignment.centerLeft, child: Text('Fixed Amount (₹)', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
                       Align(alignment: Alignment.centerLeft, child: Text('Percentage (%)', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
                     ],
                     onChanged: (v) => setState(() => _fineType = v),
                   ),
                   SizedBox(height: 14.h),
-                  _fieldLabel(_fineType == 'FIXED' ? 'Fine Amount (Rs.)' : 'Fine Percentage (%)', required: true),
+                  _fieldLabel(
+                      _fineType == 'FIXED'
+                          ? 'Fine Amount (₹)'
+                          : _fineType == 'PERCENT'
+                              ? 'Fine Percentage (%)'
+                              : 'Fine Value',
+                      required: true),
                   SizedBox(height: 6.h),
                   TextField(
                     controller: _fineValueCtrl,
                     keyboardType: TextInputType.number,
                     style: _fieldTextStyle(filled: _fineValueCtrl.text.trim().isNotEmpty),
                     onChanged: (_) => setState(() {}),
-                    decoration: _fieldDecoration(hint: _fineType == 'FIXED' ? '50' : '2', filled: _fineValueCtrl.text.trim().isNotEmpty),
+                    decoration: _fieldDecoration(hint: _fineType == 'FIXED' ? 'e.g. 50' : 'e.g. 2', filled: _fineValueCtrl.text.trim().isNotEmpty),
                   ),
                   SizedBox(height: 22.h),
                   Row(
@@ -1357,7 +1368,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                           child: ElevatedButton.icon(
                             onPressed: _saveRule,
                             icon: Icon(_editingId != null ? Icons.save_rounded : Icons.add_rounded, size: AppBtn.iconSize(context)),
-                            label: Text(_editingId != null ? 'Update' : 'Add Rule'),
+                            label: Text(_editingId != null ? AppText.update : AppText.save),
                           ),
                         ),
                       ),
@@ -1374,6 +1385,8 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                       ],
                     ],
                   ),
+                  SizedBox(height: 10.h),
+                  AppUI.requiredNote(),
                 ],
               ),
               ),
@@ -1425,10 +1438,10 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                               borderRadius: BorderRadius.circular(10.r),
                             ),
                             child: Builder(builder: (ctx) {
-                              const flexes = <int>[3, 2, 1, 1, 2, 2, 2];
+                              const flexes = <int>[3, 2, 2, 2, 2, 2, 2];
                               const headers = <String>[
-                                'RULE NAME', 'FEE TYPE', 'FROM', 'TO',
-                                'TYPE', 'VALUE', 'ACTIONS',
+                                'RULE NAME', 'FEE TYPE', 'FROM DAY', 'TO DAY',
+                                'FINE TYPE', 'VALUE', 'ACTION',
                               ];
                               final hStyle = AppUI.tableHead;
                               // Per-column alignment so the header text and
@@ -1513,7 +1526,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                                                 _chip(
                                                     label: r['feetype']
                                                             ?.toString() ??
-                                                        'ALL',
+                                                        'All Fee Types',
                                                     color: AppColors
                                                         .accent)),
                                             cell(
@@ -1534,7 +1547,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                                                 _chip(
                                                     label: isFixed
                                                         ? 'Fixed'
-                                                        : 'Percent',
+                                                        : 'Percentage',
                                                     color: isFixed
                                                         ? AppColors
                                                             .success

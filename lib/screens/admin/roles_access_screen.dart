@@ -139,7 +139,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load roles and menu access. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -204,7 +204,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save menu access. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -242,7 +242,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
             child: AppUI.cardHeader(
               icon: 'lock-1',
               title: 'Menu Access',
-              subtitle: 'choose which menus a role can open',
+              subtitle: 'Choose which menus a role can open',
               trailing: [
               SizedBox(
                 width: 220.w,
@@ -459,7 +459,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
           Icon(all ? Icons.remove_done : Icons.done_all,
               size: 13.sp, color: AppColors.primary),
           SizedBox(width: 5.w),
-          Text(all ? 'Clear' : 'Select all',
+          Text(all ? 'Clear' : 'Select All',
               style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.primary)),
         ]),
       ),
@@ -502,7 +502,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
           Icon(all ? Icons.remove_done : Icons.done_all,
               size: 13.sp, color: AppColors.demand),
           SizedBox(width: 5.w),
-          Text(all ? 'Clear' : 'Select all',
+          Text(all ? 'Clear' : 'Select All',
               style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.demand)),
         ]),
       ),

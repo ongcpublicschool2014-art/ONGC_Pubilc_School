@@ -9,6 +9,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../services/supabase_service.dart';
 import 'package:provider/provider.dart';
@@ -54,7 +55,7 @@ void _showImportResultDialog(BuildContext context, {required int imported, requi
             SizedBox(height: 20.h),
             ElevatedButton(
               onPressed: () { Navigator.pop(ctx); onDone?.call(); },
-              child: const Text('Done'),
+              child: const Text(AppText.close),
             ),
           ],
         ),
@@ -226,12 +227,28 @@ Future<List<String>> _getImportErrors(int insId, String impType) async {
   return (errors as List).map((e) => 'Row ${e['imp_id']}: ${_friendlyError(e['error_msg']?.toString() ?? 'Unknown error')}').toList();
 }
 
+/// Readable names for the database columns the staging import can report
+/// as empty (display only).
+const Map<String, String> _importColumnLabels = {
+  'fg_id': 'Fee Group',
+  'fgdesc': 'Group Name',
+  'fee_id': 'Fee ID',
+  'feedesc': 'Fee Name',
+  'feeshort': 'Short Name',
+  'feefineapplicable': 'Fine Applicable',
+  'con_id': 'Concession ID',
+  'condesc': 'Concession Name',
+  'yr_id': 'Academic Year',
+  'yrlabel': 'Academic Year',
+};
+
 String _friendlyError(String msg) {
   final m = msg.toLowerCase();
   if (m.contains('duplicate key') || m.contains('unique constraint')) return 'Duplicate record found';
   if (m.contains('not-null') || m.contains('null value')) {
     final match = RegExp(r'column "(\w+)"').firstMatch(msg);
-    return '${match?.group(1) ?? 'Field'} is required';
+    final field = _importColumnLabels[match?.group(1)];
+    return field == null ? 'A required field is empty' : '$field is required';
   }
   if (m.contains('foreign key') || m.contains('fkey')) return 'Invalid reference - check linked values';
   if (m.contains('check constraint')) return 'Invalid value format';
@@ -418,6 +435,11 @@ Map<int, Set<int>> _deriveCellErrors(Map<int, String> rowErrs, List<String> head
         if (idx != null) cells.add(idx);
       }
     }
+    // "Course ID must be a whole number" -> highlight the "Course ID" header.
+    for (final m in RegExp(r'(?:^|\.\s+)([A-Za-z ]+?) must be').allMatches(msg)) {
+      final idx = headerIndexFor(m.group(1)!.trim());
+      if (idx != null) cells.add(idx);
+    }
     for (final m in RegExp(r'^([A-Za-z ]+?)\s*"').allMatches(msg)) {
       final idx = headerIndexFor(m.group(1)!.trim());
       if (idx != null) cells.add(idx);
@@ -521,14 +543,14 @@ Widget _buildImportCard({
                       )
                   : onTemplate,
               icon: AppIcon(hasCellErrors ? 'document-download' : 'grid-1', size: 16, color: AppColors.primary),
-              label: Text(hasCellErrors ? 'Export with Errors' : 'Format to Excel'),
+              label: Text(hasCellErrors ? 'Export with Errors' : AppText.downloadTemplate),
             ),
             if (onSampleDownload != null) ...[
               SizedBox(width: 8.w),
               OutlinedButton.icon(
                 onPressed: onSampleDownload,
                 icon: AppIcon('document-download', size: 16, color: AppColors.primary),
-                label: const Text('Sample Data'),
+                label: const Text(AppText.downloadSample),
               ),
             ],
           ],
@@ -610,7 +632,7 @@ Widget _buildImportCard({
                       : displayRows.isEmpty
                           ? AppUI.empty(
                               title: 'No data loaded',
-                              why: 'Click Browse to load a CSV or Excel file',
+                              why: 'Click Import to load a CSV or Excel file.',
                               icon: 'element-4',
                             )
                           : AppVerticalScrollbar(
@@ -796,14 +818,14 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
       final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
       final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
       // Blank ID is generated on save; a value that is not a number is an error.
-      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Course ID'; continue; }
+      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { rowErrs[i] = 'Course ID must be a number'; continue; }
       if (name.isEmpty) rowErrs[i] = 'Missing: Course Name';
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1038,26 +1060,30 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       final courRaw = _rows[i].length > 3   ? _rows[i][3]?.toString().trim() ?? '' : '';
       final succRaw = (!isSchool && _rows[i].length > 4) ? _rows[i][4]?.toString().trim() ?? '' : '';
       // Blank ID is generated on save; a value that is not a number is an error.
-      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { rowErrs[i] = 'Invalid Class ID'; continue; }
+      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { rowErrs[i] = 'Class ID must be a number'; continue; }
+      final invalid = <String>[];
       if (name.isEmpty) missing.add('Class Name');
-      if (courRaw.isNotEmpty && int.tryParse(courRaw) == null) missing.add('Course ID must be integer');
-      if (succRaw.isNotEmpty && int.tryParse(succRaw) == null) missing.add('Succeeding Class must be integer');
-      if (actRaw.isNotEmpty && int.tryParse(actRaw) == null) missing.add('Active Status must be 0 or 1');
-      if (missing.isNotEmpty) { rowErrs[i] = 'Missing: ${missing.join(', ')}'; continue; }
+      if (courRaw.isNotEmpty && int.tryParse(courRaw) == null) invalid.add('Course ID must be a whole number');
+      if (succRaw.isNotEmpty && int.tryParse(succRaw) == null) invalid.add('Succeeding Class must be a whole number');
+      if (actRaw.isNotEmpty && int.tryParse(actRaw) == null) invalid.add('Active Status must be 0 or 1');
+      if (missing.isNotEmpty || invalid.isNotEmpty) {
+        rowErrs[i] = [if (missing.isNotEmpty) 'Missing: ${missing.join(', ')}', ...invalid].join('. ');
+        continue;
+      }
       // Course ID must match an existing course for this institution before
       // a Class can be imported (FK on class.cour_id).
       if (courRaw.isNotEmpty && _courIds.isNotEmpty) {
         final cid = int.tryParse(courRaw);
         if (cid != null && !_courIds.contains(cid)) {
-          rowErrs[i] = 'Course ID "$courRaw" not found - import the course first';
+          rowErrs[i] = 'Course ID "$courRaw" not found. Import the course first.';
         }
       }
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1241,9 +1267,9 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1263,7 +1289,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'FEEGROUP');
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
@@ -1427,14 +1453,14 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       final validByName = _fgNames.contains(fgRaw.toLowerCase());
       final haveMaster = _fgIdSet.isNotEmpty || _fgNames.isNotEmpty;
       if (fgRaw.isNotEmpty && haveMaster && !validById && !validByName) {
-        rowErrs[i] = 'Fee Group "$fgRaw" not found - import it first';
+        rowErrs[i] = 'Fee Group "$fgRaw" not found. Import the fee group first.';
       }
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1464,7 +1490,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'FEETYPE');
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
@@ -1589,9 +1615,9 @@ class _ConcessionTabState extends State<_ConcessionTab> with AutomaticKeepAliveC
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1609,7 +1635,7 @@ class _ConcessionTabState extends State<_ConcessionTab> with AutomaticKeepAliveC
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'CONCESSION');
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
@@ -1692,7 +1718,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       const {'HOSTLER', 'HOSTLERS', 'HOSTELLER', 'HOSTELLERS', 'HOSTEL', 'H', '2'});
   static const _nobLabel = {1: 'New', 2: 'Old', 3: 'Both'};
   static const _bgbLabel = {1: 'Boy', 2: 'Girl', 3: 'Both'};
-  static const _dhbLabel = {1: 'Dayscholar', 2: 'Hostler', 3: 'Both'};
+  static const _dhbLabel = {1: AppText.dayScholar, 2: AppText.hosteller, 3: 'Both'};
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
   Map<String, int> _admIdByName = {}; // admission type name (upper) -> adm_id
@@ -1916,9 +1942,9 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -1961,7 +1987,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       if (mounted) {
         setState(() => _validating = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Could not read the masters to validate. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+            content: Text('Could not load the master data needed for validation. ${friendlyError(e)}'), backgroundColor: AppColors.error));
       }
       return;
     }
@@ -2021,13 +2047,13 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
         final typed = cell(col);
         if (typed.isEmpty || rec == null) return;
         if (int.tryParse(typed) != id(rec[idCol])) {
-          problems.add('$label $typed does not match (it is ${id(rec[idCol])})');
+          problems.add('$label $typed does not match the name (expected ${id(rec[idCol])})');
           bad.add(col);
         }
       }
-      checkId(8, 'Term Id', term, 'sem_id');
-      checkId(9, 'Fee Id', fee, 'fee_id');
-      checkId(10, 'Section Id', cls, 'cla_id');
+      checkId(8, 'Term ID', term, 'sem_id');
+      checkId(9, 'Fee ID', fee, 'fee_id');
+      checkId(10, 'Section ID', cls, 'cla_id');
       final missing = [for (final e in required.entries) if (cell(e.key).isEmpty) e.value];
       for (final e in required.entries) {
         if (cell(e.key).isEmpty) bad.add(e.key);
@@ -2043,14 +2069,14 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       }
       if (_nob(cell(4)) == null) { problems.add('New/Old must be New, Old or blank'); bad.add(4); }
       if (_bgb(cell(5)) == null) { problems.add('Boy/Girl must be Boy, Girl or blank'); bad.add(5); }
-      if (_dhb(cell(6)) == null) { problems.add('Dayscholar/Hostler must be Dayscholar, Hostler or blank'); bad.add(6); }
+      if (_dhb(cell(6)) == null) { problems.add('Day Scholar/Hosteller must be Day Scholar, Hosteller or blank'); bad.add(6); }
 
       // ---- duplicates: in this file, or already saved ----------------------
       if (cls != null && term != null && fee != null && !bad.contains(4) && !bad.contains(5) && !bad.contains(6)) {
         final k = lineKey('${cls['claname']}', '${term['semname']}', '${fee['feedesc']}',
             _nob(cell(4)) ?? 3, _bgb(cell(5)) ?? 3, _dhb(cell(6)) ?? 3);
         if (seenInFile.containsKey(k)) {
-          problems.add('Same line as row ${seenInFile[k]! + 1}');
+          problems.add('Duplicate of row ${seenInFile[k]! + 1}');
           bad.addAll(const [0, 1, 2]);
         } else {
           seenInFile[k] = i;
@@ -2078,8 +2104,8 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     if (!mounted) return;
     setState(() { _validating = false; _rowErrors = rowErrs; _cellErrors = cellErrs; _isValidated = rowErrs.isEmpty; });
     ScaffoldMessenger.of(context).showSnackBar(rowErrs.isNotEmpty
-        ? SnackBar(content: Text('${rowErrs.length} row(s) have errors - highlighted in red'), backgroundColor: AppColors.error)
-        : const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+        ? SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error)
+        : const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
   }
 
   // Normalise a due date to ISO yyyy-MM-dd so Postgres never mis-parses it
@@ -2225,10 +2251,10 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
           }
         }
       } catch (e) {
-        _errors.add('Templates imported, but demand generation failed: ${_friendlyError(e.toString())}');
+        _errors.add('Fee demand lines imported, but student fee demands could not be generated: ${_friendlyError(e.toString())}');
       }
     } catch (e) {
-      _errors.add('Import failed: ${_friendlyError(e.toString())}');
+      _errors.add('Could not import the file. ${_friendlyError(e.toString())}');
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
@@ -2236,7 +2262,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
         _loadExisting();
         if (generated > 0 && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Generated $generated fee demand(s) — review & approve in Fee Demand Approval.'),
+            content: Text('Generated $generated fee demand(s). Review and approve them in Fee Demand Approval.'),
             backgroundColor: AppColors.success,
             duration: const Duration(seconds: 5),
           ));
@@ -2256,15 +2282,15 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Class Fee Demand', _headers),
       onSampleDownload: () => _exportSampleData('Class Fee Demand', _headers, isSchool ? [
-        ['I A',   'TERM 1', 'TUTION FEE',    '12000', '',    '',     '',        '30-06-2026', '', '', ''],
+        ['I A',   'TERM 1', 'TUITION FEE',   '12000', '',    '',     '',        '30-06-2026', '', '', ''],
         ['I A',   'TERM 1', 'ADMISSION FEE', '5000',  'New', '',     '',        '30-06-2026', '', '', ''],
         ['I A',   'TERM 1', 'HOSTEL FEE',    '15000', '',    '',     'Hostler', '30-06-2026', '', '', ''],
         ['LKG A', 'TERM 1', 'UNIFORM FEE',   '1800',  'New', 'Girl', '',        '30-06-2026', '', '', ''],
       ] : [
-        ['I',   'I TERM', 'SCHOOL FEES',  isSchool ? '' : 'MANAGEMENT QUOTA', '10080', '2025-05-31', 'Y', '', '', '', '', ''],
-        ['I',   'JUNE',   'TUITION FEES', isSchool ? '' : 'MANAGEMENT QUOTA', '700',   '2025-06-30', 'N', '', '', '', '', ''],
-        ['XII', 'I TERM', 'SCHOOL FEES',  isSchool ? '' : 'GOVERNMENT QUOTA', '15410', '2025-05-31', 'Y', '', '', '', '', ''],
-        ['XII', 'JUNE',   'VAN FEES',     isSchool ? '' : 'GOVERNMENT QUOTA', '810',   '2025-06-30', 'N', '', '', '', '', ''],
+        ['I',   'I TERM', 'SCHOOL FEES',  isSchool ? '' : 'MANAGEMENT QUOTA', '10080', '31-05-2025', 'Y', '', '', '', '', ''],
+        ['I',   'JUNE',   'TUITION FEES', isSchool ? '' : 'MANAGEMENT QUOTA', '700',   '30-06-2025', 'N', '', '', '', '', ''],
+        ['XII', 'I TERM', 'SCHOOL FEES',  isSchool ? '' : 'GOVERNMENT QUOTA', '15410', '31-05-2025', 'Y', '', '', '', '', ''],
+        ['XII', 'JUNE',   'VAN FEES',     isSchool ? '' : 'GOVERNMENT QUOTA', '810',   '30-06-2025', 'N', '', '', '', '', ''],
       ]),
       saving: _saving, savingLabel: _genStatus, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -2273,7 +2299,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
       isValidated: _isValidated,
       existingRows: _existingRows,
       existingHeaders: isSchool
-          ? const ['Course', 'Class', 'Semester', 'Fee Type', 'Amount', 'New/Old', 'Boy/Girl', 'Dayscholar/Hostler', 'Due Date']
+          ? const ['Course', 'Class', 'Semester', 'Fee Type', 'Amount', 'New/Old', 'Boy/Girl', 'Day Scholar/Hosteller', 'Due Date']
           : const ['Course', 'Class', 'Semester', 'Fee Type', 'Amount', 'Due Date', 'Admission Type'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
@@ -2332,7 +2358,7 @@ Future<Map<String, int>> _directLookupImport({
       final id = int.tryParse(idRaw);
       if (id == null || name.isEmpty) {
         skipped++;
-        errorsOut.add('Row ${i + 2}: invalid id or name');
+        errorsOut.add('Row ${i + 2}: ID or name is missing or invalid');
         continue;
       }
       final record = <String, dynamic>{
@@ -2423,12 +2449,12 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
       final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
       final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
       // Blank ID is generated on save; a value that is not a number is an error.
-      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Invalid Adm ID'; continue; }
-      if (name.isEmpty) { errs[i] = 'Missing Admission Name'; }
+      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Admission Type ID must be a number'; continue; }
+      if (name.isEmpty) { errs[i] = 'Missing: Admission Type Name'; }
     }
     setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
+      content: Text(errs.isEmpty ? 'Validation passed. Click Save to import.' : '${errs.length} row(s) have errors. Fix the rows marked in red and validate again.'),
       backgroundColor: errs.isEmpty ? AppColors.success : AppColors.error,
     ));
   }
@@ -2475,7 +2501,7 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Admission Name'],
+      existingHeaders: const ['Admission Type Name'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -2554,12 +2580,12 @@ class _CommunityTabState extends State<_CommunityTab> with AutomaticKeepAliveCli
       final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
       final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
       // Blank ID is generated on save; a value that is not a number is an error.
-      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Invalid Com ID'; continue; }
-      if (name.isEmpty) { errs[i] = 'Missing Community Name'; }
+      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Community ID must be a number'; continue; }
+      if (name.isEmpty) { errs[i] = 'Missing: Community Name'; }
     }
     setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
+      content: Text(errs.isEmpty ? 'Validation passed. Click Save to import.' : '${errs.length} row(s) have errors. Fix the rows marked in red and validate again.'),
       backgroundColor: errs.isEmpty ? AppColors.success : AppColors.error,
     ));
   }
@@ -2688,12 +2714,12 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
       final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
       final name = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
       // Blank ID is generated on save; a value that is not a number is an error.
-      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Invalid Quo ID'; continue; }
-      if (name.isEmpty) { errs[i] = 'Missing Quota Name'; }
+      if (idRaw.isNotEmpty && int.tryParse(idRaw) == null) { errs[i] = 'Quota ID must be a number'; continue; }
+      if (name.isEmpty) { errs[i] = 'Missing: Quota Name'; }
     }
     setState(() { _rowErrors = errs; _isValidated = errs.isEmpty; });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(errs.isEmpty ? 'Validation passed' : '${errs.length} row(s) have errors'),
+      content: Text(errs.isEmpty ? 'Validation passed. Click Save to import.' : '${errs.length} row(s) have errors. Fix the rows marked in red and validate again.'),
       backgroundColor: errs.isEmpty ? AppColors.success : AppColors.error,
     ));
   }
@@ -2723,7 +2749,7 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
   Widget build(BuildContext context) {
     super.build(context);
     return _buildImportCard(
-      title: 'Import Quota',
+      title: 'Import Quotas',
       headers: _headers,
       rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
       onBrowse: _browse,
@@ -2854,9 +2880,9 @@ class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClien
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (rowErrs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors'), backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'), backgroundColor: AppColors.error));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed! Click Save to import.'), backgroundColor: AppColors.success));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Validation passed. Click Save to import.'), backgroundColor: AppColors.success));
     }
   }
 
@@ -2901,7 +2927,7 @@ class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClien
   Widget build(BuildContext context) {
     super.build(context);
     return _buildImportCard(
-      title: 'Import Semester',
+      title: 'Import Semesters',
       headers: _headers,
       rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
       onBrowse: _browse,
@@ -2918,7 +2944,7 @@ class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClien
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Semester', 'Short', 'Type'],
+      existingHeaders: const ['Semester', 'Short Name', 'Type'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -3021,7 +3047,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
       return;
     }
     if (parsed.length < 2) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File has no data rows.'), backgroundColor: AppColors.warning));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File has no data rows. Add at least one row below the header.'), backgroundColor: AppColors.warning));
       return;
     }
     final headerCells = parsed.first.map((e) => e.toString()).toList();
@@ -3063,7 +3089,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(rowErrs.isEmpty ? 'Validation passed! Click Save to import.' : '${rowErrs.length} row(s) have errors'),
+      content: Text(rowErrs.isEmpty ? 'Validation passed. Click Save to import.' : '${rowErrs.length} row(s) have errors. Fix the rows marked in red and validate again.'),
       backgroundColor: rowErrs.isEmpty ? AppColors.success : AppColors.error));
   }
 
@@ -3122,7 +3148,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
         final label = rcpt.isEmpty ? '(no receipt no)' : rcpt;
         final admno = cell(rows.first, 2);
         final stuId = stuMap[admno] ?? stuMap[admno.toLowerCase()];
-        if (stuId == null) { _skipped++; _errors.add('Receipt $label: ${schoolTerm('Roll No')} "$admno" not found'); continue; }
+        if (stuId == null) { _skipped++; _errors.add('Receipt $label: ${schoolTerm('Roll Number')} "$admno" not found'); continue; }
         final items = <Map<String, dynamic>>[];
         for (final r in rows) {
           final dn = cell(r, 3);
@@ -3161,7 +3187,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
         }
       }
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {});
@@ -3252,7 +3278,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
         final sel = _cell(first, 2).toUpperCase() == 'O' ? 'O' : 'S';
         final admno = _cell(first, 3);
         final stuId = sel == 'S' ? (stuMap[admno] ?? stuMap[admno.toLowerCase()]) : null;
-        if (sel == 'S' && stuId == null) { _skipped++; _errors.add('Receipt $label: ${schoolTerm('Roll No')} "$admno" not found'); continue; }
+        if (sel == 'S' && stuId == null) { _skipped++; _errors.add('Receipt $label: ${schoolTerm('Roll Number')} "$admno" not found'); continue; }
 
         final lines = <Map<String, dynamic>>[];
         double total = 0;
@@ -3297,7 +3323,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
         }
       }
     } catch (e) {
-      _errors = ['Import failed: ${_friendlyError(e.toString())}'];
+      _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {});
@@ -3337,7 +3363,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
       child: Row(children: [
         seg('Fee Collection', 'fee', Icons.receipt_long_outlined),
         SizedBox(width: 4.w),
-        seg('Misc Collection', 'misc', Icons.list_alt_outlined),
+        seg('Miscellaneous Collection', 'misc', Icons.list_alt_outlined),
       ]),
     );
   }
@@ -3349,7 +3375,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
     return Column(children: [
       _modeToggle(),
       Expanded(child: _buildImportCard(
-        title: isMisc ? 'Import Misc Collections' : 'Import Fee Collections',
+        title: isMisc ? 'Import Miscellaneous Collections' : 'Import Fee Collections',
         headers: _headers,
         rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
         onBrowse: _browse,
@@ -3357,14 +3383,14 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
         onTemplate: () => _exportTemplate(isMisc ? 'Misc Collection' : 'Fee Collection', _headers),
         onSampleDownload: () => _exportSampleData(isMisc ? 'Misc Collection' : 'Fee Collection', _headers, isMisc
             ? [
-                ['FC26/00005', '01/07/2026', 'S', '421325243029', 'MOHAMMED FAWAAZ L', 'B.TECH - AI&DS-II', '', '', 'BONAFIDE CERTIFICATE', '50', 'Cash', ''],
-                ['FC26/00006', '01/07/2026', 'O', '', 'HEMAVATHI B', 'I AI DS', '', '', 'APPLICATION', '500', 'Cash', ''],
-                ['FC26/00037', '02/07/2026', 'S', '421324622001', 'ABI S', 'MCA TC 26', '', '', 'LIBRARY FINE', '150', 'Cash', ''],
+                ['FC26/00005', '01-07-2026', 'S', '421325243029', 'MOHAMMED FAWAAZ L', 'B.TECH - AI&DS-II', '', '', 'BONAFIDE CERTIFICATE', '50', 'Cash', ''],
+                ['FC26/00006', '01-07-2026', 'O', '', 'HEMAVATHI B', 'I AI DS', '', '', 'APPLICATION', '500', 'Cash', ''],
+                ['FC26/00037', '02-07-2026', 'S', '421324622001', 'ABI S', 'MCA TC 26', '', '', 'LIBRARY FINE', '150', 'Cash', ''],
               ]
             : [
-                ['R0001', '2026-06-05', '20252617', 'DM00001', '5000', 'cash', ''],
-                ['R0001', '2026-06-05', '20252617', 'DM00002', '2000', 'cash', ''],
-                ['R0002', '2026-06-06', '20252619', 'DM00003', '7000', 'upi', 'UPI-88213'],
+                ['R0001', '05-06-2026', '20252617', 'DM00001', '5000', 'cash', ''],
+                ['R0001', '05-06-2026', '20252617', 'DM00002', '2000', 'cash', ''],
+                ['R0002', '06-06-2026', '20252619', 'DM00003', '7000', 'upi', 'UPI-88213'],
               ]),
         saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
         onDismissResult: () {},

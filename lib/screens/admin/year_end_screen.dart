@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/formatters.dart';
 import '../../utils/friendly_error.dart';
@@ -43,7 +44,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
 
   static String _dmy(dynamic v) {
     final x = DateTime.tryParse('${v ?? ''}');
-    return x == null ? '-' : '${x.day.toString().padLeft(2, '0')}/${x.month.toString().padLeft(2, '0')}/${x.year}';
+    return x == null ? '-' : '${x.day.toString().padLeft(2, '0')}-${x.month.toString().padLeft(2, '0')}-${x.year}';
   }
 
   @override
@@ -80,7 +81,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Could not load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load the Year End Process status. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -100,7 +101,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
       }
       setState(() => _preview = m);
     } catch (e) {
-      _snack('Preview failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the preview. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -126,7 +127,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
       builder: (ctx) => AlertDialog(
         title: Text('Run Year End Process ${p['from']} → ${p['to']}?'),
         content: Text('$carried students go to ${p['to']} with their fees, arrears, receipt series and advances.\n\n'
-            'This can be done ONLY ONCE for ${p['from']}. Later changes in ${p['from']} are brought over with '
+            'This can be done only once for ${p['from']}. Later changes in ${p['from']} are brought over with '
             '"Sync from ${p['from']}" in ${p['to']}.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -146,11 +147,11 @@ class _YearEndScreenState extends State<YearEndScreen> {
         ],
       });
       if (!mounted) return;
-      await _showSummary('Year End Process done', Map<String, dynamic>.from(res as Map));
+      await _showSummary('Year End Process Completed', Map<String, dynamic>.from(res as Map));
       _preview = null;
       await _loadStatus();
     } catch (e) {
-      _snack('Year End Process failed -- nothing was changed. ${friendlyError(e)}', AppColors.error);
+      _snack('Year End Process could not be completed. Nothing was changed. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -174,15 +175,15 @@ class _YearEndScreenState extends State<YearEndScreen> {
             '${_id(na['count']) ?? 0} new arrear(s) carried (₹${_money(_num(na['amount']))}).',
             '${_id(nd['count']) ?? 0} new demand(s) from advance demands (₹${_money(_num(nd['amount']))}).',
             '${_id(adv['added']) ?? 0} advance line(s) added, ${_id(adv['updated']) ?? 0} changed, ${_id(adv['removed']) ?? 0} removed.',
-            if ((_id(adv['reversed']) ?? 0) > 0) '${adv['reversed']} advance reconcile(s) undone -- the advance behind them was cancelled.',
+            if ((_id(adv['reversed']) ?? 0) > 0) '${adv['reversed']} advance reconciliation(s) reversed because the advance was cancelled.',
             if ((_id(m['overpaid']) ?? 0) > 0)
-              '${m['overpaid']} arrear(s) were paid in BOTH years -- check them for a refund.',
+              '${m['overpaid']} arrear(s) were paid in both years. Check whether a refund is due.',
           ].join('\n')),
-          actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text('OK'))],
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text(AppText.close))],
         ),
       );
     } catch (e) {
-      _snack('Sync failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not sync from the previous year. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -193,7 +194,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
         builder: (ctx) => AlertDialog(
           title: Text(title),
           content: SizedBox(width: 520.w, child: _summaryGrid(m)),
-          actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text('OK'))],
+          actions: [ElevatedButton(onPressed: () => Navigator.pop(ctx), style: _solidBtn(), child: const Text(AppText.close))],
         ),
       );
 
@@ -238,7 +239,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
         ]),
       ),
       if (!done && next.isNotEmpty) ...[
-        Text('To year  ', style: AppUI.label),
+        Text('To Academic Year  ', style: AppUI.label),
         SizedBox(
           width: 150.w,
           child: DropdownButtonFormField<String>(
@@ -297,7 +298,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
         padding: EdgeInsets.all(AppUI.cardPad),
         child: SingleChildScrollView(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Year End Process done', style: AppUI.cardTitle),
+            Text('Year End Process Completed', style: AppUI.cardTitle),
             SizedBox(height: 4.h),
             Text('Work continues in ${st['done_to']}. Log in to ${st['done_to']} and use "Sync from ${st['year']}" there to bring over anything entered here later.',
                 style: AppUI.muted),
@@ -325,7 +326,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
         decoration: _cardDec,
         alignment: Alignment.center,
         child: AppUI.empty(
-          title: 'Choose the year and press Preview -- nothing is changed until you Run.',
+          title: 'Select the next academic year and click Preview. Nothing is changed until you run the process.',
           icon: 'calendar-tick',
         ),
       );
@@ -351,7 +352,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
             Icon(Icons.info_outline, size: 18.sp, color: AppColors.accent),
             SizedBox(width: 8.w),
             Expanded(
-              child: Text('Untick a student to keep them in the same ${schoolTerm('class')} (detained). Year End runs only once for ${p['from']}.',
+              child: Text('Untick a student to keep them in the same ${schoolTerm('class')} (detained). Year End Process runs only once for ${p['from']}.',
                   style: AppUI.muted),
             ),
             ElevatedButton.icon(
@@ -389,7 +390,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
       _tile('No next ${schoolTerm('class')}', '${c['no_section'] ?? 0}', color: AppColors.error, sub: 'not carried'),
       _tile('Arrears', '₹${_money(_num(arr['amount']))}', color: AppColors.warning, sub: '${arr['students'] ?? 0} students'),
       _tile("Next year's demands", '₹${_money(_num(p['advance_demand_amount']))}', sub: "${p['advance_demands'] ?? 0} from advance demands"),
-      _tile('Advance receipts', '${p['advance_receipts'] ?? 0}', sub: 'carried for reconcile'),
+      _tile('Advance receipts', '${p['advance_receipts'] ?? 0}', sub: 'carried for reconciliation'),
     ]);
   }
 
@@ -414,8 +415,8 @@ class _YearEndScreenState extends State<YearEndScreen> {
       if (p['already_done'] != null) warn('Year End Process for ${p['from']} was already done (to ${p['already_done']}).', AppColors.error),
       if ((_id(c['no_section']) ?? 0) > 0)
         warn(
-            '${c['no_section']} students have no ${schoolTerm('section')} in the next ${schoolTerm('standard')} and will NOT be carried. '
-            'Add the ${schoolTerm('sections')} (e.g. "III A") in the master, or set Section Matching, then Refresh Preview.',
+            '${c['no_section']} students have no ${schoolTerm('section')} in the next ${schoolTerm('standard')} and will not be carried. '
+            'Add the ${schoolTerm('sections')} (e.g. "III A") in Master Data, or set Section Matching, then click Refresh Preview.',
             AppColors.error),
       if ((_id(left['students']) ?? 0) > 0)
         warn('${left['students']} students who are not carried still owe ₹${_money(_num(left['amount']))} -- collect it in ${p['from']}.', AppColors.warning),
@@ -433,7 +434,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Container(
           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-          child: Text('${p['to']} receipt & number series', style: AppUI.cardTitle),
+          child: Text('Receipt and Number Series for ${p['to']}', style: AppUI.cardTitle),
         ),
         for (final s in seqs)
           Container(
@@ -441,15 +442,15 @@ class _YearEndScreenState extends State<YearEndScreen> {
             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
             child: Row(children: [
               Expanded(flex: 3, child: Text('${s['seqname'] ?? s['actname']}', style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
-              Expanded(flex: 2, child: Text('now ${s['prefix']}', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+              Expanded(flex: 2, child: Text('Current: ${s['prefix']}', style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
               Expanded(
                 flex: 3,
                 child: s['continues'] == true
-                    ? Text('continues (${s['prefix']} ${s['curno']} →)', style: AppUI.cell.copyWith(color: AppColors.textSecondary))
+                    ? Text('Continues (${s['prefix']} ${s['curno']} →)', style: AppUI.cell.copyWith(color: AppColors.textSecondary))
                     : TextField(
                         controller: _prefix[_id(s['seq_id'])],
                         style: AppUI.fieldText(context, filled: true),
-                        decoration: AppUI.field(context, '', label: 'next year prefix', filled: true, dense: true),
+                        decoration: AppUI.field(context, '', label: 'Next Year Prefix', filled: true, dense: true),
                       ),
               ),
             ]),
@@ -459,7 +460,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
   }
 
   static const _actionLabel = {
-    'PROMOTE': 'Promote',
+    'PROMOTE': 'Promoted',
     'DETAIN': 'Detained',
     'PREADMISSION': 'Pre-admission',
     'PASSOUT': 'Passing out',
@@ -514,7 +515,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
               child: TextField(
                 onChanged: (v) => setState(() => _filter = v),
                 style: AppUI.fieldText(context),
-                decoration: AppUI.field(context, 'Adm No / Name', leadingIcon: 'search-normal', filled: _filter.isNotEmpty),
+                decoration: AppUI.field(context, 'Search by admission no. or name', leadingIcon: 'search-normal', filled: _filter.isNotEmpty),
               ),
             ),
           ]),
@@ -524,10 +525,10 @@ class _YearEndScreenState extends State<YearEndScreen> {
           padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
           child: Row(children: [
             SizedBox(width: 96.w, child: Text('PROMOTE', style: AppUI.tableHead)),
-            h(schoolTerm('Roll No'), 2),
+            h(schoolTerm('Roll Number'), 2),
             h('Student', 4),
-            h('Now', 2),
-            h('Next year', 2),
+            h(schoolTerm('Current Class'), 2),
+            h(schoolTerm('Next Year Class'), 2),
             h('Action', 2),
             AppUI.th('DUES (₹)', flex: 2, align: TextAlign.right),
           ]),
