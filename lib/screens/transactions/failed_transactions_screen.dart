@@ -12,6 +12,7 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
@@ -686,7 +687,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       child: TextButton.icon(
         onPressed: () => _showReceiptOptions(t),
         icon: AppIcon('document-download', size: 16, color: color),
-        label: Text(isReconciled ? 'Download' : 'Download *',
+        label: Text(isReconciled ? 'Download' : 'Download (Unreconciled)',
             style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: color), overflow: TextOverflow.visible, softWrap: false, maxLines: 1),
         style: TextButton.styleFrom(
           padding: EdgeInsets.zero,
@@ -741,8 +742,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
     final auth = context.read<AuthProvider>();
     final mcId = -t.payId;
     final date = t.paydate ?? t.createdat;
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
 
     Map<String, dynamic> mc = {};
     final items = <ReceiptFeeItem>[];
@@ -821,8 +821,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
     final auth = context.read<AuthProvider>();
     final advId = _advIdOf(t.payId);
     final date = t.paydate ?? t.createdat;
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
 
     Map<String, dynamic> adv = {};
     final items = <ReceiptFeeItem>[];
@@ -920,8 +919,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
     final student = t.stuId != null ? _stuIdToStudent[t.stuId] : null;
     final auth = context.read<AuthProvider>();
     final date = t.paydate ?? t.createdat;
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    final dateStr = '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final dateStr = formatDmy(date);
 
     // Fetch fee details from feedemand table
     List<ReceiptTermDetail> feeDetails = [];
@@ -1299,7 +1297,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                   pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.end,
                     children: [
-                      labelValue(schoolTerm('Roll No:'), data.admissionNo),
+                      labelValue(schoolTerm('Roll Number:'), data.admissionNo),
                       pw.SizedBox(height: 6),
                       labelValue(schoolTerm('Class:'), data.className),
                     ],
@@ -1324,7 +1322,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                           pw.TableRow(
                             decoration: const pw.BoxDecoration(color: headerBg),
                             children: [
-                              tableCell('S.No', sSemiBold.copyWith(color: primaryBlue)),
+                              tableCell(AppText.serialNo, sSemiBold.copyWith(color: primaryBlue)),
                               tableCell(schoolTerm('Semester'), sSemiBold.copyWith(color: primaryBlue)),
                               tableCell('Fee Type', sSemiBold.copyWith(color: primaryBlue)),
                               tableCell('Amount', sSemiBold.copyWith(color: primaryBlue)),
@@ -1434,7 +1432,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
               pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  labelValue('Receipt Method:', data.paymentMethod.toLowerCase() == 'razorpay' ? 'Online' : data.paymentMethod),
+                  labelValue('${AppText.paymentMode}:', data.paymentMethod.toLowerCase() == 'razorpay' ? 'Online' : data.paymentMethod),
                   pw.SizedBox(height: 6),
                   labelValue('Status:', data.status == 'paid' ? 'Paid' : data.status == 'failed' ? 'Failed' : data.status),
                   if (ReceiptWidget.isOnlineMethod(data.paymentMethod) &&
@@ -1579,7 +1577,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
     return [
       AppSearchField(
         controller: _searchController,
-        hintText: schoolTerm('Search by name, roll no or class…'),
+        hintText: schoolTerm('Search by name, roll number or class'),
         onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
         width: 320,
         suffixIcon: _searchQuery.isNotEmpty
@@ -1618,7 +1616,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   /// Drill-down header - Back button + breadcrumb inside a white card,
   /// matching the Fee Collection > Total Collection drill-down design.
   String _fmtDate(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+      '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
   /// Subtitle for the Total Transactions card. The count is already filtered,
   /// so labelling it "All records" while the screen opens on today would state
@@ -1822,13 +1820,13 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                   const SizedBox(height: 16),
                   sectionLabel('CUSTOM RANGE'),
                   Row(children: [
-                    Expanded(child: datePickerBox(hint: 'From', value: from, onChanged: (d) => setStateDialog(() => from = d))),
+                    Expanded(child: datePickerBox(hint: 'Select from date', value: from, onChanged: (d) => setStateDialog(() => from = d))),
                     const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('-')),
-                    Expanded(child: datePickerBox(hint: 'To', value: to, onChanged: (d) => setStateDialog(() => to = d))),
+                    Expanded(child: datePickerBox(hint: 'Select to date', value: to, onChanged: (d) => setStateDialog(() => to = d))),
                   ]),
                   if (methodList.isNotEmpty) ...[
                     const SizedBox(height: 16),
-                    sectionLabel('PAYMENT METHOD'),
+                    sectionLabel('PAYMENT MODE'),
                     Wrap(children: methodList.map(methodChip).toList()),
                   ],
                 ],
@@ -1964,7 +1962,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                       '₹${formatIndianNumber(total)} is in the bank with nothing on any '
                       "student's ledger against it"
                       '${waited == null ? '' : ' — oldest waiting ${_waitedFor(waited)}'}'
-                      '. Tap for the details.',
+                      '. Click for details.',
                       style: AppUI.muted.copyWith(color: AppColors.warning),
                     ),
                   ],
@@ -2057,9 +2055,9 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
               ),
               SizedBox(height: 10.h),
               Text(
-                'Give the order id to whoever maintains the system. Each one '
-                'needs a person to identify the payer, then either a receipt '
-                'or a refund — it cannot be settled from this screen.',
+                'Share the order ID with your system administrator. Each payment '
+                'needs someone to identify the payer and then issue a receipt '
+                'or a refund; it cannot be settled from this screen.',
                 style: AppUI.muted,
               ),
             ],
@@ -2134,7 +2132,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
           // Money that may or may not have been taken. Not a loss and not a
           // collection -- it is the list somebody should be looking at.
           child: _buildSummaryCard(
-            'Pending',
+            'Total Pending',
             formatIndianNumber(pendingTotal),
             '${filteredPending.length} awaiting the gateway',
             AppColors.warning,
@@ -2156,7 +2154,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   // AMOUNT (index 7) is 12 wider than it needs to be, and gives those 12 back
   // as _txAmountGap below, so the text area is unchanged and the extra is a
   // real gutter.
-  static const _txColWidths = <double>[60, 110, 100, 130, 170, 110, 100, 112, 100, 100, 110];
+  static const _txColWidths = <double>[60, 110, 100, 130, 170, 110, 100, 112, 100, 100, 180];
   /// AMOUNT's position. Money reads right-aligned so the rupee figures
   /// line up on their units digit; the header follows the column.
   static const _txAmountCol = 7;
@@ -2169,7 +2167,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   /// slack at the end of its own text; only this one has to be given one.
   static const _txAmountGap = 12.0;
   static const _txHeaders = <String>[
-    'S NO.', 'DATE', 'RECEIPT NO', 'ROLL NO', 'NAME', 'CLASS',
+    'S. NO.', 'DATE', 'RECEIPT NO', 'ROLL NUMBER', 'NAME', 'CLASS',
     'MODE', 'AMOUNT', 'TYPE', 'STATUS', 'RECEIPT',
   ];
 
@@ -2254,7 +2252,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                         : AppStatus.success;
             final date = (fixedIsPaid == true ? t.paydate : (fixedIsPaid == false ? t.createdat : (t.paydate ?? t.createdat)));
             final dateStr = date != null
-                ? '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}'
+                ? '${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year}'
                 : '-';
             return Container(
               color: i.isEven ? Colors.white : AppColors.surface,
@@ -2374,7 +2372,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       // collected today" -- not "there are no transactions". Say which, and
       // name the range, or a cashier reads an empty grid as a failed load.
       final scope = _emptyScopeLine();
-      return AppUI.empty(title: 'No Collection', why: scope, icon: 'receipt-2');
+      return AppUI.empty(title: 'No collections', why: scope, icon: 'receipt-2');
     }
     return _buildStickyTable(allTransactions);
   }
@@ -2402,7 +2400,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
   Widget _buildTransactionTable(List<PaymentModel> allItems, {required bool isPaid}) {
     if (allItems.isEmpty) {
       return AppUI.empty(
-        title: isPaid ? 'No Paid Transactions' : 'No Failed Transactions',
+        title: isPaid ? 'No paid transactions' : 'No failed transactions',
         why: isPaid
             ? 'No completed payments found.'
             : 'All transactions have been processed successfully.',

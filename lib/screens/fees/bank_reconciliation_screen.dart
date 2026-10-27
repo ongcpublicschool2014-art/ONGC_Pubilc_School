@@ -329,7 +329,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Template saved successfully'), backgroundColor: AppColors.success),
+          const SnackBar(content: Text('Bank statement template saved'), backgroundColor: AppColors.success),
         );
       }
     } catch (e) {
@@ -360,7 +360,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                  'CSV is ${(size / 1024 / 1024).toStringAsFixed(1)} MB - limit is 5 MB. Please trim the file.'),
+                  'This CSV file is ${(size / 1024 / 1024).toStringAsFixed(1)} MB; the limit is 5 MB. Remove older rows and upload it again.'),
               backgroundColor: AppColors.error,
             ),
           );
@@ -421,7 +421,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Could not find a recognisable header row. Expected columns include Date, Narration/Description, Amount.'),
+              content: Text('Could not find the column headings in this file. Check that it has Date, Narration (or Description) and Amount columns, then upload it again.'),
               backgroundColor: AppColors.error,
             ),
           );
@@ -561,7 +561,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                   ...((bankRow['matched_mc_ids'] as List<int>?) ?? const <int>[]),
                   mcId,
                 ];
-                bankRow['match_type'] = 'Txn ID + Amount Match (Misc)';
+                bankRow['match_type'] = 'Transaction ID + Amount Match (Miscellaneous)';
                 usedMcIds.add(mcId);
                 break;
               }
@@ -583,7 +583,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                   ...((bankRow['matched_adv_ids'] as List<int>?) ?? const <int>[]),
                   advId,
                 ];
-                bankRow['match_type'] = 'Txn ID + Amount Match (Advance)';
+                bankRow['match_type'] = 'Transaction ID + Amount Match (Advance)';
                 usedAdvIds.add(advId);
                 break;
               }
@@ -691,7 +691,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('CSV could not be read. ${friendlyError(e)}'), backgroundColor: AppColors.error),
+          SnackBar(content: Text('Could not read the CSV file. ${friendlyError(e)}'), backgroundColor: AppColors.error),
         );
       }
     }
@@ -731,7 +731,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
       shouldParseNumbers: false,
     ).convert(csvString);
     if (allRows.length < 2) {
-      _showError('The Paytm file looks empty.');
+      _showError('The Paytm file has no rows. Download the settlement report again and upload it.');
       return;
     }
 
@@ -757,7 +757,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     final utrIdx = col('utr_no');
     final txnIdIdx = col('transaction_id');
     if (orderIdx < 0 || amountIdx < 0) {
-      _showError('Not a Paytm settlement file (expected order_id and amount columns).');
+      _showError('This is not a Paytm settlement file. Upload the settlement report that has order_id and amount columns.');
       return;
     }
 
@@ -850,7 +850,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
               (nOrder.isNotEmpty && nOwn.isNotEmpty && nOwn == nOrder);
           if (hit) {
             br['matched_mc_ids'] = <int>[mcId];
-            br['match_type'] = 'Paytm Txn + Amount Match (Misc)';
+            br['match_type'] = 'Paytm Transaction + Amount Match (Miscellaneous)';
             usedMcIds.add(mcId);
             break;
           }
@@ -874,7 +874,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
               (nOrder.isNotEmpty && nOwn.isNotEmpty && nOwn == nOrder);
           if (hit) {
             br['matched_adv_ids'] = <int>[advId];
-            br['match_type'] = 'Paytm Txn + Amount Match (Advance)';
+            br['match_type'] = 'Paytm Transaction + Amount Match (Advance)';
             usedAdvIds.add(advId);
             break;
           }
@@ -909,7 +909,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     final isoBankDate = _toIsoDate(bankDate);
     final schema = SupabaseService.currentSchema;
     if (schema == null) {
-      throw StateError('No institution schema is set. Log out and log in again.');
+      throw StateError('Your institution could not be identified. Log out and log in again.');
     }
     // Deliberately NO direct-table fallback here. anon has no UPDATE grant on
     // payment (money-table lockdown), so a manual UPDATE can only ever fail
@@ -1116,20 +1116,20 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
         }
       } catch (e) {
         failed++;
-        // Raw exception to the console: friendlyError() collapses unknown
-        // errors into "Something went wrong", which makes diagnosis
-        // impossible. Keep the first two verbatim for the snackbar too.
+        // Raw exception to the console for diagnosis; the snackbar shows the
+        // readable form of the first two distinct errors.
         debugPrint('Reconcile failed for ${row['reference']}: $e');
-        if (firstErrors.length < 2) {
-          final raw = e.toString();
-          firstErrors.add(raw.length > 160 ? '${raw.substring(0, 160)}...' : raw);
+        final shown = friendlyError(e);
+        if (firstErrors.length < 2 && !firstErrors.contains(shown)) {
+          firstErrors.add(shown);
         }
       }
     }
     if (failed > 0) {
-      final settled = count > 0 ? ' $count receipt(s) did reconcile.' : '';
+      final settled = count > 0 ? ' $count receipt(s) were reconciled.' : '';
       failureMessage =
-          '$failed of ${matched.length} statement row(s) failed.$settled\n'
+          '$failed of ${matched.length} statement row(s) could not be reconciled.$settled '
+          'Upload the statement again to retry the rest.\n'
           '${firstErrors.join("\n")}';
     }
 
@@ -1139,7 +1139,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         failureMessage != null
-            ? SnackBar(content: Text('Reconcile failed: $failureMessage'), backgroundColor: AppColors.error, duration: const Duration(seconds: 8))
+            ? SnackBar(content: Text(failureMessage), backgroundColor: AppColors.error, duration: const Duration(seconds: 8))
             : SnackBar(content: Text('$count payment(s) reconciled from bank statement'), backgroundColor: AppColors.success),
       );
     }
@@ -1225,7 +1225,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                   ElevatedButton.icon(
                     onPressed: _selectedForRecon.isEmpty ? null : _reconcileSelected,
                     icon: AppIcon('tick-circle', size: AppBtn.iconSize(context), color: _selectedForRecon.isEmpty ? AppColors.textLight : Colors.white),
-                    label: const Text('Approve Selected'),
+                    label: const Text('Reconcile Selected'),
                   ),
                   SizedBox(width: AppBtn.gap(context)),
                   OutlinedButton.icon(
@@ -1284,7 +1284,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                               Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
                               Expanded(flex: 2, child: Text('AMOUNT', textAlign: TextAlign.right, style: AppUI.tableHead)),
                               SizedBox(width: 16.w),
-                              Expanded(flex: 2, child: Text('METHOD', style: AppUI.tableHead)),
+                              Expanded(flex: 2, child: Text('MODE', style: AppUI.tableHead)),
                               Expanded(flex: 2, child: Text('DATE', style: AppUI.tableHead)),
                               Expanded(flex: 2, child: Text('REFERENCE', style: AppUI.tableHead)),
                             ],
@@ -1445,7 +1445,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
               OutlinedButton.icon(
                 onPressed: _downloadSampleTemplate,
                 icon: AppIcon('element-4', size: AppBtn.iconSize(context), color: AppColors.primary),
-                label: const Text('Format to Excel'),
+                label: const Text('Download CSV Template'),
               ),
             ],
           ),
@@ -1474,7 +1474,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('S.NO', style: AppUI.tableHead)),
+                        SizedBox(width: 52.w, child: Text('S. NO.', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text('DATE', style: AppUI.tableHead)),
                         // flex 3 + a gap: a Paytm txn id is 35 digits, so at flex 2
                         // it was ellipsised hard up against the amount with no
@@ -1511,7 +1511,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                                     color: isMatched ? AppColors.success.withValues(alpha: 0.05) : (idx.isEven ? Colors.white : AppColors.surface),
                                     child: Row(
                                       children: [
-                                        SizedBox(width: 40.w, child: Text('${idx + 1}', style: AppUI.cell)),
+                                        SizedBox(width: 52.w, child: Text('${idx + 1}', style: AppUI.cell)),
                                         Expanded(flex: 2, child: Text(row['date']?.toString() ?? '-', style: AppUI.cell)),
                                         Expanded(flex: 3, child: Text(row['reference']?.toString() ?? '-', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
                                         SizedBox(width: 12.w),
@@ -1622,7 +1622,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                     border: Border.all(color: AppColors.cardBorder),
                   ),
                   child: filteredReconciled.isEmpty
-            ? AppUI.empty(title: 'No reconciled payments yet', why: 'Payments appear here once they are approved from Pending or matched from a bank statement.', icon: 'tick-square')
+            ? AppUI.empty(title: 'No reconciled payments yet', why: 'Payments appear here once they are reconciled from the Pending tab or matched from a bank statement.', icon: 'tick-square')
             : Column(
                 children: [
                   Expanded(
@@ -1635,15 +1635,15 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                     color: AppColors.tableHeadBg,
                     child: Row(
                       children: [
-                        SizedBox(width: 40.w, child: Text('#', style: AppUI.tableHead)),
+                        SizedBox(width: 52.w, child: Text('S. NO.', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text('RECEIPT NO', style: AppUI.tableHead)),
                         Expanded(flex: 3, child: Text('STUDENT', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text('AMOUNT', textAlign: TextAlign.right, style: AppUI.tableHead)),
                               SizedBox(width: 16.w),
-                        Expanded(flex: 2, child: Text('METHOD', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text('MODE', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text('RECONCILED BY', style: AppUI.tableHead)),
                         Expanded(flex: 2, child: Text('RECONCILED DATE', style: AppUI.tableHead)),
-                        Expanded(flex: 2, child: Text('BANK REF', style: AppUI.tableHead)),
+                        Expanded(flex: 2, child: Text('BANK REFERENCE', style: AppUI.tableHead)),
                       ],
                     ),
                   ),
@@ -1663,7 +1663,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                               color: idx.isEven ? Colors.white : AppColors.surface,
                               child: Row(
                                 children: [
-                                  SizedBox(width: 40.w, child: Text('${globalIdx + 1}', style: AppUI.cell)),
+                                  SizedBox(width: 52.w, child: Text('${globalIdx + 1}', style: AppUI.cell)),
                                   Expanded(flex: 2, child: Text(p['paynumber']?.toString() ?? '-', style: AppUI.cell)),
                                   Expanded(flex: 3, child: Text(p['student_display']?.toString() ?? '-', style: AppUI.cell)),
                                   Expanded(flex: 2, child: Text('${formatIndianNumber((p['transtotalamount'] as num?)?.toDouble() ?? 0)}', textAlign: TextAlign.right, style: AppUI.money)),
@@ -1720,7 +1720,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
     if (dateStr == null || dateStr.isEmpty) return '-';
     try {
       final dt = DateTime.parse(dateStr);
-      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+      return '${dt.day.toString().padLeft(2, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.year}';
     } catch (_) {
       return dateStr;
     }
