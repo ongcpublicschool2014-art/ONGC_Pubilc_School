@@ -7,6 +7,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -143,7 +144,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   String _dmy(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+      '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
   void _snack(String m, Color c) {
     if (!mounted) return;
@@ -161,7 +162,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
       if (!mounted) return;
       setState(() => _rows = rows);
     } catch (e) {
-      if (mounted) _snack('Could not count. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack('Could not count the admissions. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _counting = false);
     }
@@ -200,7 +201,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
         subtitle: '${_mode == 'NEW' ? 'From : ${_dmy(_from)}  To : ${_dmy(_to)}' : 'Students on the rolls'}'
             '${_yearLabel.isEmpty ? '' : '   Academic Year : $_yearLabel'}',
         headers: [
-          'Sl No.',
+          AppText.serialNo,
           schoolTerm('Course'),
           'Male',
           'Female',
@@ -376,7 +377,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
     // normal abstract is the same four columns it has always been.
     final anyOther = rows.any((r) => r.other > 0);
     final headers = <String>[
-      'Sl No.',
+      AppText.serialNo,
       schoolTerm('Course'),
       'Male',
       'Female',
@@ -428,7 +429,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_loadError != null) {
       return AppUI.empty(
-        title: 'Could not load the masters.',
+        title: 'Could not load the master data.',
         why: _loadError,
         action: OutlinedButton.icon(
             onPressed: _loadMasters,
@@ -447,19 +448,19 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
               child: AppUI.cardHeader(
                 icon: 'chart-2',
                 title: 'Admission Abstract',
-                subtitle: schoolTerm('students admitted per course, split by sex'),
+                subtitle: schoolTerm('Students admitted per course, split by sex'),
               ),
             ),
             _exportBtn(
               onPressed: () => _run(pdf: false),
               icon: Icons.table_chart_rounded,
-              label: 'Excel',
+              label: AppText.exportExcel,
             ),
             SizedBox(width: AppBtn.gap(context)),
             _exportBtn(
               onPressed: () => _run(pdf: true),
               icon: Icons.picture_as_pdf_rounded,
-              label: 'PDF',
+              label: AppText.exportPdf,
             ),
           ]),
           SizedBox(height: 14.h),
@@ -472,7 +473,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
                   ignoring: _mode != 'NEW',
                   child: Opacity(
                     opacity: _mode == 'NEW' ? 1 : 0.45,
-                    child: _dateField('From', _from, (d) {
+                    child: _dateField('From Date', _from, (d) {
                       setState(() => _from = d);
                       _refresh();
                     }),
@@ -485,7 +486,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
                   ignoring: _mode != 'NEW',
                   child: Opacity(
                     opacity: _mode == 'NEW' ? 1 : 0.45,
-                    child: _dateField('To', _to, (d) {
+                    child: _dateField('To Date', _to, (d) {
                       setState(() => _to = d);
                       _refresh();
                     }),
@@ -495,9 +496,9 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
               SizedBox(width: 12.w),
               Expanded(
                 child: Row(children: [
-                  _modeSeg('New admissions', 'NEW'),
+                  _modeSeg('New Admissions', 'NEW'),
                   SizedBox(width: 8.w),
-                  _modeSeg('Active students', 'ACTIVE'),
+                  _modeSeg('Active Students', 'ACTIVE'),
                 ]),
               ),
             ]),
@@ -569,7 +570,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
         Container(
           decoration: AppUI.tableHeadBar,
           padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
-          child: Row(children: row('Sl No.', schoolTerm('Course'), 'Male', 'Female', 'Other', 'Total', head: true)),
+          child: Row(children: row(AppText.serialNo, schoolTerm('Course'), 'Male', 'Female', 'Other', 'Total', head: true)),
         ),
         const Divider(height: 1),
         Expanded(
@@ -578,7 +579,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
               : _rows.isEmpty
                   ? AppUI.empty(
                       title: 'No admissions between ${_dmy(_from)} and ${_dmy(_to)}.',
-                      why: 'Widen the From / To dates above, or switch to Active students.',
+                      why: 'Widen the From Date and To Date above, or switch to Active Students.',
                     )
                   : ListView.separated(
                       padding: EdgeInsets.zero,

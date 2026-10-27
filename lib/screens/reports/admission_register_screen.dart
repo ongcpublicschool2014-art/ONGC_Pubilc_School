@@ -7,6 +7,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
@@ -58,7 +59,7 @@ String _d(Object? v) {
   final s = _s(v);
   if (s.length < 10) return '';
   final y = s.substring(0, 4), m = s.substring(5, 7), d = s.substring(8, 10);
-  return '$d/$m/$y';
+  return '$d-$m-$y';
 }
 
 Map<String, dynamic> _tcOf(Map<String, dynamic> r) =>
@@ -66,9 +67,9 @@ Map<String, dynamic> _tcOf(Map<String, dynamic> r) =>
 
 /// The register's columns, in the order the old dialog listed them.
 const List<_Field> _kFields = [
-  _Field('admdate', 'AdmnDate', _readAdmDate),
-  _Field('admno', 'Reg. No', _readAdmNo),
-  _Field('aadharno', 'Aadhar No', _readAadhar),
+  _Field('admdate', AppText.dateOfAdmission, _readAdmDate),
+  _Field('admno', 'Register No', _readAdmNo),
+  _Field('aadharno', 'Aadhaar No.', _readAadhar),
   _Field('stuname', 'Student Name', _readName),
   _Field('stugender', 'Sex', _readSex),
   _Field('fathername', 'Father Name', _readFather),
@@ -76,15 +77,15 @@ const List<_Field> _kFields = [
   _Field('courname', 'Course', _readCourse),
   _Field('stuclass', 'Class', _readClass),
   _Field('medium', 'Medium', _readMedium),
-  _Field('yrlabel', 'AcademicYear', _readYear),
-  _Field('admname', 'Admn Type', _readAdmType),
+  _Field('yrlabel', 'Academic Year', _readYear),
+  _Field('admname', 'Admission Type', _readAdmType),
   _Field('prevschool', 'Last School Studied', _readPrevSchool),
-  _Field('studob', 'DOB', _readDob),
+  _Field('studob', AppText.dateOfBirth, _readDob),
   _Field('community', 'Community', _readCommunity),
   _Field('caste', 'Caste', _readCaste),
   _Field('religion', 'Religion', _readReligion),
   _Field('nationality', 'Nationality', _readNationality),
-  _Field('stubloodgrp', 'BloodGroup', _readBlood),
+  _Field('stubloodgrp', 'Blood Group', _readBlood),
   _Field('stuaddress', 'Permanent Address', _readAddress),
   _Field('stucity', 'City', _readCity),
   _Field('tcno', 'TC No', _readTcNo),
@@ -363,7 +364,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   String _dmy(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+      '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
   void _snack(String m, Color c) {
     if (!mounted) return;
@@ -415,13 +416,13 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
           title: Row(children: [
-            Text(schoolTerm('Classes'), style: AppUI.cardTitle),
+            Text(schoolTerm('Select Classes'), style: AppUI.cardTitle),
             const Spacer(),
             TextButton(
               onPressed: () => setLocal(() => draft
                 ..clear()
                 ..addAll(_classNames)),
-              child: const Text('Select all'),
+              child: const Text('Select All'),
             ),
             TextButton(
               onPressed: () => setLocal(draft.clear),
@@ -434,7 +435,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
             child: _classNames.isEmpty
                 ? AppUI.empty(
                     title: schoolTerm('No classes for this course.'),
-                    why: schoolTerm('Pick another course, or add classes to this one in the masters.'))
+                    why: schoolTerm('Select another course, or add classes to it in Master Data.'))
                 : ListView.builder(
                     itemCount: _classNames.length,
                     itemBuilder: (_, i) {
@@ -508,11 +509,11 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
 
   Future<void> _run({required bool pdf}) async {
     if (_picked.isEmpty) {
-      _snack('Move at least one field into the Report List.', AppColors.warning);
+      _snack('Add at least one field to the report list.', AppColors.warning);
       return;
     }
     if (_mode == 'NEW' && _to.isBefore(_from)) {
-      _snack('The To date is before the From date.', AppColors.warning);
+      _snack('The To date is before the From date. Select a To date on or after the From date.', AppColors.warning);
       return;
     }
     setState(() => _running = true);
@@ -565,7 +566,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
             if (k.isNotEmpty) onRoll.add(k);
           }
         } catch (e) {
-          _snack('Could not read this year\'s students: $e', AppColors.error);
+          _snack('Could not load this year\'s students. ${friendlyError(e)}', AppColors.error);
           setState(() => _running = false);
           return;
         }
@@ -603,7 +604,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       }
 
       if (out.isEmpty) {
-        _snack('No admissions in this range for the chosen filters.', AppColors.warning);
+        _snack('No admissions in this date range for these filters. Widen the dates or change the filters.', AppColors.warning);
         return;
       }
 
@@ -654,13 +655,13 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       insCity: _insCity,
       title: _titleLine,
       subtitle: 'From : ${_dmy(_from)}  To : ${_dmy(_to)}',
-      headers: ['SNo.', ...fields.map(_fieldLabel)],
+      headers: [AppText.serialNo, ...fields.map(_fieldLabel)],
       rows: [
         for (var i = 0; i < rows.length; i++)
           ['${i + 1}', ...fields.map((f) => f.read(rows[i]))],
       ],
       rightAlign: const {0},
-      footNote: 'Note : ${_withTc ? 'With' : 'Without'} Tc Students',
+      footNote: 'Note: ${_withTc ? 'With' : 'Without'} TC Students',
     );
     if (ok) _snack('Admission register PDF saved -- ${rows.length} students.', AppColors.success);
   }
@@ -707,7 +708,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
 
     const headerRow = 6; // row 7 in Excel's own numbering
     final fields = _picked.map(_field).toList();
-    put(0, headerRow, 'SNo.', hdr);
+    put(0, headerRow, AppText.serialNo, hdr);
     for (var i = 0; i < fields.length; i++) {
       put(i + 1, headerRow, _fieldLabel(fields[i]), hdr);
       sheet.setColumnWidth(i + 1, fields[i].key == 'stuname' || fields[i].key == 'stuaddress' ? 28 : 16);
@@ -722,7 +723,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       }
       r++;
     }
-    put(0, r + 1, 'Note : ${_withTc ? 'With' : 'Without'} Tc Students', bold);
+    put(0, r + 1, 'Note: ${_withTc ? 'With' : 'Without'} TC Students', bold);
 
     final bytes = book.encode();
     if (bytes == null) throw Exception('Could not build the Excel file');
@@ -776,7 +777,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
     }
     if (_loadError != null) {
       return AppUI.empty(
-        title: 'Could not load the masters.',
+        title: 'Could not load the master data.',
         why: _loadError,
         action: OutlinedButton.icon(
             onPressed: _loadMasters,
@@ -791,9 +792,9 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            _modeSeg('New admissions', 'NEW'),
+            _modeSeg('New Admissions', 'NEW'),
             SizedBox(width: 8.w),
-            _modeSeg('Active students', 'ACTIVE'),
+            _modeSeg('Active Students', 'ACTIVE'),
             SizedBox(width: 14.w),
             Expanded(
               child: Text(
@@ -805,13 +806,13 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
             _exportBtn(
               onPressed: () => _run(pdf: false),
               icon: Icons.table_chart_rounded,
-              label: 'Excel',
+              label: AppText.exportExcel,
             ),
             SizedBox(width: AppBtn.gap(context)),
             _exportBtn(
               onPressed: () => _run(pdf: true),
               icon: Icons.picture_as_pdf_rounded,
-              label: 'PDF',
+              label: AppText.exportPdf,
             ),
           ]),
           SizedBox(height: 12.h),
@@ -826,7 +827,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               visualDensity: VisualDensity.compact,
               onChanged: (v) => setState(() => _withTc = v ?? false),
             ),
-            Text('With T.C. students', style: AppUI.body),
+            Text('Include TC Students', style: AppUI.body),
             SizedBox(width: 8.w),
             Expanded(
               child: Text(
@@ -861,7 +862,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               ignoring: _mode != 'NEW',
               child: Opacity(
                 opacity: _mode == 'NEW' ? 1 : 0.45,
-                child: _dateField('From', _from, (d) => setState(() => _from = d)),
+                child: _dateField('From Date', _from, (d) => setState(() => _from = d)),
               ),
             ),
           ),
@@ -871,7 +872,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               ignoring: _mode != 'NEW',
               child: Opacity(
                 opacity: _mode == 'NEW' ? 1 : 0.45,
-                child: _dateField('To', _to, (d) => setState(() => _to = d)),
+                child: _dateField('To Date', _to, (d) => setState(() => _to = d)),
               ),
             ),
           ),
@@ -885,10 +886,10 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               initialValue: _admTypes.contains(_admType) ? _admType : null,
               isExpanded: true,
               isDense: true,
-              decoration: _dec('All types'),
+              decoration: _dec('All Admission Types'),
               style: AppUI.fieldText(context),
               items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('All types')),
+                const DropdownMenuItem<String?>(value: null, child: Text('All Admission Types')),
                 ..._admTypes.map((e) =>
                     DropdownMenuItem<String?>(value: e, child: Text(e, overflow: TextOverflow.ellipsis))),
               ],
@@ -924,14 +925,14 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
           Expanded(child: _labeled(schoolTerm('Class'), _classPicker())),
           SizedBox(width: 12.w),
           Expanded(
-            child: _labeled('Order by', DropdownButtonFormField<String>(
+            child: _labeled('Sort By', DropdownButtonFormField<String>(
               initialValue: _orderKey,
               isExpanded: true,
               isDense: true,
               decoration: _dec(''),
               style: AppUI.fieldText(context),
               items: [
-                DropdownMenuItem(value: 'admno', child: Text(schoolTerm('Reg. No'))),
+                DropdownMenuItem(value: 'admno', child: Text(schoolTerm('Register No'))),
                 const DropdownMenuItem(value: 'stuname', child: Text('Student Name')),
               ],
               onChanged: (v) => setState(() => _orderKey = v ?? 'admno'),
@@ -949,7 +950,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       Expanded(
         flex: 3,
         child: _listCard(
-          title: 'Available fields',
+          title: 'Available Fields',
           count: _availableFields.length,
           child: _checkList(
             _availableFields.map((f) => (f.key, _fieldLabel(f))).toList(),
@@ -977,7 +978,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       Expanded(
         flex: 3,
         child: _listCard(
-          title: 'Report list',
+          title: 'Report List',
           count: _picked.length,
           trailing: _upDown(
             onUp: () => _move(_picked, _pickedSel, -1),
@@ -1107,7 +1108,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
   }) {
     if (items.isEmpty) {
       return AppUI.empty(
-        title: checked ? 'Tick a field on the left' : 'Every field is in the report',
+        title: checked ? 'Select a field on the left to add it' : 'Every field is in the report',
       );
     }
     return ListView.builder(

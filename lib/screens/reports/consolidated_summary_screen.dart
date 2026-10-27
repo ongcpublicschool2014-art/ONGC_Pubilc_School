@@ -7,6 +7,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
@@ -53,7 +54,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
   static const _modes = [
     ('CURRENT', 'Fee related to current year'),
     ('NEXT', 'Fee related to next year'),
-    ('MISC', 'Misc. collection'),
+    ('MISC', 'Miscellaneous collection'),
   ];
 
   String _mode = 'CURRENT';
@@ -210,7 +211,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
       for (final f in _cols) (f.toUpperCase(), (_Stu s) => s.tc && _mode == 'CURRENT' ? '' : _m(s.fee[f] ?? 0), true),
     ];
     final head = <(String, String Function(_Stu), bool)>[
-      ('ADM. NO', (s) => '${s.s['stuadmno'] ?? ''}', false),
+      ('ADMISSION NO', (s) => '${s.s['stuadmno'] ?? ''}', false),
       ('STUDENT NAME', (s) => '${s.s['stuname'] ?? ''}${s.tc ? '  (TC)' : ''}', false),
       (schoolTerm('CLASS'), (s) => '${s.s['stuclass'] ?? ''}', false),
     ];
@@ -240,12 +241,12 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           ...fee,
           ('CONCESSION', (s) => s.tc ? '' : _m(s.concession), true),
           ('COLLECTION', (s) => s.tc ? '' : _m(s.coll), true),
-          ('PRE YR ADV COLLECTION', (s) => s.tc ? '' : _m(s.preadv), true),
+          ('PREVIOUS YEAR ADVANCE COLLECTION', (s) => s.tc ? '' : _m(s.preadv), true),
           ('REFUND', (s) => s.tc ? '' : _m(s.refund), true),
           ('TC DEMAND', (s) => _m(s.tcDemand), true),
           ('TC COLLECTION', (s) => _m(s.tcDemand), true),
           ('TC REFUND', (s) => _m(s.tcRefund), true),
-          ('MISC. COLLECTION', (s) => _m(s.misc), true),
+          ('MISCELLANEOUS COLLECTION', (s) => _m(s.misc), true),
           ('ADVANCE REFUND', (s) => _m(s.advRefund), true),
           ('NET BALANCE', (s) => s.tc ? '' : _m(s.bal), true),
           ...tail,
@@ -293,7 +294,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         insCity: _insCity,
         title: _title,
         subtitle: 'Scope : $_scope',
-        headers: ['SNO', ...cols.map((c) => c.$1)],
+        headers: ['S. NO.', ...cols.map((c) => c.$1)],
         rows: [
           for (var i = 0; i < _rows.length; i++) ['${i + 1}', ...cols.map((c) => c.$2(_rows[i]))],
           ['', 'TOTAL', ...cols.skip(1).map((c) => c.$3 ? _total(c.$2) : '')],
@@ -341,7 +342,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
       put(1, 3, _title, bold);
       put(1, 4, 'Scope : $_scope');
       const h = 6;
-      put(0, h, 'SNO', hdr);
+      put(0, h, 'S. NO.', hdr);
       for (var c = 0; c < cols.length; c++) {
         put(c + 1, h, cols[c].$1, hdr);
         sheet.setColumnWidth(c + 1, c == 1 ? 30 : 16);
@@ -408,17 +409,17 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         AppUI.cardHeader(
           icon: 'chart-2',
           title: 'Consolidated Summary',
-          subtitle: 'Demand - concession - collection - balance per student, as the old Consolidated Summary Statement',
+          subtitle: 'Demand, concession, collection and balance for each student',
           trailing: [
             OutlinedButton.icon(
               onPressed: _exporting || _rows.isEmpty ? null : _exportExcel,
               icon: const Icon(Icons.table_chart_outlined, size: 16),
-              label: const Text('Excel'),
+              label: const Text(AppText.exportExcel),
             ),
             OutlinedButton.icon(
               onPressed: _exporting || _rows.isEmpty ? null : _exportPdf,
               icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-              label: const Text('PDF'),
+              label: const Text(AppText.exportPdf),
             ),
           ],
         ),
@@ -427,7 +428,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         Row(children: [
           Expanded(
             flex: 5,
-            child: _drop<String>('Collection type', _mode, [for (final m in _modes) (m.$1, m.$2)], (v) {
+            child: _drop<String>('Collection Type', _mode, [for (final m in _modes) (m.$1, m.$2)], (v) {
               setState(() => _mode = v ?? 'CURRENT');
               _run();
             }, icon: 'layer', allowAll: false),
@@ -441,7 +442,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
                 _cla = null;
               });
               _run();
-            }, icon: 'teacher', allLabel: schoolTerm('All courses')),
+            }, icon: 'teacher', allLabel: schoolTerm('All Courses')),
           ),
           SizedBox(width: 10.w),
           Expanded(
@@ -449,7 +450,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
             child: _drop<int>(schoolTerm('Class'), _cla, sections, (v) {
               setState(() => _cla = v);
               _run();
-            }, icon: 'book-1', allLabel: schoolTerm('All classes')),
+            }, icon: 'book-1', allLabel: schoolTerm('All Classes')),
           ),
           SizedBox(width: 10.w),
           Expanded(
@@ -457,15 +458,15 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
             child: _drop<String>(schoolTerm('Semester'), _term, [for (final t in _terms) (t, t)], (v) {
               setState(() => _term = v);
               _run();
-            }, icon: 'calendar-1', allLabel: schoolTerm('All semesters')),
+            }, icon: 'calendar-1', allLabel: schoolTerm('All Semesters')),
           ),
           SizedBox(width: 10.w),
           Expanded(
             flex: 3,
-            child: _drop<String>('Fee type', _feeType, [for (final f in _feeTypes) (f, f)], (v) {
+            child: _drop<String>('Fee Type', _feeType, [for (final f in _feeTypes) (f, f)], (v) {
               setState(() => _feeType = v);
               _run();
-            }, icon: 'receipt-discount', allLabel: 'All fee types'),
+            }, icon: 'receipt-discount', allLabel: 'All Fee Types'),
           ),
           SizedBox(width: 10.w),
           OutlinedButton.icon(
@@ -480,13 +481,13 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           Expanded(child: AppUI.kpi(icon: 'people', label: 'Students', value: '${_rows.length}', sub: '${_rows.where((s) => s.tc).length} with TC')),
           SizedBox(width: 12.w),
           if (_mode == 'MISC')
-            Expanded(child: AppUI.kpi(icon: 'receipt-2', label: 'Misc collection', value: '₹${formatIndianNumber(sum((s) => s.misc))}', tint: AppColors.success))
+            Expanded(child: AppUI.kpi(icon: 'receipt-2', label: 'Miscellaneous Collection', value: '₹${formatIndianNumber(sum((s) => s.misc))}', tint: AppColors.success))
           else ...[
             Expanded(child: AppUI.kpi(icon: 'receipt-2', label: 'Demand', value: '₹${formatIndianNumber(sum((s) => s.tc ? 0 : s.fee.values.fold(0.0, (a, b) => a + b)))}', tint: AppColors.demand)),
             SizedBox(width: 12.w),
             Expanded(child: AppUI.kpi(icon: 'money-recive', label: 'Collected', value: '₹${formatIndianNumber(sum((s) => s.coll + s.preadv - s.refund))}', tint: AppColors.success)),
             SizedBox(width: 12.w),
-            Expanded(child: AppUI.kpi(icon: 'wallet-money', label: 'Net balance', value: '₹${formatIndianNumber(sum((s) => s.tc ? 0 : s.bal))}', tint: AppColors.warning)),
+            Expanded(child: AppUI.kpi(icon: 'wallet-money', label: 'Net Balance', value: '₹${formatIndianNumber(sum((s) => s.tc ? 0 : s.bal))}', tint: AppColors.warning)),
           ],
         ]),
         SizedBox(height: 16.h),
@@ -511,15 +512,15 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         why: _mode == 'NEXT'
             ? 'No advance demands for these filters -- save an Advance Fee Demand first.'
             : _mode == 'MISC'
-                ? 'No misc collection for these filters.'
-                : 'No fee demands for these filters -- pick another section, term or fee type.',
+                ? 'No miscellaneous collection for these filters.'
+                : schoolTerm('No fee demands for these filters. Select another class, semester or fee type.'),
         icon: 'chart-2',
       );
     }
     // widths: sno, adm no, name, class, then amounts / text tail
     double w(int i, String head) {
       if (head == 'STUDENT NAME') return 220;
-      if (head == 'ADM. NO' || head == 'MOBILE NO') return 110;
+      if (head == 'ADMISSION NO' || head == 'MOBILE NO') return 110;
       if (head == schoolTerm('CLASS') || head == 'CATEGORY') return 100;
       return head.length > 14 ? 130 : 110;
     }
@@ -557,7 +558,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
                 color: AppColors.tableHeadBg,
                 padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 12.h),
                 child: Row(children: [
-                  cell('SNO', widths[0], style: AppUI.tableHead),
+                  cell('S. NO.', widths[0], style: AppUI.tableHead),
                   for (var i = 0; i < cols.length; i++) cell(cols[i].$1, widths[i + 1], right: cols[i].$3, style: AppUI.tableHead),
                 ]),
               ),

@@ -8,6 +8,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/supabase_service.dart';
@@ -36,7 +37,7 @@ int _termIndex(String t) {
   return idx >= 0 ? idx : _termOrder.length;
 }
 
-String _formatDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+String _formatDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 String _formatDateCompact(DateTime d) => '${d.day.toString().padLeft(2, '0')}${d.month.toString().padLeft(2, '0')}${d.year}';
 
 String _formatNumber(double v) => formatIndianNumber(v);
@@ -399,7 +400,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   bool get _feeGroupChosen =>
       _feeGroups.length < 2 || _selectedFeeGroups.isNotEmpty;
 
-  static const String _kFeeGroupFirst = 'Choose a Fee Group first';
+  static const String _kFeeGroupFirst = 'Select a fee group first';
 
   /// True when this Daily Collection receipt carries money against a fee in
   /// the chosen groups.
@@ -493,7 +494,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   String _dailyFmt(DateTime? d) =>
-      d == null ? '-' : '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+      d == null ? '-' : '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
   String _dailyDateMethodLabel() {
     final hasDate = _dailyFrom != null || _dailyTo != null;
@@ -673,9 +674,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   const SizedBox(height: 16),
                   sectionLabel('CUSTOM RANGE'),
                   Row(children: [
-                    Expanded(child: datePickerBox(hint: 'From', value: from, onChanged: (d) => setStateDialog(() => from = d))),
+                    Expanded(child: datePickerBox(hint: 'Select from date', value: from, onChanged: (d) => setStateDialog(() => from = d))),
                     const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('-')),
-                    Expanded(child: datePickerBox(hint: 'To', value: to, onChanged: (d) => setStateDialog(() => to = d))),
+                    Expanded(child: datePickerBox(hint: 'Select to date', value: to, onChanged: (d) => setStateDialog(() => to = d))),
                   ]),
                   const SizedBox(height: 16),
                   sectionLabel('PAYMENT MODE'),
@@ -1692,7 +1693,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? AppUI.empty(title: 'Error', why: '$_error')
+                    ? AppUI.empty(title: 'Could not load the report', why: '$_error')
                     : TabBarView(
                         controller: _tabController,
                         children: [
@@ -2369,10 +2370,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             // the same report, and re-pivots from cached rows so it is instant.
             _filterDropdown<String>(
               value: _pdSeq,
-              hint: 'All Fees',
-              width: 150.w,
+              hint: 'All Demand Types',
+              width: 170.w,
               items: const [
-                DropdownMenuItem(value: '', child: Text('All Fees')),
+                DropdownMenuItem(value: '', child: Text('All Demand Types')),
                 DropdownMenuItem(value: 'REGULAR', child: Text('Regular')),
                 DropdownMenuItem(value: 'ARREAR', child: Text('Arrear')),
               ],
@@ -2390,8 +2391,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             _checkMultiSelect(
               anchorKey: _admnTypeKey,
               width: 190.w,
-              allLabel: 'All Admn Types',
-              pluralNoun: 'admn types',
+              allLabel: 'All Admission Types',
+              pluralNoun: 'admission types',
               selected: _selectedAdmnTypes,
               onTap: () => _openCheckPicker(
                 anchorKey: _admnTypeKey,
@@ -2422,13 +2423,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             // Regular / Arrear filter (Pending Payment) — checkbox multi-select
             _checkMultiSelect(
               anchorKey: _pendSeqKey,
-              width: 150.w,
-              allLabel: 'All Types',
-              pluralNoun: 'types',
+              width: 170.w,
+              allLabel: 'All Demand Types',
+              pluralNoun: 'demand types',
               selected: _selectedSeqTypes,
               onTap: () => _openCheckPicker(
                 anchorKey: _pendSeqKey,
-                title: 'Select Type',
+                title: 'Select Demand Types',
                 options: _pendingSeqTypes(),
                 current: _selectedSeqTypes,
                 onApply: (s) => setState(() => _selectedSeqTypes = s),
@@ -2454,15 +2455,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             _checkMultiSelect(
               anchorKey: _dcbFgKey,
               width: 200.w,
-              allLabel: 'All Types',
-              pluralNoun: 'types',
+              allLabel: 'All Fee Categories',
+              pluralNoun: 'fee categories',
               selected: _selectedFeeKinds,
               labelOf: feeKindLabel,
               enabled: _feeGroupChosen,
               disabledTip: _kFeeGroupFirst,
               onTap: () => _openCheckPicker(
                 anchorKey: _dcbFgKey,
-                title: 'Select Types',
+                title: 'Select Fee Categories',
                 options: _dcbTypeOptionsForGroup,
                 current: _selectedFeeKinds,
                 labelOf: feeKindLabel,
@@ -2476,8 +2477,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             _checkMultiSelect(
               anchorKey: _dcbAdmKey,
               width: 190.w,
-              allLabel: 'All Admn Types',
-              pluralNoun: 'admn types',
+              allLabel: 'All Admission Types',
+              pluralNoun: 'admission types',
               selected: _dcbAdmnTypes,
               onTap: () => _openCheckPicker(
                 anchorKey: _dcbAdmKey,
@@ -2528,15 +2529,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             // Prefix filter — checkbox multi-select
             _checkMultiSelect(
               anchorKey: _prefixKey,
-              width: 170.w,
-              allLabel: 'All Prefixes',
-              pluralNoun: 'prefixes',
+              width: 190.w,
+              allLabel: 'All Receipt Prefixes',
+              pluralNoun: 'receipt prefixes',
               selected: _selectedPrefixes,
               enabled: _feeGroupChosen,
               disabledTip: _kFeeGroupFirst,
               onTap: () => _openCheckPicker(
                 anchorKey: _prefixKey,
-                title: 'Select Prefixes',
+                title: 'Select Receipt Prefixes',
                 options: _dailyPrefixes(),
                 current: _selectedPrefixes,
                 onApply: (s) => setState(() => _selectedPrefixes = s),
@@ -2546,15 +2547,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             // Type filter — checkbox multi-select
             _checkMultiSelect(
               anchorKey: _dailyTypeKey,
-              width: 150.w,
-              allLabel: 'All Types',
-              pluralNoun: 'types',
+              width: 190.w,
+              allLabel: 'All Transaction Types',
+              pluralNoun: 'transaction types',
               selected: _selectedDailyTypes,
               enabled: _feeGroupChosen,
               disabledTip: _kFeeGroupFirst,
               onTap: () => _openCheckPicker(
                 anchorKey: _dailyTypeKey,
-                title: 'Select Types',
+                title: 'Select Transaction Types',
                 options: _dailyTypeOptions(),
                 current: _selectedDailyTypes,
                 onApply: (s) => setState(() => _selectedDailyTypes = s),
@@ -2758,7 +2759,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   List<String> _pdHeaders(List<String> fts) => <String>[
-        'S.No', schoolTerm('Class'), schoolTerm('Reg. No'), 'Student Name', 'Category',
+        AppText.serialNo, schoolTerm('Class'), schoolTerm('Register No'), 'Student Name', 'Category',
         'Total Demand', 'Net Demand', 'Total Collection',
         ...fts.map(_feeHdr), 'Pending Total',
       ];
@@ -2840,7 +2841,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _pdToolbar(int count) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(children: [
-          _reportTitle('receipt-item', 'Pending Details', 'every demand and receipt behind the pending figure'),
+          _reportTitle('receipt-item', 'Pending Details', 'Every demand and receipt behind the pending figure'),
           const Spacer(),
           if (count > 0)
             Padding(
@@ -2851,7 +2852,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           _miniExportBtn(
             onPressed: _pdRows.isEmpty ? () {} : _exportPendingDetailsExcel,
             icon: Icons.table_chart_rounded,
-            label: 'Excel',
+            label: AppText.exportExcel,
           ),
         ]),
       );
@@ -2939,14 +2940,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       if (_insAddress.isNotEmpty) banner(_insAddress, plainStyle);
       final yr = _academicYearLabel;
       banner(
-          'PENDING DETAIL REPORT${yr.isEmpty ? '' : ' FOR THE YEAR $yr'}',
+          'PENDING DETAILS REPORT${yr.isEmpty ? '' : ' FOR THE YEAR $yr'}',
           boldStyle);
       banner('Date: ${_formatDate(DateTime.now())}', plainStyle);
       // Mirrors the statement's "Collected by" line: says on the paper which
       // slice of the data this is, so a printed Arrear-only sheet cannot be
       // mistaken for the whole college.
       banner(
-          'Fees: ${_pdSeq.isEmpty ? 'All Fees' : (_pdSeq == 'ARREAR' ? 'Arrear' : 'Regular')}',
+          'Demand Type: ${_pdSeq.isEmpty ? 'All' : (_pdSeq == 'ARREAR' ? 'Arrear' : 'Regular')}',
           boldStyle);
       row++;
 
@@ -3078,7 +3079,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Export error. ${friendlyError(e)}'),
+            content: Text('Could not export to Excel. ${friendlyError(e)}'),
             backgroundColor: AppColors.error));
       }
     }
@@ -3105,27 +3106,27 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Container(
               padding: EdgeInsets.only(bottom: 10.h),
               child: Row(children: [
-                _reportTitle('chart-2', 'Consolidated Status', schoolTerm('overall fee status across classes')),
+                _reportTitle('chart-2', 'Consolidated Status', schoolTerm('Overall fee status across classes')),
                 SizedBox(width: 8.w),
                 Text('— ${_formatDate(DateTime.now())}', style: AppUI.muted),
                 const Spacer(),
                 _miniExportBtn(
                   onPressed: () => _exportConsolidatedExcel(rows, byClass),
                   icon: Icons.table_chart_rounded,
-                  label: 'Excel',
+                  label: AppText.exportExcel,
                 ),
                 SizedBox(width: AppBtn.gap(context)),
                 _miniExportBtn(
                   onPressed: () => _exportConsolidatedPdf(rows, byClass),
                   icon: Icons.picture_as_pdf_rounded,
-                  label: 'PDF',
+                  label: AppText.exportPdf,
                 ),
               ]),
             ),
             Expanded(
               child: _stickyTable(
-            columnWidths: const [90, 110, 90, 110, 200, 100, 90, 110, 100, 120, 100, 110],
-            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), 'STRENGTH', schoolTerm('SEMESTER'), 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            columnWidths: const [90, 110, 90, 110, 200, 120, 90, 110, 110, 120, 100, 110],
+            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), 'STRENGTH', schoolTerm('SEMESTER'), 'CATEGORY', 'STUDENT COUNT', 'TYPE', 'DUE', 'CONCESSION', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
               for (final r in rows)
                 [
@@ -3182,7 +3183,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      final headers = [schoolTerm('Course'), schoolTerm('Class'), 'Strength', schoolTerm('Semester'), 'Category', 'Stud Count', 'Type', 'Due', 'Concess', 'Net Demand', 'Paid', 'Balance'];
+      final headers = [schoolTerm('Course'), schoolTerm('Class'), 'Strength', schoolTerm('Semester'), 'Category', 'Student Count', 'Type', 'Due', 'Concession', 'Net Demand', 'Paid', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -3237,7 +3238,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       for (int c = 0; c < headers.length; c++) sheet.setColumnWidth(c, c <= 1 ? 18 : 13);
       await _saveExcel(excel, 'Consolidated_Status_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -3297,7 +3298,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), 'STRENGTH', schoolTerm('SEMESTER'), 'CATEGORY', 'STUD COUNT', 'TYPE', 'DUE', 'CONCESS', 'NET DEMAND', 'PAID', 'BALANCE'],
+            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), 'STRENGTH', schoolTerm('SEMESTER'), 'CATEGORY', 'STUDENT COUNT', 'TYPE', 'DUE', 'CONCESSION', 'NET DEMAND', 'PAID', 'BALANCE'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -3311,7 +3312,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // sharePdf is a mobile share-sheet concept and silently does nothing here.
       await _savePdf(pdf, 'Consolidated_Status_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the PDF. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -3504,20 +3505,20 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             Container(
               padding: EdgeInsets.only(bottom: 10.h),
               child: Row(children: [
-                _reportTitle('clock', 'Pending Payment', 'students with outstanding balances'),
+                _reportTitle('clock', 'Pending Payment', 'Students with outstanding balances'),
                 SizedBox(width: 8.w),
                 Text('— ${_formatDate(DateTime.now())}', style: AppUI.muted),
                 const Spacer(),
                 _miniExportBtn(
                   onPressed: () => _exportPendingPaymentExcel(rows, byClass, grandPending, grandConcess),
                   icon: Icons.table_chart_rounded,
-                  label: 'Excel',
+                  label: AppText.exportExcel,
                 ),
                 SizedBox(width: AppBtn.gap(context)),
                 _miniExportBtn(
                   onPressed: () => _exportPendingPaymentPdf(rows, byClass, grandPending, grandConcess),
                   icon: Icons.picture_as_pdf_rounded,
-                  label: 'PDF',
+                  label: AppText.exportPdf,
                 ),
               ]),
             ),
@@ -3525,8 +3526,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               child: _stickyTable(
                 // Equal-width columns (scaled to fill by _StickyTable).
                 // A school has no admission type or quota: those two columns go.
-                columnWidths: [110, 110, 110, 80, if (!isSchool) 110, 110, 110, 110, 110, if (!isSchool) 110, 110],
-                headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE', if (!isSchool) 'ADMN TYPE', schoolTerm('REG. NO'), 'NAME', 'PENDING AMT', 'CON. AMT', if (!isSchool) 'QUOTA', 'MOBILE NO'],
+                columnWidths: [110, 110, 110, 80, if (!isSchool) 140, 125, 110, 140, 155, if (!isSchool) 110, 110],
+                headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE', if (!isSchool) 'ADMISSION TYPE', schoolTerm('REGISTER NO'), 'NAME', 'PENDING AMOUNT', 'CONCESSION AMOUNT', if (!isSchool) 'QUOTA', 'MOBILE NO'],
                 rows: [
                   for (final r in rows)
                     [
@@ -3544,7 +3545,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     ],
                 ],
                 footer: [
-                  'G.Tot', '', '', '', if (!isSchool) '', '', '',
+                  'Grand Total', '', '', '', if (!isSchool) '', '', '',
                   _formatNumber(grandPending),
                   _formatNumber(grandConcess),
                   if (!isSchool) '', '',
@@ -3633,7 +3634,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 style: AppUI.cardTitle),
           ),
           SizedBox(width: 22.w),
-          fact(schoolTerm('REG NO'), (s['stuadmno'] ?? '').toString()),
+          fact(schoolTerm('REGISTER NO'), (s['stuadmno'] ?? '').toString()),
           fact(schoolTerm('COURSE'), (s['courname'] ?? '').toString()),
           fact(schoolTerm('CLASS'), (s['stuclass'] ?? '').toString()),
           if (s['tcissued'] == true || _ledgerTc != null) _ledgerTcBadge(),
@@ -3774,7 +3775,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue('Date: ${_formatDate(DateTime.now())}');
       row += 2;
 
-      const headers = ['Course', 'Class', 'Semester', 'Type', 'Admn Type', 'Reg. No', 'Name', 'Pending Amount', 'Con. Amount', 'Quota', 'Mobile No'];
+      const headers = ['Course', 'Class', 'Semester', 'Type', 'Admission Type', 'Register No', 'Name', 'Pending Amount', 'Concession Amount', 'Quota', 'Mobile No'];
       // A school has no admission type or quota: those columns are left out
       // and the ones after them close up. oc() maps a column to its place.
       final hidden = isSchool ? const {4, 9} : const <int>{};
@@ -3811,7 +3812,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: oc(8), rowIndex: row)).cellStyle = totalStyle;
         row++;
       }
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue('G.Tot');
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue('Grand Total');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).cellStyle = boldStyle;
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: oc(7), rowIndex: row)).value = xl.DoubleCellValue(grandPending);
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: oc(7), rowIndex: row)).cellStyle = totalStyle;
@@ -3826,7 +3827,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _saveExcel(excel, 'Pending_Payment_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -3856,7 +3857,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           _formatNumber(entry.value.fold<double>(0, (s, r) => s + (r['concession'] as double))),
           if (!isSchool) '', '']);
       }
-      data.add(['', 'G.Tot', '', '', if (!isSchool) '', '', '', _formatNumber(grandPending), _formatNumber(grandConcess), if (!isSchool) '', '']);
+      data.add(['', 'Grand Total', '', '', if (!isSchool) '', '', '', _formatNumber(grandPending), _formatNumber(grandConcess), if (!isSchool) '', '']);
 
       pdf.addPage(pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
@@ -3876,7 +3877,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE', if (!isSchool) 'ADMN TYPE', schoolTerm('REG. NO'), 'NAME', 'PENDING AMT', 'CON. AMT', if (!isSchool) 'QUOTA', 'MOBILE'],
+            headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE', if (!isSchool) 'ADMISSION TYPE', schoolTerm('REGISTER NO'), 'NAME', 'PENDING AMOUNT', 'CONCESSION AMOUNT', if (!isSchool) 'QUOTA', 'MOBILE NO'],
             data: data,
             headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -3890,7 +3891,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ));
       await _savePdf(pdf, 'Pending_Payment_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the PDF. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -4590,7 +4591,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final no = (_ledgerTc?['tcno'] ?? '').toString().trim();
     final date = _ledgerTc?['tcdate'];
     return <String>[
-      'TC ISSUED',
+      'TC Issued',
       if (no.isNotEmpty) no,
       if (date != null && date.toString().isNotEmpty) _fmtDcbDate(date.toString()),
     ].join('  •  ');
@@ -4633,7 +4634,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           padding: EdgeInsets.only(bottom: 10.h),
           child: Row(
             children: [
-              _reportTitle('book-1', 'Student Ledger', 'per-student fee history and balance'),
+              _reportTitle('book-1', 'Student Ledger', 'Fee history and balance for each student'),
               if (_ledgerLoading) ...[
                 SizedBox(width: 12.w),
                 SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent)),
@@ -4646,7 +4647,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   // which ones they are.
                   displayStringForOption: (o) =>
                       '${o['stuadmno']} - ${o['stuname']}'
-                      '${o['tcissued'] == true ? '  •  TC ISSUED' : ''}',
+                      '${o['tcissued'] == true ? '  •  TC Issued' : ''}',
                   optionsBuilder: (value) {
                     final q = value.text.toLowerCase();
                     if (q.isEmpty) return students.take(20);
@@ -4666,7 +4667,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                       // the mouse: typing a roll number in full and
                       // pressing Enter did nothing at all.
                       onSubmitted: (_) => onSubmit(),
-                      decoration: AppUI.field(ctx, 'Search Student (Adm No / Name)', leadingIcon: 'search-normal'),
+                      decoration: AppUI.field(ctx, schoolTerm('Search by register no. or name'), leadingIcon: 'search-normal'),
                     );
                   },
                 ),
@@ -4689,13 +4690,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               _miniExportBtn(
                 onPressed: _ledgerDemands.isEmpty ? () {} : _exportStudentLedgerExcel,
                 icon: Icons.table_chart_rounded,
-                label: 'Excel',
+                label: AppText.exportExcel,
               ),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
                 onPressed: _ledgerDemands.isEmpty ? () {} : _exportStudentLedgerPdf,
                 icon: Icons.picture_as_pdf_rounded,
-                label: 'PDF',
+                label: AppText.exportPdf,
               ),
             ],
           ),
@@ -4741,7 +4742,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               headerFontSize: 10.5,
               cellGap: 12,
               columnWidths: const [105, 145, 130, 150, 100, 105, 110, 105, 95, 80, 115, 105],
-              headers: const ['DATE', 'TRANSACTION TYPE', 'DETAILS', 'FEE TYPE', 'DEMAND', 'CONCESSION', 'NET DEMAND', 'COLLECTION', 'REFUND', 'FINE', 'DOC NO', 'BALANCE'],
+              headers: const ['DATE', 'TRANSACTION TYPE', 'DETAILS', 'FEE TYPE', 'DEMAND', 'CONCESSION', 'NET DEMAND', 'COLLECTION', 'REFUND', 'FINE', 'DOCUMENT NO', 'BALANCE'],
               rows: [
                 for (final l in lines)
                   [
@@ -4788,7 +4789,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                     child: Row(
                       children: [
-                        Expanded(child: Text(schoolTerm('ROLL NO'), style: headerStyle)),
+                        Expanded(child: Text(schoolTerm('ROLL NUMBER'), style: headerStyle)),
                         Expanded(child: Text('STUDENT NAME', style: headerStyle)),
                         Expanded(child: Text(schoolTerm('COURSE'), style: headerStyle)),
                         Expanded(child: Text(schoolTerm('CLASS'), style: headerStyle)),
@@ -4822,7 +4823,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
           ),
         ] else
-          Expanded(child: _emptyState(schoolTerm('Select course and class, or search a student'))),
+          Expanded(child: _emptyState(schoolTerm('Select a course and class, or search for a student'))),
       ],
     );
   }
@@ -4853,7 +4854,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: row)).cellStyle = boldStyle;
       row++;
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Student Name : ${_ledgerStudent?['stuname'] ?? ''}');
-      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('${schoolTerm('Reg. No')} : ${_ledgerStudent?['stuadmno'] ?? ''}');
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue('${schoolTerm('Register No')} : ${_ledgerStudent?['stuadmno'] ?? ''}');
       row++;
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(schoolTerm('Course : ${_ledgerStudent?['courname'] ?? ''}'));
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(schoolTerm('Class : ${_ledgerStudent?['stuclass'] ?? ''}'));
@@ -4868,7 +4869,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       }
       row++;
 
-      final headers = ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Doc No', 'Balance'];
+      final headers = ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Document No', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -4932,7 +4933,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _saveExcel(excel, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -4986,7 +4987,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               pw.Text('DATE: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
             ]),
             pw.SizedBox(height: 4),
-            pw.Text('Student Name: ${_ledgerStudent?['stuname'] ?? ''}    ${schoolTerm('Reg. No')}: ${_ledgerStudent?['stuadmno'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
+            pw.Text('Student Name: ${_ledgerStudent?['stuname'] ?? ''}    ${schoolTerm('Register No')}: ${_ledgerStudent?['stuadmno'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
             pw.Text(schoolTerm('Course: ${_ledgerStudent?['courname'] ?? ''}    Class: ${_ledgerStudent?['stuclass'] ?? ''}'), style: const pw.TextStyle(fontSize: 9)),
             if (_ledgerTcText.isNotEmpty)
               pw.Text(_ledgerTcText,
@@ -4996,7 +4997,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Doc No', 'Balance'],
+            headers: ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Document No', 'Balance'],
             data: rows,
             headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -5008,7 +5009,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ));
       await _savePdf(pdf, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the PDF. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -5016,7 +5017,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   // TAB: DAILY COLLECTION (receipt-wise pivot by fee type)
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   Widget _buildDailyCollection() {
-    String fmt(DateTime? d) => d == null ? '' : '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+    String fmt(DateTime? d) => d == null ? '' : '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 
     Widget quick(String label, VoidCallback onTap) => Padding(
           padding: EdgeInsets.only(left: 4.w),
@@ -5121,7 +5122,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           padding: EdgeInsets.only(bottom: 10.h),
           child: Row(
             children: [
-              _reportTitle('calendar-1', 'Daily Collection', 'fee collection report by date range'),
+              _reportTitle('calendar-1', 'Daily Collection', 'Fee collection by date range'),
               SizedBox(width: 8.w),
               if (_dailyLoading)
                 SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent)),
@@ -5145,13 +5146,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               _miniExportBtn(
                 onPressed: _dailyNothingToExport ? () {} : () => _exportDailyCollectionExcel(),
                 icon: Icons.table_chart_rounded,
-                label: 'Excel',
+                label: AppText.exportExcel,
               ),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
                 onPressed: _dailyNothingToExport ? () {} : () => _exportDailyCollectionPdf(),
                 icon: Icons.picture_as_pdf_rounded,
-                label: 'PDF',
+                label: AppText.exportPdf,
               ),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
@@ -5190,14 +5191,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     }
                   }
                   final headers = <String>[
-                    'DATE', 'RECEIPT NO', schoolTerm('REG NO'), 'STUDENT NAME', schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE',
+                    'DATE', 'RECEIPT NO', schoolTerm('REGISTER NO'), 'STUDENT NAME', schoolTerm('COURSE'), schoolTerm('CLASS'), schoolTerm('SEMESTER'), 'TYPE',
                     ...visibleFeeTypes.map((t) => t.toUpperCase()),
                     'FINE', 'TOTAL',
                     if (showCash) 'CASH',
                     if (showCheque) 'CHEQUE',
                     if (showBank) 'BANK',
                     'ADJUSTED',
-                    'NET AMT',
+                    'NET AMOUNT',
                   ];
                   final widths = <double>[
                     // TYPE (the 8th) carries the longest labels on the sheet --
@@ -5309,7 +5310,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                         style: AppUI.caps.copyWith(color: AppColors.warning)),
                     SizedBox(width: 8.w),
                     Flexible(
-                      child: Text('collected but not yet matched to a bank statement',
+                      child: Text('Collected but not yet matched to a bank statement',
                           overflow: TextOverflow.ellipsis,
                           style: AppUI.muted),
                     ),
@@ -5324,7 +5325,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   child: _stickyTable(
                     columnWidths: const [110, 130, 130, 200, 150, 140, 130, 100, 130],
                     headers: [
-                      'DATE', 'RECEIPT NO', schoolTerm('REG NO'), 'STUDENT NAME', schoolTerm('CLASS'),
+                      'DATE', 'RECEIPT NO', schoolTerm('REGISTER NO'), 'STUDENT NAME', schoolTerm('CLASS'),
                       schoolTerm('SEMESTER'), 'MODE', 'FINE', 'TOTAL',
                     ],
                     rows: [
@@ -5926,7 +5927,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _saveExcel(excel, 'Pending_Fee_Report_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -6067,7 +6068,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _saveExcel(excel, 'Pending_${groupBy}_${_formatDateCompact(DateTime.now())}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -6127,7 +6128,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Names a cashier only when one was filtered for -- see the A3
       // statement. 'All Users' matches the wording there.
       final exportCollectedBy = _selectedUser ?? 'All Users';
-      merged('Collected by: $exportCollectedBy', boldStyle);
+      merged('Collected By: $exportCollectedBy', boldStyle);
       row++;
 
       final modeHeaders = <String>[
@@ -6135,8 +6136,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', schoolTerm('Reg No'), 'Student Name', schoolTerm('Class'), schoolTerm('Semester'),
-        ...feeTypes.map(_feeHdr), 'Fine', 'Total', ...modeHeaders, 'Adjusted', 'Net Amt'];
+      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'), schoolTerm('Semester'),
+        ...feeTypes.map(_feeHdr), 'Fine', 'Total', ...modeHeaders, 'Adjusted', 'Net Amount'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -6458,9 +6459,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).cellStyle = boldStyle;
         row++;
         // Refund column headers reusing Receipt No / Reg No / Name / Class + Mode + Total.
-        for (final h in ['Date', 'Receipt No', 'Reg No', 'Student Name', 'Class']) {
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: ['Date', 'Receipt No', 'Reg No', 'Student Name', 'Class'].indexOf(h), rowIndex: row)).value = xl.TextCellValue(schoolTerm(h));
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: ['Date', 'Receipt No', 'Reg No', 'Student Name', 'Class'].indexOf(h), rowIndex: row)).cellStyle = headerStyle;
+        for (final h in ['Date', 'Receipt No', 'Register No', 'Student Name', 'Class']) {
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: ['Date', 'Receipt No', 'Register No', 'Student Name', 'Class'].indexOf(h), rowIndex: row)).value = xl.TextCellValue(schoolTerm(h));
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: ['Date', 'Receipt No', 'Register No', 'Student Name', 'Class'].indexOf(h), rowIndex: row)).cellStyle = headerStyle;
         }
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue('Mode');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).cellStyle = headerStyle;
@@ -6508,7 +6509,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _saveExcel(excel, 'Daily_Collection_${_formatDateCompact(_dailyFrom!)}_${_formatDateCompact(_dailyTo!)}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -6905,7 +6906,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   String _advRangeLabel() {
-    if (_advFrom == null && _advTo == null) return 'All dates';
+    if (_advFrom == null && _advTo == null) return 'All Dates';
     final f = _advFrom == null ? '' : _formatDate(_advFrom!);
     final t = _advTo == null ? '' : _formatDate(_advTo!);
     if (f.isNotEmpty && t.isNotEmpty) return f == t ? f : '$f  -  $t';
@@ -6962,7 +6963,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   static const List<String> _advHeaders = [
-    'RECEIPT NO', 'DATE', 'TYPE', 'REG NO', 'STUDENT NAME', 'CLASS',
+    'RECEIPT NO', 'DATE', 'TYPE', 'REGISTER NO', 'STUDENT NAME', 'CLASS',
     'MODE', 'AMOUNT', 'ADJUSTED', 'BALANCE',
   ];
 
@@ -6976,7 +6977,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           padding: const EdgeInsets.only(bottom: 10),
           child: Row(
             children: [
-              _reportTitle('wallet-money', 'Advance Register', 'advances taken, adjusted and still held'),
+              _reportTitle('wallet-money', 'Advance Register', 'Advances taken, adjusted and still held'),
               SizedBox(width: 8.w),
               if (_advLoading)
                 SizedBox(
@@ -7005,13 +7006,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               SizedBox(width: AppBtn.gap(context)),
               _checkMultiSelect(
                 anchorKey: _advTypeKey,
-                width: 150.w,
-                allLabel: 'All Types',
-                pluralNoun: 'types',
+                width: 175.w,
+                allLabel: 'All Advance Types',
+                pluralNoun: 'advance types',
                 selected: _advTypeFilter,
                 onTap: () => _openCheckPicker(
                   anchorKey: _advTypeKey,
-                  title: 'Select Types',
+                  title: 'Select Advance Types',
                   options: const ['Admission', 'Student', 'Mess'],
                   current: _advTypeFilter,
                   onApply: (s) => setState(() {
@@ -7024,13 +7025,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               _miniExportBtn(
                 onPressed: _advNothingToExport ? () {} : _exportAdvanceRegisterExcel,
                 icon: Icons.table_chart_rounded,
-                label: 'Excel',
+                label: AppText.exportExcel,
               ),
               SizedBox(width: AppBtn.gap(context)),
               _miniExportBtn(
                 onPressed: _advNothingToExport ? () {} : _exportAdvanceRegisterPdf,
                 icon: Icons.picture_as_pdf_rounded,
-                label: 'PDF',
+                label: AppText.exportPdf,
               ),
             ],
           ),
@@ -7146,9 +7147,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   static const List<String> _advExportHeaders = [
-    'SNO', 'Class', 'Reg.No', 'Student Name', 'Receipt No', 'Date',
-    'Type', 'Mode', 'Adv.Paid', 'Adj.Amt', 'Balance',
-    'Adjusted Against', 'Fee Type', 'Adjusted Amt',
+    AppText.serialNo, 'Class', 'Register No', 'Student Name', 'Receipt No', 'Date',
+    'Type', 'Mode', 'Advance Paid', 'Total Adjusted', 'Balance',
+    'Adjusted Against', 'Fee Type', 'Adjusted Amount',
   ];
 
   String _advTypeText(Map<String, dynamic> a) => switch (a['advtype']?.toString() ?? 'S') {
@@ -7271,7 +7272,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Excel error. ${friendlyError(e)}'),
+            content: Text('Could not export to Excel. ${friendlyError(e)}'),
             backgroundColor: AppColors.error));
       }
     }
@@ -7366,7 +7367,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
             cellStyle: const pw.TextStyle(fontSize: 7),
             columnWidths: {
-              0: const pw.FixedColumnWidth(18),
+              0: const pw.FixedColumnWidth(26),
               1: const pw.FixedColumnWidth(48),
               2: const pw.FixedColumnWidth(58),
               3: const pw.FlexColumnWidth(2.2),
@@ -7395,7 +7396,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('PDF error. ${friendlyError(e)}'),
+            content: Text('Could not create the PDF. ${friendlyError(e)}'),
             backgroundColor: AppColors.error));
       }
     }
@@ -7417,20 +7418,20 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         Container(
           padding: EdgeInsets.only(bottom: 10.h),
           child: Row(children: [
-            _reportTitle('grid-1', 'DCB Student Register', 'demand / collection / balance per student (reconciled)'),
+            _reportTitle('grid-1', 'DCB Register', 'Demand, collection and balance per student (reconciled)'),
             SizedBox(width: 10.w),
             Text('$label  ·  $studentCount students', style: AppUI.muted),
             const Spacer(),
             _miniExportBtn(
               onPressed: (rows.isEmpty || _dcbExporting) ? () {} : () => _exportDcbExcel(label, rows),
               icon: Icons.table_chart_rounded,
-              label: _dcbExporting ? 'Exporting…' : 'Excel',
+              label: _dcbExporting ? 'Exporting…' : AppText.exportExcel,
             ),
             SizedBox(width: AppBtn.gap(context)),
             _miniExportBtn(
               onPressed: (rows.isEmpty || _dcbExporting) ? () {} : () => _exportDcbPdf(label, rows),
               icon: Icons.picture_as_pdf_rounded,
-              label: 'PDF',
+              label: AppText.exportPdf,
             ),
           ]),
         ),
@@ -7440,8 +7441,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   Widget _dcbTable(List<Map<String, dynamic>> rows) {
-    const base = <double>[44, 200, 92, 84, 84, 92, 100, 92, 100, 92, 110, 130, 140];
-    const headers = ['SL', 'NAME & REG NO', 'CLASS', 'BATCH', 'SEM', 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADM TYPE', 'RECEIPT'];
+    const base = <double>[56, 200, 92, 84, 84, 92, 100, 92, 100, 92, 110, 130, 140];
+    final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
     const numCols = {5, 6, 7, 8, 9};
     // A school has no batch, quota or admission type: those columns are
     // skipped. Indexes stay the college's, so every lookup below is unchanged.
@@ -7469,7 +7470,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final isOverall = kind == 'overall';
         final style = AppUI.money.copyWith(fontWeight: FontWeight.w800, color: (isGrand || isOverall) ? AppColors.primary : AppColors.textPrimary);
         String n(String k) => _formatNumber((r[k] as double?) ?? 0);
-        final vals = ['', isOverall ? 'OVERALL' : isGrand ? 'G.Total' : 'S.Total', '', '', '', n('college'), n('transport'), n('demand'), n('collection'), n('balance'), '', '', ''];
+        final vals = ['', isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal', '', '', '', n('college'), n('transport'), n('demand'), n('collection'), n('balance'), '', '', ''];
         return Container(
           color: isOverall ? AppColors.primaryLight : isGrand ? AppColors.infoBg : AppColors.tableHeadBg,
           child: Row(children: [
@@ -7554,10 +7555,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       int r = 0;
       if (_insName.isNotEmpty) { put(r, 1, _insName, style: titleStyle); r++; }
       if (_insAddress.isNotEmpty) { put(r, 1, _insAddress, style: titleStyle); r++; }
-      put(r, 1, 'DCB Student Register for $course', style: titleStyle);
+      put(r, 1, 'DCB Register for $course', style: titleStyle);
       put(r, 8, 'Date: ${_formatDate(DateTime.now())}');
       r += 2;
-      const headers = ['Sl No', 'Name & Reg No', 'Class', 'Batch', 'Semester', 'College Demand', 'Transport Demand', 'Demand', 'Collection', 'Balance', 'Quota', 'Admission Type', 'Receipt No & Date'];
+      final headers = [AppText.serialNo, 'Name & Register No', 'Class', 'Batch', 'Semester', isSchool ? 'School Demand' : 'College Demand', 'Transport Demand', 'Demand', 'Collection', 'Balance', 'Quota', 'Admission Type', 'Receipt No & Date'];
       // A school has no batch, quota or admission type: those columns are left
       // out and the ones after them close up. putC() writes by college column.
       final hidden = isSchool ? const {3, 10, 11} : const <int>{};
@@ -7589,7 +7590,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         } else {
           final isOverall = kind == 'overall';
           final isGrand = kind == 'grand';
-          put(r, (isGrand || isOverall) ? 0 : 1, isOverall ? 'OVERALL' : isGrand ? 'G.Total' : 'S.Total', style: boldTxt);
+          put(r, (isGrand || isOverall) ? 0 : 1, isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal', style: boldTxt);
           putC(r, 5, row['college'], style: boldNum);
           putC(r, 6, row['transport'], style: boldNum);
           putC(r, 7, row['demand'], style: boldNum);
@@ -7601,7 +7602,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.setColumnWidth(1, 30);
       await _saveExcel(excel, 'DCB_Register_${course.replaceAll(RegExp(r"[^A-Za-z0-9]+"), "_")}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('DCB export error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not export the DCB Register to Excel. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     } finally {
       if (mounted) setState(() => _dcbExporting = false);
     }
@@ -7610,7 +7611,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _exportDcbPdf(String course, List<Map<String, dynamic>> rows) async {
     setState(() => _dcbExporting = true);
     try {
-      const headers = ['SL', 'NAME & REG NO', 'CLASS', 'BATCH', 'SEM', 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADM TYPE', 'RECEIPT'];
+      final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
       // A school has no batch, quota or admission type: those columns are left
       // out of the printed table (and the figures after them close up).
       final hidden = isSchool ? const {3, 10, 11} : const <int>{};
@@ -7631,7 +7632,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         } else if (kind == 'courseheader') {
           data.add(vis([row['course']?.toString() ?? '', '', '', '', '', '', '', '', '', '', '', '', '']));
         } else {
-          final lbl = kind == 'overall' ? 'OVERALL' : kind == 'grand' ? 'G.Total' : 'S.Total';
+          final lbl = kind == 'overall' ? 'OVERALL' : kind == 'grand' ? 'Grand Total' : 'Subtotal';
           data.add(vis(['', lbl, '', '', '', n(row['college']), n(row['transport']), n(row['demand']), n(row['collection']), n(row['balance']), '', '', '']));
         }
       }
@@ -7646,7 +7647,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             if (_insAddress.isNotEmpty) pw.Text(_insAddress, style: const pw.TextStyle(fontSize: 9)),
             pw.SizedBox(height: 4),
             pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-              pw.Text('DCB Student Register for $course', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              pw.Text('DCB Register for $course', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
               pw.Text('Date: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 10)),
             ]),
             pw.SizedBox(height: 6),
@@ -7666,7 +7667,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ));
       await _savePdf(pdf, 'DCB_Register_${course.replaceAll(RegExp(r"[^A-Za-z0-9]+"), "_")}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('DCB PDF error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the DCB Register PDF. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     } finally {
       if (mounted) setState(() => _dcbExporting = false);
     }
@@ -7782,9 +7783,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // too -- it prints in the same table.
       final showFine = totalFine.abs() > 0.0001 ||
           unrecRows.any((r) => ((r['fine'] as num?)?.toDouble() ?? 0) != 0);
-      final headers = ['Receipt No', schoolTerm('Reg No'), 'Student Name', schoolTerm('Class'),
+      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'),
         ...shownFeeTypes.map(_feeHdr), if (showFine) 'Fine', 'Total', ...modeHeaders,
-        'Adjusted', 'Net Amt'];
+        'Adjusted', 'Net Amount'];
       final rows = <List<String>>[];
       for (final r in visibleRows) {
         // Refunds are not collections — they go in their own section below.
@@ -7960,7 +7961,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   ],
                 ),
                 pw.SizedBox(height: 2),
-                pw.Text('Collected by: $collectedBy', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                pw.Text('Collected By: $collectedBy', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
                 pw.SizedBox(height: 6),
               ],
             );
@@ -7996,7 +7997,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       await _savePdf(pdf, 'Daily_Collection_${_formatDateCompact(_dailyFrom!)}_${_formatDateCompact(_dailyTo!)}');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('PDF error. ${friendlyError(e)}'), backgroundColor: AppColors.error));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the PDF. ${friendlyError(e)}'), backgroundColor: AppColors.error));
     }
   }
 
@@ -8253,12 +8254,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ...shownFeeTypes.map(_feeHdr),
         if (showFine) 'FINE',
         if (showAdvance) 'ADVANCE',
-        'Total',
-        if (showCash) 'Cash',
-        if (showBank) 'Bank',
-        if (showAdj) 'Adjusted',
-        'Net Amt',
-        'ST',
+        'TOTAL',
+        if (showCash) 'CASH',
+        if (showBank) 'BANK',
+        if (showAdj) 'ADJUSTED',
+        'NET AMOUNT',
+        'STATUS',
       ];
 
       // The header states the report's SCOPE, so it names a cashier only when
@@ -8409,7 +8410,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                       child: pw.Row(
                           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                           children: [
-                            pw.Text('Collected By : $collectedBy',
+                            pw.Text('Collected By: $collectedBy',
                                 style: pw.TextStyle(
                                     fontSize: 11,
                                     fontWeight: pw.FontWeight.bold)),
@@ -8501,7 +8502,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       debugPrint(st.toString());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Print failed: $e', maxLines: 4),
+            content: Text('Could not print the statement. ${friendlyError(e)}', maxLines: 4),
             duration: const Duration(seconds: 8),
             backgroundColor: AppColors.error));
       }
@@ -8605,9 +8606,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   onError: (context, error) => Center(
                     child: Padding(
                       padding: EdgeInsets.all(24.w),
-                      child: Text('Could not render the preview. '
-                          'The statement is still available as Excel or PDF. '
-                          + error.toString(),
+                      child: Text('Could not show the preview. '
+                          'You can still export the statement to Excel or PDF.',
                           textAlign: TextAlign.center,
                           style: AppUI.muted),
                     ),

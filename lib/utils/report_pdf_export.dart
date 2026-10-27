@@ -55,8 +55,8 @@ Future<bool> saveReportPdf(
   final fullAddress =
       [insAddress, insCity].where((s) => s.trim().isNotEmpty).join(', ');
   final now = DateTime.now();
-  final runDate = '${now.day.toString().padLeft(2, '0')}/'
-      '${now.month.toString().padLeft(2, '0')}/${now.year}';
+  final runDate = '${now.day.toString().padLeft(2, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-${now.year}';
 
   final pdf = pw.Document();
   pdf.addPage(pw.MultiPage(
