@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -141,7 +142,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the students. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -290,7 +291,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       await File(path).writeAsBytes(bytes);
       if (mounted) _snack('Exported ${rows.length} students to $path', AppColors.success);
     } catch (e) {
-      if (mounted) _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack('Could not export the sheet. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busyIo = false);
     }
@@ -366,7 +367,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       ];
       check = _checkSheet(file.name, header, rows);
     } catch (e) {
-      _snack('Import failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not import the sheet. ${friendlyError(e)} Check that it is an .xlsx file exported from this screen.', AppColors.error);
     } finally {
       if (mounted) setState(() => _busyIo = false);
     }
@@ -396,9 +397,9 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       }
     }
     final blocking = [
-      if (oldCol < 0) schoolTerm('There is no "Old Reg No" column.'),
+      if (oldCol < 0) schoolTerm('The sheet has no "Old Reg No" column. Use Export to get a sheet with the right columns.'),
       if (nameCol < 0) 'There is no "Student Name" column.',
-      if (newCol < 0) schoolTerm('There is no "New Reg No" column.'),
+      if (newCol < 0) schoolTerm('The sheet has no "New Reg No" column. Use Export to get a sheet with the right columns.'),
     ];
     if (blocking.isNotEmpty) {
       return _RollImportCheck(
@@ -423,16 +424,16 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       final e = _RollRow(i, i + 2, at(oldCol), at(nameCol));
 
       if (e.oldNo.isEmpty) {
-        e.flag(oldCol, schoolTerm('Old Reg No blank'), schoolTerm('Old Reg No is blank'));
+        e.flag(oldCol, schoolTerm('Old Register No. blank'), schoolTerm('Old Register No. is blank'));
       } else {
         final stu = byOld[e.oldNo];
         if (stu == null) {
-          e.flag(oldCol, schoolTerm('Old Reg No not found'), schoolTerm('Old Reg No ${e.oldNo} is not an active student'));
+          e.flag(oldCol, schoolTerm('Old Register No. not found'), schoolTerm('Old Register No. ${e.oldNo} does not belong to an active student'));
         } else {
           e.student = stu;
           final dup = firstRowOf[e.oldNo];
           if (dup != null) {
-            e.flag(oldCol, schoolTerm('Old Reg No repeated'), schoolTerm('Old Reg No ${e.oldNo} is already in row $dup'));
+            e.flag(oldCol, schoolTerm('Old Register No. repeated'), schoolTerm('Old Register No. ${e.oldNo} is already in row $dup'));
           } else {
             firstRowOf[e.oldNo] = e.row;
           }
@@ -441,7 +442,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
           final stuName = (stu['stuname'] ?? '').toString().trim();
           if (e.name.isNotEmpty && _alnum(e.name) != _alnum(stuName)) {
             e.flag(nameCol, 'Name mismatch',
-                schoolTerm('Name "${e.name}" does not belong to Old Reg No ${e.oldNo} (on record: ${stuName.isEmpty ? 'no name' : stuName})'));
+                schoolTerm('Name "${e.name}" does not match Old Register No. ${e.oldNo} (on record: ${stuName.isEmpty ? 'no name' : stuName})'));
             if (oldCol >= 0) e.bad.add(oldCol);
           }
           final stuClass = (stu['stuclass'] ?? '').toString().trim();
@@ -463,7 +464,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       if (v.isNotEmpty && v != e.oldNo) {
         final problem = _formatProblem(v);
         if (problem != null) {
-          e.flag(newCol, schoolTerm('Invalid New Reg No'), problem);
+          e.flag(newCol, schoolTerm('Invalid New Register No.'), problem);
         } else {
           e.newNo = v;
           // Taken by anyone: a student of any status, or an admission record.
@@ -471,8 +472,8 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
           // save_rollno_change applies rows one at a time and would refuse it.
           final holder = _existingNos[v];
           if (holder != null) {
-            e.flag(newCol, schoolTerm('Reg No in use'),
-                schoolTerm('New Reg No $v is already in use${holder.isEmpty ? '' : ' by $holder'}'));
+            e.flag(newCol, schoolTerm('Register No. in use'),
+                schoolTerm('New Register No. $v is already used${holder.isEmpty ? '' : ' by $holder'}'));
           }
         }
       }
@@ -507,8 +508,8 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                 ? 'row ${incoming[(s['stuadmno'] ?? '').toString()]!.row}'
                 : schoolTerm('Old Reg No ${s['stuadmno']} · ${s['stuname'] ?? ''} (typed on screen)'),
         ];
-        e.flag(newCol, schoolTerm('New Reg No repeated'),
-            schoolTerm('New Reg No ${e.newNo} is also given to ${_list(where)}'));
+        e.flag(newCol, schoolTerm('New Register No. repeated'),
+            schoolTerm('New Register No. ${e.newNo} is also given to ${_list(where)}'));
         again = true;
       }
     }
@@ -619,7 +620,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
             AppColors.success);
       }
     } catch (e) {
-      _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not export the error sheet. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -655,7 +656,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
         if (_typedNew(s).isNotEmpty && _typedNew(s) != (s['stuadmno'] ?? '').toString()) s,
     ];
     if (pending.isEmpty) {
-      _snack(schoolTerm('Enter at least one new roll number.'), AppColors.warning);
+      _snack(schoolTerm('Enter at least one new register number.'), AppColors.warning);
       return;
     }
 
@@ -686,9 +687,9 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(schoolTerm('Update Roll Numbers')),
+        title: Text(schoolTerm('Update Register Numbers')),
         content: Text(
-            'Renumber ${entries.length} student(s) with effect from ${_fmt(_effectDate)}?\n\n'
+            'Renumber ${entries.length} ${entries.length == 1 ? 'student' : 'students'} effective from ${_fmt(_effectDate)}?\n\n'
             'The new number replaces the old one everywhere — fee demands, receipts, '
             'concessions, refunds and the admission record all move with it.'),
         actions: [
@@ -718,11 +719,11 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
       }
       _snack(
           keep.isEmpty
-              ? schoolTerm('$n roll number(s) updated.')
-              : schoolTerm('$n roll number(s) updated. ${keep.length} still to fix.'),
+              ? schoolTerm('$n register ${n == 1 ? 'number' : 'numbers'} updated.')
+              : schoolTerm('$n register ${n == 1 ? 'number' : 'numbers'} updated. ${keep.length} still need fixing.'),
           keep.isEmpty ? AppColors.success : AppColors.warning);
     } catch (e) {
-      _snack('Update failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not update the numbers. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -756,18 +757,18 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
     for (final e in entries) {
       final problem = _formatProblem(e.newNo);
       if (problem != null) {
-        e.flag(schoolTerm('Invalid New Reg No'), problem);
+        e.flag(schoolTerm('Invalid New Register No.'), problem);
         continue;
       }
       final holder = taken[e.newNo];
       if (holder != null) {
-        e.flag(schoolTerm('Reg No in use'),
-            schoolTerm('New Reg No ${e.newNo} is already in use${holder.isEmpty ? '' : ' by $holder'}'));
+        e.flag(schoolTerm('Register No. in use'),
+            schoolTerm('New Register No. ${e.newNo} is already used${holder.isEmpty ? '' : ' by $holder'}'));
       }
       final others = byNew[e.newNo]!.where((o) => !identical(o, e)).toList();
       if (others.isNotEmpty) {
-        e.flag(schoolTerm('New Reg No repeated'),
-            schoolTerm('New Reg No ${e.newNo} is also entered for ${_list([for (final o in others) 'Old Reg No ${o.oldNo} · ${o.name}'])}'));
+        e.flag(schoolTerm('New Register No. repeated'),
+            schoolTerm('New Register No. ${e.newNo} is also entered for ${_list([for (final o in others) 'Old Register No. ${o.oldNo} · ${o.name}'])}'));
       }
     }
     return entries;
@@ -787,7 +788,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
 
     return showValidationDialog(
       context,
-      subtitle: schoolTerm('Save · ${_class ?? _course ?? 'All classes'} · effect ${_fmt(_effectDate)}'),
+      subtitle: schoolTerm('Save · ${_class ?? _course ?? 'All classes'} · effective ${_fmt(_effectDate)}'),
       rowLabel: '#',
       stats: [
         ('Students to renumber', checked.length, AppColors.textSecondary),
@@ -881,7 +882,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
             decoration: AppUI.card(),
             child: AppUI.cardHeader(
               icon: 'tag',
-              title: schoolTerm('New Roll Number'),
+              title: schoolTerm('New Register Number'),
               subtitle: schoolTerm('Assign new register numbers class by class'),
               trailing: [
                 IconButton(
@@ -899,7 +900,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
             padding: EdgeInsets.all(AppUI.cardPad),
             decoration: AppUI.card(),
             child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(flex: 3, child: _labeled('Effect Date', InkWell(
+              Expanded(flex: 3, child: _labeled('Effective Date', InkWell(
                 onTap: () async {
                   final d = await showDatePicker(
                     context: context,
@@ -910,7 +911,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                   if (d != null) setState(() => _effectDate = d);
                 },
                 child: InputDecorator(
-                  decoration: _dec('Effect date').copyWith(
+                  decoration: _dec('Select effective date').copyWith(
                     suffixIcon: Icon(Icons.calendar_today_outlined, size: 15.sp, color: AppColors.textSecondary),
                   ),
                   child: Text(_fmt(_effectDate), style: AppUI.fieldText(context)),
@@ -947,21 +948,21 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                 onChanged: _selectClass,
               ), icon: 'book')),
               SizedBox(width: 12.w),
-              Expanded(flex: 3, child: _labeled('Order', DropdownButtonFormField<String>(
+              Expanded(flex: 3, child: _labeled('Sort By', DropdownButtonFormField<String>(
                 key: ValueKey('rnord-$_order'),
                 initialValue: _order,
                 isExpanded: true,
                 style: AppUI.fieldText(context),
-                decoration: _dec(schoolTerm('Reg No')),
+                decoration: _dec(schoolTerm('Register No.')),
                 items: [
-                  DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Reg No'))),
+                  DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Register No.'))),
                   const DropdownMenuItem(value: 'name', child: Text('Name')),
                 ],
                 onChanged: (v) => setState(() => _order = v ?? 'regno'),
               ), icon: 'sort')),
-              Expanded(flex: 4, child: _labeled(schoolTerm('Reg No'), TextField(
+              Expanded(flex: 4, child: _labeled(AppText.search, TextField(
                 controller: _search,
-                decoration: _dec('Search admn no / name').copyWith(
+                decoration: _dec(schoolTerm('Search by register no. or name')).copyWith(
                   prefixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary),
                   suffixIcon: _search.text.isEmpty
                       ? null
@@ -1045,8 +1046,8 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
               SizedBox(width: 7.w),
               Expanded(child: Text(schoolTerm(
                 'The new number replaces the old one everywhere — fee demands, receipts, concessions, '
-                'refunds and the admission record move with it. A roll number cannot be updated twice '
-                'on the same effect date; blank rows are skipped.'),
+                'refunds and the admission record move with it. A register number cannot be updated twice '
+                'on the same effective date. Blank rows are skipped.'),
                 style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.35),
               )),
             ]),
@@ -1093,11 +1094,11 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
           ),
           child: Row(children: [
             SizedBox(width: 40.w, child: Text('#', style: AppUI.tableHead)),
-            _hc(schoolTerm('Old Reg No'), 3, icon: 'hashtag'),
+            _hc(schoolTerm('Old Register No.'), 3, icon: 'hashtag'),
             _hc('Student Name', 5, icon: 'profile-2user'),
             // Class only earns a column when the list spans more than one.
             if (_class == null) _hc(schoolTerm('Class'), 3, icon: 'book'),
-            _hc(schoolTerm('New Reg No'), 3, icon: 'tag'),
+            _hc(schoolTerm('New Register No.'), 3, icon: 'tag'),
           ]),
         ),
         Expanded(
@@ -1143,7 +1144,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                       style: AppUI.fieldText(context, filled: entered).copyWith(color: entered ? tint : null),
                       onChanged: (_) => setState(() {}),
                       // errorText swaps in the kit's red error edge.
-                      decoration: AppUI.field(context, schoolTerm('New reg no'),
+                      decoration: AppUI.field(context, schoolTerm('Enter new register no.'),
                               filled: entered && err == null, dense: true)
                           .copyWith(
                         errorText: err,

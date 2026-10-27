@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
@@ -55,6 +56,8 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   String _insName = '', _insAddress = '', _insCity = '';
 
   static const _orderOptions = ['Admission No', 'Student Name', 'Gender + Student Name'];
+  // How an order option reads (the option itself is compared in _sorted).
+  static const _orderLabels = {'Admission No': 'Register No.'};
 
   @override
   void initState() {
@@ -115,7 +118,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load the admissions. ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -244,7 +247,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     }
     final courses = rows.map((a) => a.courname?.trim() ?? '').toSet();
     if (courses.length > 1) {
-      _snack(schoolTerm('The ticked students are in different courses. Pick one course first.'), AppColors.warning);
+      _snack(schoolTerm('The ticked students are in different courses. Select one course first.'), AppColors.warning);
       return;
     }
     final options = _classNamesFor(courses.first);
@@ -264,7 +267,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(schoolTerm('Put ${rows.length} ticked student(s) of ${courses.first} into one class.'),
+                Text(schoolTerm('Allocate the ${rows.length} ticked ${rows.length == 1 ? 'student' : 'students'} of ${courses.first} to one class.'),
                     style: AppUI.muted),
                 SizedBox(height: 14.h),
                 DropdownButtonFormField<String>(
@@ -304,12 +307,12 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   Future<void> _save([List<AdmissionModel>? only]) async {
     final ticked = only ?? _admissions.where((a) => a.isPending && _ticked.contains(a.admId)).toList();
     if (ticked.isEmpty) {
-      _snack(schoolTerm('Pick a class for at least one student first.'), AppColors.warning);
+      _snack(schoolTerm('Select a class for at least one student first.'), AppColors.warning);
       return;
     }
     final missing = ticked.where((a) => (_rowClass[a.admId] ?? '').isEmpty).toList();
     if (missing.isNotEmpty) {
-      _snack(schoolTerm('Pick a class for: ${missing.take(5).map((a) => a.admno).join(', ')}'
+      _snack(schoolTerm('Select a class for: ${missing.take(5).map((a) => a.admno).join(', ')}'
           '${missing.length > 5 ? ' and ${missing.length - 5} more' : ''}.'), AppColors.error);
       return;
     }
@@ -337,12 +340,12 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     await _load();
     if (!mounted) return;
     if (failures.isEmpty) {
-      _snack('Allocated $done student(s) and moved them to students.', AppColors.success);
+      _snack('$done ${done == 1 ? 'student' : 'students'} allocated and added to Students.', AppColors.success);
     } else {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Allocated $done, ${failures.length} failed'),
+          title: Text('$done Allocated, ${failures.length} Not Allocated'),
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
@@ -401,7 +404,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   }
 
   // ── export ────────────────────────────────────────────────────────
-  static const _exportHeaders = ['S.No', 'Adm No', 'Student Name', 'Gender', 'Course', 'Class', 'Status'];
+  static const _exportHeaders = [AppText.serialNo, 'Register No.', 'Student Name', 'Gender', 'Course', 'Class', 'Status'];
 
   List<List<String>> get _exportRows {
     final rows = _rows;
@@ -457,7 +460,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       put(0, r++, _insName.toUpperCase(), bold);
       if (_insAddress.isNotEmpty) put(0, r++, _insAddress.toUpperCase(), bold);
       if (_insCity.isNotEmpty) put(0, r++, _insCity.toUpperCase(), bold);
-      put(0, r++, schoolTerm('CLASS ALLOCATION${_selectedCourse == null ? '' : ' - $_selectedCourse'}'), bold);
+      put(0, r++, schoolTerm('Class Allocation${_selectedCourse == null ? '' : ' - $_selectedCourse'}'), bold);
       r++;
       for (var c = 0; c < _exportHeaders.length; c++) {
         put(c, r, schoolTerm(_exportHeaders[c]), hdr);
@@ -472,9 +475,9 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       final bytes = book.encode();
       if (bytes == null) throw Exception('Could not build the Excel file');
       await File(path).writeAsBytes(bytes);
-      _snack('Saved $path', AppColors.success);
+      _snack('Excel file saved to $path', AppColors.success);
     } catch (e) {
-      _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not export the Excel file. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -494,7 +497,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         insName: _insName,
         insAddress: _insAddress,
         insCity: _insCity,
-        title: schoolTerm('CLASS ALLOCATION'),
+        title: schoolTerm('Class Allocation'),
         subtitle: schoolTerm('${_selectedCourse == null ? 'All Courses' : 'Course : $_selectedCourse'}'
             '   Status : ${_status == _Status.pending ? 'Pending' : _status == _Status.allocated ? 'Allocated' : 'All'}'),
         headers: [for (final h in _exportHeaders) schoolTerm(h)],
@@ -502,7 +505,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         landscape: false,
       );
     } catch (e) {
-      _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not export the PDF. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -634,7 +637,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         flex: 5,
         child: AppSearchField(
           controller: _search,
-          hintText: schoolTerm('Search by Adm No, Name, or Class...'),
+          hintText: schoolTerm('Search by register no., name or class'),
           onChanged: (_) => setState(() {}),
         ),
       ),
@@ -680,9 +683,9 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         ),
       ),
       SizedBox(width: AppBtn.gap(context)),
-      _solidBtn('Excel', Icons.table_chart_rounded, AppColors.primary, _exporting ? null : _exportExcel),
+      _solidBtn(AppText.exportExcel, Icons.table_chart_rounded, AppColors.primary, _exporting ? null : _exportExcel),
       SizedBox(width: AppBtn.gap(context)),
-      _solidBtn('PDF', Icons.picture_as_pdf_rounded, AppColors.primary, _exporting ? null : _exportPdf),
+      _solidBtn(AppText.exportPdf, Icons.picture_as_pdf_rounded, AppColors.primary, _exporting ? null : _exportPdf),
       SizedBox(width: AppBtn.gap(context)),
       OutlinedButton.icon(
         onPressed: _saving ? null : _bulkAllocate,
@@ -754,7 +757,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
                       }),
             ),
             Text('S.NO', style: h),
-            Text(isSchool ? 'ADM. NO' : 'REG. NO', style: h),
+            Text(isSchool ? 'ADMISSION NO.' : 'REGISTER NO.', style: h),
             Text('STUDENT NAME', style: h),
             Text('GENDER', style: h),
             Text(schoolTerm('COURSE'), style: h),
@@ -782,7 +785,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
             ? 'Try a different name or number.'
             : _status == _Status.pending
                 ? 'New admissions saved without a class appear here.'
-                : 'Change the Filters to see more.',
+                : 'Change the filters to see more.',
         icon: 'task-square',
       );
     }
@@ -855,8 +858,8 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
           },
           itemBuilder: (_) => pending
               ? [
-                  PopupMenuItem(value: 'save', enabled: (chosen ?? '').isNotEmpty && !_saving, child: const Text('Allocate now')),
-                  PopupMenuItem(value: 'clear', enabled: (chosen ?? '').isNotEmpty, child: Text(schoolTerm('Clear class'))),
+                  PopupMenuItem(value: 'save', enabled: (chosen ?? '').isNotEmpty && !_saving, child: const Text('Allocate Now')),
+                  PopupMenuItem(value: 'clear', enabled: (chosen ?? '').isNotEmpty, child: Text(schoolTerm('Clear Class'))),
                 ]
               : [
                   PopupMenuItem(
@@ -880,7 +883,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   Widget _actionBar() {
     final count = _tickedCount;
     return Row(children: [
-      Text(count > 0 ? '$count selected for allocation' : schoolTerm('Pick a class or tick students to allocate'),
+      Text(count > 0 ? '$count selected for allocation' : schoolTerm('Select a class or tick students to allocate'),
           style: AppUI.body.copyWith(color: AppColors.textSecondary)),
       const Spacer(),
       ElevatedButton.icon(
@@ -939,13 +942,13 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       decoration: _dec(filled: true),
       items: [
         for (final e in _orderOptions)
-          DropdownMenuItem(value: e, child: Text(schoolTerm(e), style: AppUI.fieldText(context))),
+          DropdownMenuItem(value: e, child: Text(schoolTerm(_orderLabels[e] ?? e), style: AppUI.fieldText(context))),
       ],
       selectedItemBuilder: (_) => [
         for (final e in _orderOptions)
           Align(
             alignment: Alignment.centerLeft,
-            child: Text(schoolTerm(e),
+            child: Text(schoolTerm(_orderLabels[e] ?? e),
                 overflow: TextOverflow.ellipsis,
                 style: AppUI.fieldText(context, filled: true)),
           ),

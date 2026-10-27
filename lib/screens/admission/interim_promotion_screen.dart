@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -155,7 +156,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the transfer details. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -224,7 +225,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingStudents = false);
-      _snack('Failed to load students. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the students. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -445,7 +446,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingFees = false);
-      _snack('Failed to load transfer fees. ${friendlyError(e)}', AppColors.error);
+      _snack('${schoolTerm('Could not load the fees for the new course.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -466,7 +467,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
       if (!mounted) return;
       if (res == null) {
         setState(() => _looking = false);
-        _snack(schoolTerm('No active student with Roll Number "$admn".'), AppColors.warning);
+        _snack(schoolTerm('No active student found with Register No. "$admn". Check the number and try again.'), AppColors.warning);
         return;
       }
       await _selectStudentRow(res);
@@ -475,14 +476,14 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _looking = false);
-      _snack('Lookup failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not look up the student. ${friendlyError(e)}', AppColors.error);
     }
   }
 
   Future<void> _save() async {
     final student = _student;
     if (student == null) {
-      _popup('Student Required', schoolTerm('Select a student (by class + name, or Roll Number) first.'), AppColors.warning);
+      _popup('Student Required', schoolTerm('Select a student first, by class and name or by Register No.'), AppColors.warning);
       return;
     }
     // Course/Class may be left blank: that means "keep the current one", which
@@ -503,9 +504,9 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     if (targetGroup == currentGroup && target == currentClass && !_admTypeChanged) {
       _popup('Nothing Changed',
           isSchool
-              ? schoolTerm('Pick a different Transferred Course/Class.')
-              : 'Pick a different Transferred Course/Class, or a different '
-                  'Transferred Admission Type.', AppColors.warning);
+              ? schoolTerm('Select a different course or class to transfer to.')
+              : 'Select a different course, class or admission type to '
+                  'transfer to.', AppColors.warning);
       return;
     }
     final auth = context.read<AuthProvider>();
@@ -563,16 +564,17 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
       _snack(
-        'Transferred ${student['stuname']} to $target • $newCount new demand(s), '
+        'Transferred ${student['stuname']} to $target. $newCount new fee '
+        '${newCount == 1 ? 'demand' : 'demands'} raised, '
         '₹${applied.toStringAsFixed(0)} credit applied'
-        '${leftover > 0.5 ? ' • ₹${leftover.toStringAsFixed(0)} unused credit (refund separately)' : ''}.',
+        '${leftover > 0.5 ? '. ₹${leftover.toStringAsFixed(0)} unused credit is to be refunded separately' : ''}.',
         AppColors.success,
       );
       _newRecord();
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _popup('Transfer Failed', friendlyError(e), AppColors.error);
+      _popup('Transfer Not Saved', friendlyError(e), AppColors.error);
     }
   }
 
@@ -692,7 +694,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                 compact: compact,
                                 child: Column(children: [
                                   _row2(
-                                    _field('Doc No', _readonlyBox(_docNo?.toString() ?? '—'), icon: 'receipt-2'),
+                                    _field('Document No.', _readonlyBox(_docNo?.toString() ?? AppText.generated), icon: 'receipt-2'),
                                     _field('Transfer Date', _dateBox(), icon: 'calendar-1'),
                                   ),
                                   SizedBox(height: gap.h),
@@ -703,7 +705,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                   SizedBox(height: gap.h),
                                   _row2(
                                     _field(
-                                      'Name',
+                                      'Name *',
                                       // Always a Row, dropdown last, so picking a
                                       // student keeps the same dropdown element
                                       // (and its focus) -- only the photo appears.
@@ -720,7 +722,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                       ]),
                                       icon: 'people',
                                     ),
-                                    _field(schoolTerm('Roll Number'), _admnBox(), icon: 'user-add'),
+                                    _field(schoolTerm('Register No.'), _admnBox(), icon: 'user-add'),
                                   ),
                                   if (!isSchool) ...[
                                     SizedBox(height: gap.h),
@@ -740,11 +742,11 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                   if (twoUp) ...[
                                     _field(schoolTerm('Transferred Course'), _transferCourseDropdown(), icon: 'ranking'),
                                     SizedBox(height: gap.h),
-                                    _field(schoolTerm('Transferred Class'), _transferClassDropdown(), icon: 'grid-1'),
+                                    _field(schoolTerm('Transferred Class *'), _transferClassDropdown(), icon: 'grid-1'),
                                   ] else
                                     _row2(
                                       _field(schoolTerm('Transferred Course'), _transferCourseDropdown(), icon: 'ranking'),
-                                      _field(schoolTerm('Transferred Class'), _transferClassDropdown(), icon: 'grid-1'),
+                                      _field(schoolTerm('Transferred Class *'), _transferClassDropdown(), icon: 'grid-1'),
                                     ),
                                   if (!isSchool) ...[
                                     SizedBox(height: gap.h),
@@ -754,7 +756,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                   _field('Remarks', TextField(
                                     controller: _remarksController,
                                     onChanged: (_) => setState(() {}),
-                                    decoration: _dec(hint: 'Optional remarks', filled: _remarksController.text.trim().isNotEmpty),
+                                    decoration: _dec(hint: 'Add remarks (optional)', filled: _remarksController.text.trim().isNotEmpty),
                                     style: _valueStyle(_remarksController.text.trim().isNotEmpty),
                                   ), icon: 'receipt-edit'),
                                 ]),
@@ -780,10 +782,12 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
                                   Text('Transferring ${_student!['stuname'] ?? ''}',
                                       style: AppUI.muted.copyWith(fontWeight: FontWeight.w600)),
                                 const Spacer(),
+                                AppUI.requiredNote(),
+                                SizedBox(width: 16.w),
                                 OutlinedButton.icon(
                                   onPressed: _saving ? null : _resetForm,
                                   icon: const Icon(Icons.refresh, size: 16),
-                                  label: const Text('Reset'),
+                                  label: const Text(AppText.clear),
                                 ),
                                 SizedBox(width: 12.w),
                                 ElevatedButton.icon(
@@ -984,7 +988,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     return TextField(
       controller: _admnController,
       onChanged: (_) => setState(() {}),
-      decoration: _dec(hint: schoolTerm('Type Roll No + Enter'), filled: has).copyWith(
+      decoration: _dec(hint: schoolTerm('Enter register no. and press Enter'), filled: has).copyWith(
         suffixIcon: _looking
             ? const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
             : IconButton(icon: const Icon(Icons.search, size: 18), onPressed: _lookupByAdmn),
@@ -1005,7 +1009,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
             suffixIcon: const Icon(Icons.calendar_today, size: 16, color: AppColors.primary),
           ),
           child: Text(
-            '${_promotionDate.day.toString().padLeft(2, '0')}/${_promotionDate.month.toString().padLeft(2, '0')}/${_promotionDate.year}',
+            formatDmy(_promotionDate),
             style: _valueStyle(true),
           ),
         ),
@@ -1030,9 +1034,9 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
         children: [
           Expanded(
             child: Wrap(spacing: 24.w, runSpacing: 6.h, children: [
-              _sumChip('Old Paid', _studentPaid, AppColors.textPrimary),
+              _sumChip('Previously Paid', _studentPaid, AppColors.textPrimary),
               _sumChip(schoolTerm('New Course Total'), _newCourseTotal, AppColors.textPrimary),
-              _sumChip('Old Paid Used', _oldPaidUsed, AppColors.success),
+              _sumChip('Previously Paid Adjusted', _oldPaidUsed, AppColors.success),
               _sumChip('Concession', _appliedTotal, AppColors.warning),
               _sumChip('To Be Paid', _toBePaid, AppColors.error),
             ]),
@@ -1457,10 +1461,10 @@ class _FeeAdjustPageState extends State<FeeAdjustPage> {
     });
     final msg = _paidApplied <= 0.004
         ? (_newTotal <= 0.004
-            ? schoolTerm('Type the new course fee amounts first, then Auto-match.')
-            : schoolTerm('No fee matched — no same-type old paid fee on the new course.'))
-        : 'Reduced ₹${_paidApplied.toStringAsFixed(0)} old paid off Fee Amount across $matched fee(s)'
-            '${unusedPaid > 0.5 ? ' • ₹${unusedPaid.toStringAsFixed(0)} old paid unused (fee smaller/absent) — refund' : ''}.';
+            ? schoolTerm('Enter the new course fee amounts first, then press Auto-match.')
+            : schoolTerm('No fees matched. The new course has no fee of the same type that was already paid.'))
+        : '₹${_paidApplied.toStringAsFixed(0)} already paid was adjusted against $matched ${matched == 1 ? 'fee' : 'fees'}.'
+            '${unusedPaid > 0.5 ? ' ₹${unusedPaid.toStringAsFixed(0)} could not be adjusted and should be refunded.' : ''}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: _paidApplied > 0.004 ? AppColors.success : AppColors.warning,
@@ -1566,8 +1570,8 @@ class _FeeAdjustPageState extends State<FeeAdjustPage> {
                 if (widget.locked)
                   Expanded(
                     child: Text(
-                      'Credit already applied — these amounts are the fees after the '
-                      'old paid was deducted. Reset to adjust them again.',
+                      'Credit already applied. These amounts are the fees after the '
+                      'previously paid amount was deducted. Use Clear and Adjust Again to change them.',
                       style: AppUI.muted,
                     ),
                   )
@@ -1582,7 +1586,7 @@ class _FeeAdjustPageState extends State<FeeAdjustPage> {
                       foregroundColor: const WidgetStatePropertyAll(AppColors.error),
                       side: const WidgetStatePropertyAll(BorderSide(color: AppColors.error)),
                     ),
-                    label: const Text('Reset & Re-adjust'),
+                    label: const Text('Clear and Adjust Again'),
                   ),
                   SizedBox(width: 12.w),
                   ElevatedButton(
@@ -1639,9 +1643,9 @@ class _FeeAdjustPageState extends State<FeeAdjustPage> {
         border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
       ),
       child: Wrap(spacing: 28.w, runSpacing: 8.h, children: [
-        _chip('Old Paid', widget.studentPaid, AppColors.textPrimary),
+        _chip('Previously Paid', widget.studentPaid, AppColors.textPrimary),
         _chip(schoolTerm('New Course Total'), _newTotal, AppColors.textPrimary),
-        _chip('Old Paid Used', _paidApplied, AppColors.success),
+        _chip('Previously Paid Adjusted', _paidApplied, AppColors.success),
         _chip('Concession', _conTotal, AppColors.warning),
         _chip('To Be Paid', _toBePaid, AppColors.error),
       ]),
@@ -1780,7 +1784,7 @@ class _FeeAdjustPageState extends State<FeeAdjustPage> {
     return _cardShell(
       'New — ${widget.targetClass}'
       '${(widget.targetAdmName ?? '').isEmpty ? '' : ' · ${widget.targetAdmName}'}'
-      '  (type fee, then Auto-match)',
+      '  (enter fees, then press Auto-match)',
       AppColors.primary,
       Column(
         children: [

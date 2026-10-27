@@ -8,6 +8,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/school_terms.dart';
 import '../../utils/class_sort.dart';
@@ -140,7 +141,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the students. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -279,7 +280,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
 
   static String _who(Map<String, dynamic> s) {
     final n = (s['stuname'] ?? '').toString().trim();
-    return schoolTerm('Reg No ${s['stuadmno']}${n.isEmpty ? '' : ' · $n'}');
+    return schoolTerm('Register No. ${s['stuadmno']}${n.isEmpty ? '' : ' · $n'}');
   }
 
   static String _list(List<String> items) => items.length <= 3
@@ -360,7 +361,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         _snack('Exported ${rows.length} students to $path', AppColors.success);
       }
     } catch (e) {
-      if (mounted) _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack('Could not export the sheet. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _busyIo = false);
     }
@@ -398,7 +399,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
       ];
       check = _checkSheet(file.name, header, rows);
     } catch (e) {
-      _snack('Import failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not import the sheet. ${friendlyError(e)} Check that it is an .xlsx file exported from this screen.', AppColors.error);
     } finally {
       if (mounted) setState(() => _busyIo = false);
     }
@@ -433,7 +434,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
       }
     }
     final blocking = [
-      if (regCol < 0) schoolTerm('There is no "Reg No" column.'),
+      if (regCol < 0) schoolTerm('The sheet has no "Reg No" column. Use Export to get a sheet with the right columns.'),
       if (nameCol < 0) 'There is no "Student Name" column.',
       if (numCol[0] < 0 && (isSchool || numCol[1] < 0))
         isSchool ? schoolTerm('There is no "EMIS No" column.') : 'There is no "EMIS No" or "UMIS No" column.',
@@ -463,16 +464,16 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
       final e = _SheetRow(i, i + 2, at(regCol), at(nameCol));
 
       if (e.reg.isEmpty) {
-        e.flag(regCol, schoolTerm('Reg No blank'), schoolTerm('Reg No is blank'));
+        e.flag(regCol, schoolTerm('Register No. blank'), schoolTerm('Register No. is blank'));
       } else {
         final stu = byReg[_regKey(e.reg)];
         if (stu == null) {
-          e.flag(regCol, schoolTerm('Reg No not found'), schoolTerm('Reg No ${e.reg} is not an active student'));
+          e.flag(regCol, schoolTerm('Register No. not found'), schoolTerm('Register No. ${e.reg} does not belong to an active student'));
         } else {
           e.student = stu;
           final dup = firstRowOf[e.key];
           if (dup != null) {
-            e.flag(regCol, schoolTerm('Reg No repeated'), schoolTerm('Reg No ${e.reg} is already in row $dup'));
+            e.flag(regCol, schoolTerm('Register No. repeated'), schoolTerm('Register No. ${e.reg} is already in row $dup'));
           } else {
             firstRowOf[e.key] = e.row;
           }
@@ -481,7 +482,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           final stuName = (stu['stuname'] ?? '').toString().trim();
           if (e.name.isNotEmpty && _alnum(e.name) != _alnum(stuName)) {
             e.flag(nameCol, 'Name mismatch',
-                schoolTerm('Name "${e.name}" does not belong to Reg No ${e.reg} (on record: ${stuName.isEmpty ? 'no name' : stuName})'));
+                schoolTerm('Name "${e.name}" does not match Register No. ${e.reg} (on record: ${stuName.isEmpty ? 'no name' : stuName})'));
             if (regCol >= 0) e.bad.add(regCol);
           }
           final stuClass = (stu['stuclass'] ?? '').toString().trim();
@@ -660,7 +661,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
             AppColors.success);
       }
     } catch (e) {
-      _snack('Export failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not export the error sheet. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -855,7 +856,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                 : '$done student(s) updated.',
             left > 0 ? AppColors.warning : AppColors.success);
       } else {
-        _snack('$done updated, ${failures.length} failed. First: ${failures.first}',
+        _snack('$done ${done == 1 ? 'student' : 'students'} updated. ${failures.length} could not be updated: ${failures.first}',
             AppColors.error);
       }
     } finally {
@@ -927,17 +928,17 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
             Expanded(
                 flex: 3,
                 child: FormFieldLabel(
-                    label: 'Order', icon: 'sort', child: _orderDrop())),
+                    label: 'Sort By', icon: 'sort', child: _orderDrop())),
             SizedBox(width: 12.w),
             Expanded(
               flex: 5,
               child: FormFieldLabel(
-                label: schoolTerm('Reg No'),
+                label: AppText.search,
                 icon: 'hashtag',
                 child: TextField(
                 controller: _search,
                 style: AppUI.fieldText(context),
-                decoration: AppUI.field(context, schoolTerm('Search reg no / name')).copyWith(
+                decoration: AppUI.field(context, schoolTerm('Search by register no. or name')).copyWith(
                   prefixIcon: const Icon(Icons.search, size: 18),
                 ),
                 onChanged: (_) => setState(() {}),
@@ -952,7 +953,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
             ),
             SizedBox(width: 8.w),
             Tooltip(
-              message: 'Pick a filled sheet. It is checked first; nothing reaches the grid until you choose to fill it.',
+              message: 'Select a filled sheet. It is checked first, and nothing changes on screen until you choose to fill it in.',
               child: OutlinedButton.icon(
                 onPressed: _busyIo || _saving ? null : _import,
                 icon: _busyIo
@@ -1009,7 +1010,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           child: visible.isEmpty
               ? AppUI.empty(
                   title: 'No students for this filter',
-                  why: schoolTerm('Pick another Course or Class, or clear the search.'),
+                  why: schoolTerm('Select another course or class, or clear the search.'),
                   icon: 'people')
               : Container(
                   decoration: AppUI.card(),
@@ -1020,7 +1021,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                       child: Row(children: [
                         SizedBox(width: 44, child: Text('#', style: _hStyle())),
-                        SizedBox(width: 150.w, child: _h(schoolTerm('REG NO'), 'hashtag')),
+                        SizedBox(width: 150.w, child: _h(schoolTerm('REGISTER NO.'), 'hashtag')),
                         Expanded(child: _h('STUDENT NAME', 'profile-2user')),
                         SizedBox(width: 140.w, child: _h(schoolTerm('CLASS'), 'book')),
                         SizedBox(width: 190.w, child: _h(schoolTerm('EMIS NO'), 'note-1')),
@@ -1087,10 +1088,10 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
             width: 140.w,
             child: Text((s['stuclass'] ?? '').toString(),
                 style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
-        SizedBox(width: 190.w, child: _numField(emis, schoolTerm('EMIS no'), clash(0, emis))),
+        SizedBox(width: 190.w, child: _numField(emis, schoolTerm('Enter EMIS no.'), clash(0, emis))),
         if (umis != null) ...[
           SizedBox(width: 8.w),
-          SizedBox(width: 182.w, child: _numField(umis, 'UMIS no', clash(1, umis))),
+          SizedBox(width: 182.w, child: _numField(umis, 'Enter UMIS no.', clash(1, umis))),
         ],
       ]),
     );
@@ -1173,9 +1174,9 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         initialValue: _order,
         isExpanded: true,
         style: AppUI.fieldText(context),
-        decoration: AppUI.field(context, '', label: 'Order'),
+        decoration: AppUI.field(context, '', label: 'Sort By'),
         items: [
-          DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Reg No'))),
+          DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Register No.'))),
           const DropdownMenuItem(value: 'name', child: Text('Name')),
         ],
         onChanged: (v) => setState(() => _order = v ?? 'regno'),

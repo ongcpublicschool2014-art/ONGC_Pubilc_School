@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show FileOptions;
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -206,6 +207,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   static const _genders = ['Male', 'Female', 'Other'];
   static const _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
   static const _sources = ['WALK-IN', 'ONLINE', 'REFERRAL', 'AGENT'];
+  // The stored source codes above, as the dropdown shows them. Display only.
+  static const _sourceLabels = {'WALK-IN': 'Walk-in', 'ONLINE': 'Online', 'REFERRAL': 'Referral', 'AGENT': 'Agent'};
 
   @override
   void initState() {
@@ -604,7 +607,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('Pre-admission — starts NEXT academic year',
+                  Text('Pre-admission (starts next academic year)',
                       style: TextStyle(
                           fontSize: 13.sp,
                           fontWeight: FontWeight.w700,
@@ -613,9 +616,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                               : AppColors.textPrimary)),
                   SizedBox(height: 2.h),
                   Text(
-                      schoolTerm('Take the admission collection now. No fee demand is raised '
-                      'for this year, and the year change keeps them in the class '
-                      'above instead of moving them up.'),
+                      schoolTerm('Collect the admission fee now. No fee demand is raised '
+                      'for the current academic year, and Year End Process keeps the '
+                      'student in the chosen class instead of promoting them.'),
                       style: AppUI.muted),
                 ]),
           ),
@@ -768,52 +771,52 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           return false;
         }
         if (!_lenOk(_aadharController, 12)) {
-          _snack('Aadhar No must be exactly 12 digits.', AppColors.error);
+          _snack('Aadhaar No. must be exactly 12 digits.', AppColors.error);
           return false;
         }
         return true;
       case 1: // Academic Details
         if (_regMode == null) {
-          _snack(schoolTerm('Select Reg No Mode'), AppColors.error);
+          _snack(schoolTerm('Select the register number mode (Manual or Auto).'), AppColors.error);
           return false;
         }
         if (_admnoController.text.trim().isEmpty) {
-          _snack(schoolTerm('Enter Register No'), AppColors.error);
+          _snack(schoolTerm('Enter the register number.'), AppColors.error);
           return false;
         }
         // A manually typed number can collide with an existing admission; the
         // sequence-generated one can't.
         if (_regNoDuplicate) {
-          _snack(schoolTerm('Register No ${_admnoController.text.trim()} is already used by another admission.'),
+          _snack(schoolTerm('Register No. ${_admnoController.text.trim()} is already used by another admission. Enter a different number.'),
               AppColors.error);
           return false;
         }
         if (_admDate == null) {
-          _snack('Select Admission Date', AppColors.error);
+          _snack('Select the date of admission.', AppColors.error);
           return false;
         }
         if (_source == null) {
-          _snack('Select Source', AppColors.error);
+          _snack('Select the admission source.', AppColors.error);
           return false;
         }
         if (isSchool && (_selectedDivision == null || _selectedDivision!.trim().isEmpty)) {
-          _snack('Select Division', AppColors.error);
+          _snack('Select a division.', AppColors.error);
           return false;
         }
         // Course + Class are mandatory — the student is enrolled straight into
         // the class at admission (Class Allocation is for Fast Admission rows).
         if (_selectedCourse == null || _selectedCourse!.trim().isEmpty) {
-          _snack(schoolTerm('Select Course'), AppColors.error);
+          _snack(schoolTerm('Select a course.'), AppColors.error);
           return false;
         }
         // School: the section is only a suggestion here -- Section Allocation
         // places the student, so it may be left blank.
         if (!isSchool && (_selectedClass == null || _selectedClass!.trim().isEmpty)) {
-          _snack(schoolTerm('Select Class'), AppColors.error);
+          _snack(schoolTerm('Select a class.'), AppColors.error);
           return false;
         }
         if (!isSchool && (_selectedAdmName == null || _selectedAdmName!.trim().isEmpty)) {
-          _snack('Select Admission Type', AppColors.error);
+          _snack('Select an admission type.', AppColors.error);
           return false;
         }
         // Eligibility on its own says nothing about which scheme; a Yes with no
@@ -827,7 +830,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         final batch = _batchController.text.trim();
         if (isSchool) return true; // a school has no batch
         if (batch.isEmpty) {
-          _snack('Enter Batch (e.g. 2026-2029)', AppColors.error);
+          _snack('Enter the batch, e.g. 2026-2029.', AppColors.error);
           return false;
         }
         if (!_batchOk(batch)) {
@@ -840,7 +843,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         // Pay-in-charge is auto-derived from a parent/guardian, so at least one
         // of Father / Mother / Guardian must have both a name and a mobile.
         if (_derivePayer()[1].isEmpty) {
-          _snack('Enter Name + Mobile for at least one of Father / Mother / Guardian (used as Pay In Charge).',
+          _snack('Enter a name and mobile number for at least one parent or guardian. That person becomes the Pay In Charge.',
               AppColors.error);
           return false;
         }
@@ -937,7 +940,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         // Names the number: it can differ from the preview another operator
         // claimed first.
         _snack(enrolled
-                ? 'Admission $savedNo saved & moved to students.'
+                ? 'Admission $savedNo saved and added to Students.'
                 : isSchool
                     ? 'Admission saved as $savedNo. Allocate the section in Section Allocation.'
                     : 'Admission $savedNo saved.',
@@ -964,12 +967,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             );
             enrolled = true;
           } catch (e) {
-            _snack('Updated, but enrolment failed: ${friendlyError(e)}',
+            _snack('Admission updated, but the student could not be allocated to the class. ${friendlyError(e)} Allocate them from Class Allocation.',
                 AppColors.warning);
           }
         }
         if (enrolled || _selected!.isAllocated) {
-          _snack(enrolled ? 'Admission updated & moved to students.' : 'Admission updated.',
+          _snack(enrolled ? 'Admission updated and added to Students.' : 'Admission updated.',
               AppColors.success);
         }
       }
@@ -978,7 +981,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       // lingering admno would insert-collide on the following Save.
       if (mounted) _newAdmission();
     } catch (e) {
-      _snack('Save failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not save the admission. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -991,14 +994,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Cancel admission'),
-        content: Text('Cancel the admission for ${a.stuname}?'),
+        title: const Text('Cancel Admission'),
+        content: Text('Cancel the admission for ${a.stuname}? The record will be marked as cancelled.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep Admission')),
           ElevatedButton(
             style: AppUI.danger(ctx),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cancel admission'),
+            child: const Text('Cancel Admission'),
           ),
         ],
       ),
@@ -1011,7 +1014,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       await _load();
       if (mounted) _newAdmission();
     } catch (e) {
-      _snack('Cancel failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not cancel the admission. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1057,7 +1060,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       final url = SupabaseService.client.storage.from(bucket).getPublicUrl(fileName);
       if (mounted) setState(() => _photoUrl = url);
     } catch (e) {
-      _snack('Photo upload failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not upload the photo. ${friendlyError(e)} Try a JPG or PNG image.', AppColors.error);
     } finally {
       if (mounted) setState(() => _isUploadingPhoto = false);
     }
@@ -1081,7 +1084,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           Expanded(
             child: AppSearchField(
               controller: _searchController,
-              hintText: 'Search name / no / mobile',
+              hintText: schoolTerm('Search by name, register no. or mobile'),
               onChanged: (_) => setState(() => _page = 0),
             ),
           ),
@@ -1120,7 +1123,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     if (filtered.isEmpty) {
       return AppUI.empty(
         title: 'No admissions',
-        why: 'No admission records match the current filters. Use New to add one.',
+        why: 'No admission records match the current filters. Use Add Admission to add one.',
         icon: 'profile-add',
       );
     }
@@ -1144,7 +1147,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         setState(() => _narrowDetail = true);
       },
       icon: const Icon(Icons.add, size: 16),
-      label: const Text('New'),
+      label: const Text('Add Admission'),
     );
   }
 
@@ -1580,7 +1583,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                 TextButton.icon(
                   onPressed: () => setState(() => _photoUrl = null),
                   icon: Icon(Icons.delete_outline, size: 14, color: AppColors.error),
-                  label: Text('Remove', style: TextStyle(fontSize: 12.sp, color: AppColors.error)),
+                  label: Text('Remove Photo', style: TextStyle(fontSize: 12.sp, color: AppColors.error)),
                   style: TextButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 6.w), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
                 ),
             ],
@@ -1606,7 +1609,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     // AppFormFooter: step / hint note on the left; Cancel Admission (pending
     // records), Cancel, Previous (wizard) and Next / Save on the right.
     return AppFormFooter(
-      note: 'Fields marked * are required.',
+      note: AppText.requiredNote,
       actions: [
         if (a != null && !allocated)
           OutlinedButton.icon(
@@ -1630,7 +1633,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               icon: _saving
                   ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.save, size: 16),
-              label: Text(isNew ? 'Save Admission' : 'Save Changes'),
+              label: Text(isNew ? 'Save Admission' : 'Update Admission'),
             ),
         ],
       ],
@@ -1656,7 +1659,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           ]),
           _section('Government IDs', [
             _row([
-              _text('Aadhar No', _aadharController, digitsOnly: true, maxLen: 12),
+              _text('Aadhaar No.', _aadharController, digitsOnly: true, maxLen: 12),
               // Government identifiers alongside Aadhar. Neither is mandatory:
               // EMIS comes from the school record and UMIS is issued on
               // university enrolment, so a fresher often has one and not the
@@ -1672,7 +1675,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         return [
           _section('Registration', [
             _row([
-              _dropdown(schoolTerm('Reg No Mode'), _regMode, _regModes, (v) => setState(() => _regMode = v),
+              _dropdown(schoolTerm('Register No. Mode'), _regMode, _regModes, (v) => setState(() => _regMode = v),
                   hint: 'Select mode', locked: _utilRegMode != null, required: true),
               _regSeqField(),
               // The duplicate note shows as soon as the number is typed rather
@@ -1680,14 +1683,15 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               // out at the end of the tab means retyping.
               // A greyed-out number reads as reserved; in Auto it is only a
               // preview -- the real one is claimed when Save is pressed.
-              _text(schoolTerm(_regNoLocked && _selected == null ? 'Register No * (assigned on save)' : 'Register No *'),
+              _text(schoolTerm('Register No. *'),
                   _admnoController, enabled: !_regNoLocked,
+                  hint: _regNoLocked && _selected == null ? '${AppText.generated} on save' : null,
                   locked: _coreLocked || _regNoLocked, required: true,
-                  extraError: _regNoDuplicate, extraMsg: 'Already used by another admission'),
+                  extraError: _regNoDuplicate, extraMsg: 'This number is already used. Enter a different number.'),
             ]),
             _row([
-              _dateField('Admission Date', _admDate, (d) => setState(() => _admDate = d), hint: 'Select date', locked: _coreLocked, required: true),
-              _dropdown('Source', _source, _sources, (v) => setState(() => _source = v), required: true),
+              _dateField(AppText.dateOfAdmission, _admDate, (d) => setState(() => _admDate = d), hint: 'Select date of admission', locked: _coreLocked, required: true),
+              _dropdown('Source', _source, _sources, (v) => setState(() => _source = v), required: true, display: _sourceLabels),
               // Batch stays editable after allocation, unlike the other core
               // fields. It is a label for the intake year, not part of the
               // student's identity or enrolment -- correcting a mistyped batch
@@ -1710,7 +1714,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                   (v) => setState(() => _selectedClass = v), hint: schoolTerm('Select class'),
                   locked: _coreLocked, required: !isSchool),
               _suggestText('Medium', _mediumController, _mediumFocus,
-                  _optionsOf((a) => a.medium), hint: 'Type or pick a medium'),
+                  _optionsOf((a) => a.medium), hint: 'Type or select a medium'),
             ]),
             _row([
               if (!isSchool) ...[
@@ -1733,14 +1737,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                         // Answering No retires the type — leaving the old text
                         // visible would suggest it still applies.
                         if (v != 'Yes') _scholarshipTypeController.clear();
-                      }), hint: 'Select'),
+                      }), hint: 'Select yes or no'),
               // The type is asked for only when eligible; otherwise the row
               // keeps its shape with a Spacer rather than reflowing the columns.
               if (_scholarship == 'Yes')
                 _suggestText('Scholarship Type', _scholarshipTypeController,
                     _focusFor('scholarshipType'),
                     _optionsOf((a) => a.scholarshiptype),
-                    required: true, hint: 'Type or pick a scholarship')
+                    required: true, hint: 'Type or select a scholarship')
               else
                 const Spacer(),
               const Spacer(),
@@ -1753,19 +1757,19 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               _text('Father Name', _fatherNameController),
               _text('Father Mobile', _fatherMobileController, keyboard: TextInputType.phone, maxLen: 10),
               _suggestText('Father Occupation', _fatherOccController, _focusFor('fatherOcc'),
-                  _optionsOf((a) => a.fatheroccupation), hint: 'Type or pick'),
+                  _optionsOf((a) => a.fatheroccupation), hint: 'Type or select an occupation'),
             ]),
             _row([
               _text('Mother Name', _motherNameController),
               _text('Mother Mobile', _motherMobileController, keyboard: TextInputType.phone, maxLen: 10),
               _suggestText('Mother Occupation', _motherOccController, _focusFor('motherOcc'),
-                  _optionsOf((a) => a.motheroccupation), hint: 'Type or pick'),
+                  _optionsOf((a) => a.motheroccupation), hint: 'Type or select an occupation'),
             ]),
             _row([
               _text('Guardian Name', _guardianNameController),
               _text('Guardian Mobile', _guardianMobileController, keyboard: TextInputType.phone, maxLen: 10),
               _suggestText('Guardian Occupation', _guardianOccController, _focusFor('guardianOcc'),
-                  _optionsOf((a) => a.guardianoccupation), hint: 'Type or pick'),
+                  _optionsOf((a) => a.guardianoccupation), hint: 'Type or select an occupation'),
             ]),
           ]),
           _section('Contact & pay in charge', [
@@ -1795,9 +1799,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             _row([ _text('Address', _addressController) ]),
             _row([
               _suggestText('City', _cityController, _focusFor('city'),
-                  _optionsOf((a) => a.stucity), hint: 'Type or pick a city'),
+                  _optionsOf((a) => a.stucity), hint: 'Type or select a city'),
               _suggestText('State', _stateController, _focusFor('state'),
-                  _optionsOf((a) => a.stustate), hint: 'Type or pick a state'),
+                  _optionsOf((a) => a.stustate), hint: 'Type or select a state'),
               _text('Pin Code', _pinController, digitsOnly: true, maxLen: 6,
                   extraError: !_lenOk(_pinController, 6), extraMsg: 'Pin Code must be 6 digits'),
             ]),
@@ -1815,7 +1819,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           _section('Previous School', [
             _row([
               _text('School / College', _prevSchoolController),
-              _text(isSchool ? 'Class' : 'Class / Course', _prevClassController),
+              _text(isSchool ? 'Standard' : 'Class / Course', _prevClassController),
               _text('Marks %', _prevPercentController, keyboard: TextInputType.number),
             ]),
           ]),
@@ -1827,13 +1831,13 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             _row([
               _dropdown('Community', _selectedCommunity, _communities, (v) => setState(() => _selectedCommunity = v)),
               _suggestText('Caste', _casteController, _focusFor('caste'),
-                  _optionsOf((a) => a.caste), hint: 'Type or pick'),
+                  _optionsOf((a) => a.caste), hint: 'Type or select a caste'),
               _suggestText('Religion', _religionController, _focusFor('religion'),
-                  _optionsOf((a) => a.religion), hint: 'Type or pick'),
+                  _optionsOf((a) => a.religion), hint: 'Type or select a religion'),
             ]),
             _row([
               _suggestText('Nationality', _nationalityController, _focusFor('nationality'),
-                  _optionsOf((a) => a.nationality), hint: 'Type or pick'),
+                  _optionsOf((a) => a.nationality), hint: 'Type or select a nationality'),
               const Spacer(),
               const Spacer(),
             ]),
@@ -1895,8 +1899,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           Expanded(
             child: Text(
               isSchool
-                  ? schoolTerm('Allocated to ${a.allocatedclass ?? '—'}. Editable — Register No, Admission Date, Course & Class are locked.')
-                  : 'Allocated to ${a.allocatedclass ?? '—'}. Editable — Register No, Admission Date, Course, Class & Admission Type are locked.',
+                  ? schoolTerm('Allocated to ${a.allocatedclass ?? '—'}. You can edit this record, but Register No., Date of Admission, Course and Class are locked.')
+                  : 'Allocated to ${a.allocatedclass ?? '—'}. You can edit this record, but Register No., Date of Admission, Course, Class and Admission Type are locked.',
               style: TextStyle(fontSize: 13.sp, color: AppColors.success, fontWeight: FontWeight.w600),
             ),
           ),
@@ -1999,7 +2003,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   Widget _text(String label, TextEditingController c,
       {bool enabled = true, TextInputType? keyboard, int maxLines = 1,
       bool locked = false, bool required = false, bool digitsOnly = false,
-      int? maxLen, bool extraError = false, String? extraMsg}) {
+      int? maxLen, bool extraError = false, String? extraMsg, String? hint}) {
     final filled = c.text.trim().isNotEmpty;
     final bad = _err(required, !filled) || extraError;
     return Column(
@@ -2021,7 +2025,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           maxLines: maxLines,
           onChanged: (_) => setState(() {}),
           style: AppUI.fieldText(context, filled: filled),
-          decoration: _dec(filled: filled, locked: locked, error: bad),
+          decoration: _dec(filled: filled, hint: hint, locked: locked, error: bad),
         ),
         _errNote(bad, extraError ? (extraMsg ?? 'Invalid') : 'Required'),
       ],
@@ -2086,7 +2090,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   }
 
   Widget _dropdown(String label, String? value, List<String> items, ValueChanged<String?> onChanged,
-      {String? hint, bool locked = false, bool required = false}) {
+      {String? hint, bool locked = false, bool required = false, Map<String, String> display = const {}}) {
     final bad = _err(required, value == null || value.trim().isEmpty);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2102,10 +2106,10 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           style: AppUI.fieldText(context),
           decoration: _dec(filled: items.contains(value), hint: hint ?? 'Select ${label.replaceAll(' *', '').trim().toLowerCase()}', locked: locked),
           items: items
-              .map((e) => DropdownMenuItem(value: e, child: Text(e, style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)))
+              .map((e) => DropdownMenuItem(value: e, child: Text(display[e] ?? e, style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)))
               .toList(),
           selectedItemBuilder: (context) => items
-              .map((e) => Align(alignment: Alignment.centerLeft, child: Text(e, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
+              .map((e) => Align(alignment: Alignment.centerLeft, child: Text(display[e] ?? e, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
               .toList(),
           onChanged: locked ? null : onChanged,
         ),
@@ -2179,7 +2183,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   Widget _divisionField() {
     final items = <String>{..._divisions, if (_selectedDivision != null) _selectedDivision!}.toList();
     return _dropdown(isSchool ? 'Division *' : 'Division', _selectedDivision, items, (v) => setState(() => _pickDivision(v)),
-        hint: _divisions.isEmpty ? 'Add in Admission Master' : 'Select division', required: isSchool);
+        hint: _divisions.isEmpty ? 'No divisions yet. Add one in Admission Master' : 'Select division', required: isSchool);
   }
 
   Widget _regSeqField() {
@@ -2198,7 +2202,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           style: AppUI.fieldText(context),
           decoration: _dec(
               filled: values.contains(_selectedRegSeqId), locked: !_regNoLocked),
-          hint: Text('Select register sequence', style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
+          hint: Text(schoolTerm('Select register sequence'), style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
           items: _regSeqs
               .map((s) => DropdownMenuItem(
                     value: s['seq_id'].toString(),
@@ -2229,7 +2233,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         if (_regNoLocked && _regSeqs.isEmpty)
           Padding(
             padding: EdgeInsets.only(top: 4.h, left: 2.w),
-            child: Text('No register sequence — add one in Admission Master.',
+            child: Text(schoolTerm('No register sequence yet. Add one in Admission Master.'),
                 style: TextStyle(fontSize: 12.sp, color: AppColors.error, fontWeight: FontWeight.w600)),
           ),
       ],
@@ -2249,7 +2253,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           elevation: 6,
           icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
           style: AppUI.fieldText(context),
-          decoration: _dec(filled: _selectedYrId != null, hint: 'Select year'),
+          decoration: _dec(filled: _selectedYrId != null, hint: 'Select academic year'),
           items: _years
               .map((y) => DropdownMenuItem(
                     value: y['yr_id'].toString(),

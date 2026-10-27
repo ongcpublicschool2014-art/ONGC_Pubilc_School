@@ -90,7 +90,7 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('task-square', 'Class Allocation', section: 'ADMISSION', adminOnly: true),
   AppNavItem('flash', 'Fast Admission', section: 'ADMISSION', adminOnly: true),
   AppNavItem('ranking', 'Course Transfer', title: 'Student Transfer', section: 'ADMISSION', adminOnly: true),
-  AppNavItem('tag', 'New Roll Number', section: 'ADMISSION', adminOnly: true),
+  AppNavItem('tag', 'New Roll Number', title: 'New Register Number', section: 'ADMISSION', adminOnly: true),
   AppNavItem('note-1', 'EMIS / UMIS', section: 'ADMISSION', adminOnly: true),
 
   // STUDENTS

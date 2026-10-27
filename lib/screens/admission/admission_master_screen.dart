@@ -58,6 +58,10 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
     'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'tag', 'document-text',
   ];
 
+  // What a tab shows when its label (a sidebar key -- never change it) is
+  // too short to read on its own. Display only.
+  static const _tabTitles = {'Reg No': 'Register No. Sequence'};
+
   @override
   void initState() {
     super.initState();
@@ -106,7 +110,7 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
                     if (!isSchool || i >= 2)
                     PillTab(
                       icon: _tabIcons[i],
-                      label: schoolTerm(AdmissionMasterScreen.tabLabels[i]),
+                      label: schoolTerm(_tabTitles[AdmissionMasterScreen.tabLabels[i]] ?? AdmissionMasterScreen.tabLabels[i]),
                       selected: selected == i,
                       onTap: () => _tabController.animateTo(i),
                     ),
@@ -201,11 +205,11 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
-      _snack('Enter a name.', AppColors.warning);
+      _snack('Enter a sequence name.', AppColors.warning);
       return;
     }
     if (_mode == null) {
-      _snack('Select mode', AppColors.warning);
+      _snack('Select a mode (prefix or suffix).', AppColors.warning);
       return;
     }
     final auth = context.read<AuthProvider>();
@@ -245,10 +249,10 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
         _mode = null;
         _divisionVal = null;
       });
-      _snack('${widget.heading} sequence added.', AppColors.success);
+      _snack(schoolTerm('${widget.heading} number sequence added.'), AppColors.success);
       await _load();
     } catch (e) {
-      _snack('Add failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not add the sequence. ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -279,8 +283,8 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete ${widget.heading} Sequence'),
-        content: Text('Remove "$name"?'),
+        title: Text(schoolTerm('Delete ${widget.heading} Number Sequence')),
+        content: Text('Delete the sequence "$name"? This cannot be undone.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, true),
@@ -291,10 +295,10 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
     if (ok != true) return;
     try {
       await AdmissionService.deleteRegSequence(id);
-      _snack('Removed.', AppColors.success);
+      _snack('Sequence deleted.', AppColors.success);
       await _load();
     } catch (e) {
-      _snack('Delete failed. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not delete the sequence. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -342,7 +346,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          CardTitleBlock(icon: 'tag', title: schoolTerm('${widget.heading} Number Sequencing'), subtitle: 'set up the numbering sequence'),
+          CardTitleBlock(icon: 'tag', title: schoolTerm('${widget.heading} Number Sequence'), subtitle: 'Set up the numbering sequence'),
           SizedBox(height: 20.h),
           _lbl('Name *'),
           TextField(
@@ -373,7 +377,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
             onChanged: (v) => setState(() => _mode = v),
           ),
           SizedBox(height: 16.h),
-          _lbl('Prefix / Suffix value'),
+          _lbl('Prefix / Suffix Value'),
           TextField(
             controller: _affix,
             style: AppUI.fieldText(context, filled: _affix.text.trim().isNotEmpty),
@@ -387,24 +391,24 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _lbl('Start No'),
-                  TextField(controller: _start, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _start.text.trim().isNotEmpty), decoration: _filledFieldDec('1', filled: _start.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  _lbl('Start Number'),
+                  TextField(controller: _start, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _start.text.trim().isNotEmpty), decoration: _filledFieldDec('e.g. 1', filled: _start.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
               SizedBox(width: 8.w),
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _lbl('End No'),
-                  TextField(controller: _end, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _end.text.trim().isNotEmpty), decoration: _filledFieldDec('-', filled: _end.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  _lbl('End Number'),
+                  TextField(controller: _end, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _end.text.trim().isNotEmpty), decoration: _filledFieldDec('Optional', filled: _end.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
               SizedBox(width: 8.w),
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _lbl('Width'),
-                  TextField(controller: _width, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _width.text.trim().isNotEmpty), decoration: _filledFieldDec('4', filled: _width.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
+                  _lbl('Width (Digits)'),
+                  TextField(controller: _width, keyboardType: TextInputType.number, style: AppUI.fieldText(context, filled: _width.text.trim().isNotEmpty), decoration: _filledFieldDec('e.g. 4', filled: _width.text.trim().isNotEmpty), onChanged: (_) => setState(() {})),
                 ],
               )),
             ],
@@ -427,7 +431,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
               icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               style: AppUI.fieldText(context, filled: value != null),
               decoration: _filledFieldDec(
-                names.isEmpty ? 'No divisions — add in Division tab' : 'Select division',
+                names.isEmpty ? 'No divisions yet. Add one in the Division tab' : 'Select division',
                 filled: value != null,
               ),
               items: names
@@ -456,6 +460,8 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
               label: const Text('Add'),
             ),
           ),
+          SizedBox(height: 8.h),
+          AppUI.requiredNote(),
         ],
       ),
       ),
@@ -481,7 +487,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
             child: Row(children: [
               AppUI.iconTile('tag'),
               SizedBox(width: 12.w),
-              Text('${widget.heading} Sequences', style: AppUI.cardTitle),
+              Text(schoolTerm('${widget.heading} Number Sequences'), style: AppUI.cardTitle),
               SizedBox(width: 10.w),
               AppUI.chip('${_rows.length} sequence${_rows.length == 1 ? '' : 's'}', AppStatus.info),
               const Spacer(),
@@ -511,7 +517,7 @@ class _RegNoPanelState extends State<_RegNoPanel> with AutomaticKeepAliveClientM
                     child: _loading
                         ? const Center(child: CircularProgressIndicator())
                         : _rows.isEmpty
-                            ? AppUI.empty(title: 'No ${widget.heading.toLowerCase()} sequence yet', why: 'Add one with the form on the left.', icon: 'tag')
+                            ? AppUI.empty(title: schoolTerm('No ${widget.heading == 'TC' ? 'TC' : widget.heading.toLowerCase()} number sequence yet'), why: 'Add one with the form on the left.', icon: 'tag')
                             : ListView(children: [
                                 for (final r in _rows)
                                   Builder(builder: (_) {

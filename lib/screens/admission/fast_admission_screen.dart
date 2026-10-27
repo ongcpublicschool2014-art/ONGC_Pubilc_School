@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
+import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -263,7 +264,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+        _snack('Could not load admission data. ${friendlyError(e)} Press Refresh to try again.', AppColors.error);
       }
     }
   }
@@ -381,7 +382,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     final auth = context.read<AuthProvider>();
     final entries = _rows.where((r) => !r.isBlank).toList();
     if (entries.isEmpty) {
-      _snack('Enter at least one row.', AppColors.warning);
+      _snack('Fill in at least one student row before saving.', AppColors.warning);
       return;
     }
     // Numbers are auto-generated from the selected sequence — but a row with a
@@ -393,7 +394,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       seq = _regSeqs.firstWhere((s) => s['seq_id'].toString() == _selectedRegSeqId, orElse: () => const {});
     }
     if (needsSeq && seq.isEmpty) {
-      _snack(schoolTerm('Select an Admission Sequence — blank Register No rows are auto-numbered on save.'), AppColors.warning);
+      _snack(schoolTerm('Select the register number sequence. Rows with a blank Register No. are numbered from it on save.'), AppColors.warning);
       return;
     }
     // validate
@@ -409,9 +410,9 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       if (!isSchool && r.cls == null) miss.add(schoolTerm('Class'));
       if (isSchool && r.division == null) miss.add('Division');
       // A school has no admission type / batch.
-      if (!isSchool && r.admType == null) miss.add('Adm Type');
+      if (!isSchool && r.admType == null) miss.add('Admission Type');
       if (!isSchool && r.batch.text.trim().isEmpty) miss.add('Batch');
-      if (r.dob == null) miss.add('Birth Date');
+      if (r.dob == null) miss.add(AppText.dateOfBirth);
       if (r.parentName.text.trim().isEmpty) miss.add('${_parentOptions[r.parentType] ?? 'Parent'} Name');
       if (r.parentMobile.text.trim().isEmpty) miss.add('${_parentOptions[r.parentType] ?? 'Parent'} Mobile');
       // Same rules Admission Entry applies, checked here so a bad value is
@@ -425,7 +426,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       // Mark the offending cells so the row is findable without reading the
       // message — the grid can be long and the snackbar names only one row.
       setState(() => _showErrors = true);
-      _snack('Fill required fields — ${problems.first}${problems.length > 1 ? ' (+${problems.length - 1} more)' : ''}', AppColors.error);
+      _snack('Fill in the required fields. ${problems.first}${problems.length > 1 ? ' (+${problems.length - 1} more)' : ''}', AppColors.error);
       return;
     }
     if (_showErrors) setState(() => _showErrors = false);
@@ -522,7 +523,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     _refreshLastRegNo();
 
     if (failures.isEmpty) {
-      _snack('Saved $done admission(s).', AppColors.success);
+      _snack('$done ${done == 1 ? 'admission' : 'admissions'} saved.', AppColors.success);
       // reset to fresh blank rows
       for (final r in _rows) {
         r.dispose();
@@ -537,7 +538,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Saved $done, ${failures.length} failed'),
+          title: Text('$done Saved, ${failures.length} Not Saved'),
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
@@ -685,7 +686,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           SizedBox(width: 12.w),
           Text('Fast Admission', style: AppUI.cardTitle),
           SizedBox(width: 10.w),
-          Text('bulk entry — allocate sections later', style: AppUI.muted),
+          Text(schoolTerm('Bulk entry. Allocate classes later.'), style: AppUI.muted),
           const Spacer(),
           _preAdmissionSwitch(),
           SizedBox(width: 10.w),
@@ -718,7 +719,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
         style: AppUI.fieldText(context, filled: _selectedRegSeqId != null),
         decoration: _topBarDec(filled: _selectedRegSeqId != null),
-        hint: Text(_seqPickerEnabled ? 'Select Sequence' : 'Manual (Utilities)',
+        hint: Text(_seqPickerEnabled ? 'Select sequence' : 'Manual numbering (set in Utilities)',
+            overflow: TextOverflow.ellipsis,
             style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
         items: _regSeqs.map((s) => DropdownMenuItem(
               value: s['seq_id'].toString(),
@@ -757,10 +759,10 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       borderRadius: BorderRadius.circular(AppUI.controlRadius),
       child: Tooltip(
         message: on
-            ? schoolTerm('Every row saved now is admitted for NEXT year: no fee demand is '
-                'raised this year, and the year change keeps them in the class '
-                'entered below.')
-            : 'Tick for students who will start NEXT academic year.',
+            ? schoolTerm('Every row saved now is admitted for next academic year. No fee '
+                'demand is raised for the current year, and Year End Process keeps '
+                'the student in the class entered below.')
+            : 'Turn on for students who start next academic year.',
         child: Container(
           constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
           padding: EdgeInsets.symmetric(horizontal: 12.w),
@@ -815,7 +817,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
             children: [
               Icon(Icons.history, size: 15.sp, color: AppColors.primary),
               SizedBox(width: 6.w),
-              Text(schoolTerm('LAST REG NO'),
+              Text(schoolTerm('LAST REGISTER NO.'),
                   style: TextStyle(
                       fontSize: 10.sp,
                       fontWeight: FontWeight.w700,
@@ -870,8 +872,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
             filled == 0
                 ? schoolTerm('Fill the row above and press Add Row for the next one. Leave '
                     'Register No blank and it is numbered from the sequence on save.')
-                : 'Press Add Row for another, or Save All to write them. Sections '
-                    'are allocated later.',
+                : schoolTerm('Press Add Row for another student, or Save All to save them. '
+                    'Classes are allocated later.'),
             textAlign: TextAlign.center,
             style: AppUI.muted.copyWith(height: 1.45),
           ),
@@ -899,14 +901,15 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 12.h),
       child: Row(
         children: [
-          c(schoolTerm('REGISTER NO'), _wRegNo), c('STUDENT NAME', _wName), c('GENDER', _wSex), c(schoolTerm('COURSE'), _wCourse),
-          c(schoolTerm('CLASS'), _wClass),
-          if (isSchool) c('DIVISION', _wDiv),
-          if (!isSchool) ...[c('ADM TYPE', _wType), c('BATCH', _wBatch)],
-          c('BIRTH DATE', _wDob),
-          c('PARENT TYPE', _wPtype),
-          c('${_headerParent.toUpperCase()} NAME', _wFather),
-          c('${_headerParent.toUpperCase()} MOBILE', _wFmob),
+          // ' *' marks a column every filled row must have.
+          c(schoolTerm('REGISTER NO'), _wRegNo), c('STUDENT NAME *', _wName), c('GENDER *', _wSex), c(schoolTerm('COURSE *'), _wCourse),
+          c(schoolTerm(isSchool ? 'CLASS' : 'CLASS *'), _wClass),
+          if (isSchool) c('DIVISION *', _wDiv),
+          if (!isSchool) ...[c('ADMISSION TYPE *', _wType), c('BATCH *', _wBatch)],
+          c('DATE OF BIRTH *', _wDob),
+          c('PARENT TYPE *', _wPtype),
+          c('${_headerParent.toUpperCase()} NAME *', _wFather),
+          c('${_headerParent.toUpperCase()} MOBILE *', _wFmob),
           c(schoolTerm('EMIS NO'), _wEmis),
           // No heading: the column holds one icon per row, and a word above it
           // would read as another field.
@@ -933,24 +936,24 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           _cell(
               w(_wRegNo),
               _textCell(r.regNo,
-                  hint: _regNoLocked ? 'Auto' : schoolTerm('Reg No'),
+                  hint: _regNoLocked ? AppText.autoFilled : 'Enter number',
                   locked: _regNoLocked,
                   invalid: _regNoBad(r))),
           _cell(w(_wName), _textCell(r.name, hint: 'Enter name', required: true)),
-          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(), (v) => setState(() => r.sex = v), hint: 'Select', required: true)),
+          _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(), (v) => setState(() => r.sex = v), hint: 'Select gender', required: true)),
           _cell(w(_wCourse), _dropCell(r.course, _courses.map((e) => MapEntry(e, e)).toList(), (v) => setState(() {
             r.course = v;
             // Drop a class that no longer belongs to the newly chosen course.
             if (r.cls != null && !_classNamesFor(v).contains(r.cls)) r.cls = null;
             // the standard's division fills in (still changeable)
             r.division = _divisionOfCourse(v) ?? r.division;
-          }), hint: 'Select', required: true)),
-          _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: 'Select', required: !isSchool)),
+          }), hint: schoolTerm('Select course'), required: true)),
+          _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: schoolTerm('Select class'), required: !isSchool)),
           if (isSchool)
             _cell(w(_wDiv), _dropCell(r.division, {..._divisions, if (r.division != null) r.division!}.map((e) => MapEntry(e, e)).toList(),
-                (v) => setState(() => r.division = v), hint: 'Select', required: true)),
+                (v) => setState(() => r.division = v), hint: 'Select division', required: true)),
           if (!isSchool) ...[
-          _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select type', required: true)),
+          _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select admission type', required: true)),
           _cell(w(_wBatch), _textCell(r.batch, hint: 'YYYY-YYYY', required: true, invalid: _batchBad(r.batch.text))),
           ],
           _cell(w(_wDob), _dateCell(r.dob, (d) => setState(() => r.dob = d), required: true)),
@@ -958,17 +961,17 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
               w(_wPtype),
               _dropCell(r.parentType, _parentOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(),
                   (v) => setState(() => r.parentType = v ?? 'F'),
-                  hint: 'Select', required: true)),
+                  hint: 'Select parent', required: true)),
           _cell(w(_wFather), _textCell(r.parentName, hint: 'Enter name', required: true)),
           _cell(w(_wFmob), _textCell(r.parentMobile, hint: 'Enter mobile', required: true, digitsOnly: true, maxLen: 10, invalid: _mobileBad(r.parentMobile.text))),
-          _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('EMIS no'), digitsOnly: true, maxLen: 30)),
+          _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('Enter EMIS no.'), digitsOnly: true, maxLen: 30)),
           // Removing a row belongs ON the row -- a single button at the bottom
           // cannot say WHICH row, and this grid runs to dozens of them.
           SizedBox(
             width: w(_wKill),
             child: Center(
               child: IconButton(
-                tooltip: _rows.length == 1 ? 'Clear this row' : 'Remove this row',
+                tooltip: _rows.length == 1 ? 'Clear this row' : 'Delete this row',
                 onPressed: _saving ? null : () => _removeRow(i),
                 icon: Icon(Icons.close_rounded, size: 17.sp),
                 visualDensity: VisualDensity.compact,
@@ -1109,7 +1112,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         // shorter than its neighbours. The placeholder is drawn as the value so
         // the height is identical whether or not a date is set.
         child: Text(
-          value == null ? 'dd/mm/yyyy' : _fmt(value),
+          value == null ? AppText.dateHint : _fmt(value),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: filled
@@ -1120,7 +1123,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     );
   }
 
-  String _fmt(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  String _fmt(DateTime d) => formatDmy(d);
 
   Widget _actionBar() {
     final count = _rows.where((r) => !r.isBlank).length;
@@ -1130,8 +1133,10 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         children: [
           // A pill, and it lights up once there is something to save: this is
           // the number the operator checks before pressing Save All.
-          AppUI.chip('$count filled', count == 0 ? AppStatus.neutral : AppStatus.info),
+          AppUI.chip('$count ${count == 1 ? 'student' : 'students'} ready to save', count == 0 ? AppStatus.neutral : AppStatus.info),
           const Spacer(),
+          AppUI.requiredNote(),
+          SizedBox(width: 12.w),
           ElevatedButton.icon(
             onPressed: _saving || count == 0 ? null : _saveAll,
             icon: _saving

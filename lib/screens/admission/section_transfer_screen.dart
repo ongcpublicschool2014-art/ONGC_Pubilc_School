@@ -34,6 +34,8 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   bool _saving = false;
 
   static const _orderOptions = ['Reg No', 'Student Name', 'Gender + Student Name'];
+  // How an order option reads (the option itself is compared in the sort).
+  static const _orderLabels = {'Reg No': 'Register No.'};
 
   @override
   void initState() {
@@ -87,7 +89,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
         return;
       }
       setState(() => _loading = false);
-      _snack('Failed to load. ${friendlyError(e)}', AppColors.error);
+      _snack('Could not load the students. ${friendlyError(e)}', AppColors.error);
     }
   }
 
@@ -206,7 +208,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text(schoolTerm('Auto Fill target class')),
+          title: Text(schoolTerm('Auto Fill Target Class')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -228,7 +230,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () { if (picked != null) Navigator.pop(ctx, picked); },
-              child: const Text('Apply to all'),
+              child: const Text('Apply to All'),
             ),
           ],
         ),
@@ -248,7 +250,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       return t.isNotEmpty && t != (r['stuclass']?.toString().trim() ?? '');
     }).toList();
     if (toTransfer.isEmpty) {
-      _snack(schoolTerm('Pick a different target class for at least one student.'), AppColors.warning);
+      _snack(schoolTerm('Select a different target class for at least one student.'), AppColors.warning);
       return;
     }
     setState(() => _saving = true);
@@ -279,12 +281,12 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
     await _load();
     if (!mounted) return;
     if (failures.isEmpty) {
-      _snack('Transferred $done student(s).', AppColors.success);
+      _snack('$done ${done == 1 ? 'student' : 'students'} transferred.', AppColors.success);
     } else {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Transferred $done, ${failures.length} failed'),
+          title: Text('$done Transferred, ${failures.length} Not Transferred'),
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
@@ -377,7 +379,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       borderRadius: BorderRadius.circular(12),
       elevation: 6,
       style: AppUI.fieldText(context, filled: _srcStandard != null),
-      decoration: _dec(hint: schoolTerm('Course')),
+      decoration: _dec(hint: schoolTerm('Select course')),
       items: _standardNames.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: (v) => setState(() {
         _srcStandard = v;
@@ -396,7 +398,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       borderRadius: BorderRadius.circular(12),
       elevation: 6,
       style: AppUI.fieldText(context, filled: options.contains(_srcSection)),
-      decoration: _dec(hint: schoolTerm('Class')),
+      decoration: _dec(hint: schoolTerm('All classes')),
       items: options.map((e) => DropdownMenuItem(value: e, child: Text(e, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: _srcStandard == null ? null : (v) => setState(() {
         _srcSection = v;
@@ -414,7 +416,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       elevation: 6,
       style: AppUI.fieldText(context),
       decoration: _dec(hint: 'Order By'),
-      items: _orderOptions.map((e) => DropdownMenuItem(value: e, child: Text(schoolTerm(e)))).toList(),
+      items: _orderOptions.map((e) => DropdownMenuItem(value: e, child: Text(schoolTerm(_orderLabels[e] ?? e)))).toList(),
       onChanged: (v) => setState(() => _orderBy = v ?? 'Reg No'),
     );
   }
@@ -426,7 +428,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
       child: Row(
         children: [
-          Expanded(child: Text('ADMISSION NO', style: s())),
+          Expanded(child: Text(schoolTerm('REGISTER NO.'), style: s())),
           Expanded(child: Text('STUDENT NAME', style: s())),
           Expanded(child: Text('GENDER', style: s())),
           Expanded(child: Text(schoolTerm('CURRENT CLASS'), style: s())),
@@ -440,7 +442,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_srcStandard == null) {
       return AppUI.empty(
-        title: schoolTerm('Pick a Course to list students'),
+        title: schoolTerm('Select a course to list its students'),
         icon: 'people',
       );
     }
@@ -449,7 +451,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
       final scope = _srcSection?.isNotEmpty == true ? '$_srcStandard / $_srcSection' : '$_srcStandard';
       return AppUI.empty(
         title: 'No active students in $scope',
-        why: schoolTerm('Pick another Course or Class above.'),
+        why: schoolTerm('Select another course or class above.'),
         icon: 'people',
       );
     }
@@ -469,7 +471,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   Widget _row(Map<String, dynamic> r, List<String> options) {
     final stuId = r['stu_id'] as int;
     final gender = (r['stugender'] ?? '').toString();
-    final genderLabel = gender == 'M' ? 'Male' : gender == 'F' ? 'Female' : (gender.isEmpty ? '—' : gender);
+    final genderLabel = gender == 'M' ? 'Male' : gender == 'F' ? 'Female' : gender == 'T' ? 'Other' : (gender.isEmpty ? '—' : gender);
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
       child: Row(
