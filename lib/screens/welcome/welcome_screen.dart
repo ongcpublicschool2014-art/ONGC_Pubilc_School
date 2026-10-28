@@ -10,20 +10,20 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 
 class _PinkPalette {
-  static const Color frame = Color(0xFF001530);
-  static const Color primary = Color(0xFF002147);
-  static const Color accent = Color(0xFFD2913C);
+  static const Color frame = Color(0xFF2E0A11);
+  static const Color primary = Color(0xFF571520);
+  static const Color accent = Color(0xFFC9971C);
 
   static const LinearGradient buttonGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFE5A85C), Color(0xFFB5752A)],
+    colors: [Color(0xFFD9AC3C), Color(0xFF8F6A0E)],
   );
 
   static const LinearGradient avatarGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFE8B06B), Color(0xFFA76920)],
+    colors: [Color(0xFFE0B54A), Color(0xFF8F6A0E)],
   );
 
   // Three-stop diagonal: lifted primary blue → core navy → near-black so
@@ -32,9 +32,9 @@ class _PinkPalette {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [
-      Color(0xFF1E3A6B),
-      Color(0xFF002147),
-      Color(0xFF000A1A),
+      Color(0xFF7A1F2B),
+      Color(0xFF571520),
+      Color(0xFF2A0910),
     ],
     stops: [0.0, 0.55, 1.0],
   );
@@ -277,7 +277,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
           .select('yrlabel, iyrstadate, iyrenddate')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
-          .order('iyr_id', ascending: false);
+          .order('yrlabel', ascending: false);
       final rawYears = List<Map<String, dynamic>>.from(result);
       final seen = <String>{};
       final years = <Map<String, dynamic>>[];
@@ -287,11 +287,24 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         seen.add(label);
         years.add(y);
       }
+      // Default to the year whose dates cover today (else the newest), as the
+      // login screen does -- a past year added later must never become the
+      // default and have fees posted into it.
+      final today = DateTime.now();
+      String? current;
+      for (final y in years) {
+        final start = DateTime.tryParse(y['iyrstadate']?.toString() ?? '');
+        final end = DateTime.tryParse(y['iyrenddate']?.toString() ?? '');
+        if (start == null || end == null) continue;
+        if (!today.isBefore(start) && !today.isAfter(DateTime(end.year, end.month, end.day, 23, 59, 59))) {
+          current = y['yrlabel']?.toString();
+          break;
+        }
+      }
       if (mounted) {
         setState(() {
           _availableYears = years;
-          _selectedYear =
-              years.isNotEmpty ? years.first['yrlabel']?.toString() : null;
+          _selectedYear = current ?? (years.isNotEmpty ? years.first['yrlabel']?.toString() : null);
           _loadingYears = false;
         });
       }
@@ -385,6 +398,18 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
               errorBuilder: (_, __, ___) => const SizedBox.shrink(),
             ),
           ),
+          // Royal: a deep maroon wash over the photo
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [AppColors.sideBg.withValues(alpha: 0.88), AppColors.primaryDark.withValues(alpha: 0.80)],
+                ),
+              ),
+            ),
+          ),
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
@@ -395,8 +420,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 duration: const Duration(milliseconds: 500),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
+                    color: AppColors.card,
+                    borderRadius: BorderRadius.circular(14),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.08),
