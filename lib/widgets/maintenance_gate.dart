@@ -106,8 +106,8 @@ class _MaintenanceScreenState extends State<_MaintenanceScreen>
 
 // ── Shared maintenance visual (identical across desktop / mobile / web) ──────
 
-const Color _mAccent = Color(0xFF5B9BE8); // light-blue accents
-const Color _mAccentStrong = Color(0xFF3B82F6);
+const Color _mAccent = Color(0xFFC9971C); // light-blue accents
+const Color _mAccentStrong = Color(0xFFE0B54A);
 
 /// Builds the maintenance card. Kept as a top-level function so the exact same
 /// layout can be pasted into each app (they can't share a Dart library).
@@ -127,13 +127,13 @@ Widget maintenanceScreenBody(
   final hasNotice = notice.isNotEmpty;
 
   return Material(
-    color: const Color(0xFF14396F), // opaque base — hides the app behind it
+    color: const Color(0xFF3D0F17), // opaque base — hides the app behind it
     child: DecoratedBox(
       decoration: const BoxDecoration(
         gradient: RadialGradient(
           center: Alignment(0, -0.35),
           radius: 1.1,
-          colors: [Color(0xFF1E4E93), Color(0xFF123362)],
+          colors: [Color(0xFF7A1F2B), Color(0xFF571520)],
         ),
       ),
       child: Center(
@@ -234,7 +234,7 @@ Widget _maintenanceIllustration(Animation<double> spin) {
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
             gradient: RadialGradient(
-              colors: [Color(0x553B82F6), Color(0x00123362)],
+              colors: [Color(0x55C9971C), Color(0x00571520)],
             ),
           ),
         ),
@@ -247,7 +247,7 @@ Widget _maintenanceIllustration(Animation<double> spin) {
           child: RotationTransition(
             turns: spin,
             child: const Icon(Icons.settings,
-                size: 34, color: Color(0xFFC7D1E0)),
+                size: 34, color: Color(0xFFE7B9BF)),
           ),
         ),
         // Decorative sparkles.

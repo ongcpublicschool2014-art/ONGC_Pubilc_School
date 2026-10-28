@@ -199,6 +199,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _photoUrl;            // student photo URL (uploaded to storage)
   bool _isUploadingPhoto = false;
   static const _pageSize = 10;
+  /// The notebook section the cursor is in (its numeral turns maroon).
+  int _activeSection = 0;
+
   static const _tabLabels = [
     'Personal Details', 'Academic Details', 'Parent / Guardian',
     'Address Details', 'Documents', 'Other Details',
@@ -1306,6 +1309,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         child: Container(
           padding: EdgeInsets.fromLTRB(AppUI.cardPad - 3, 9.h, AppUI.cardPad, 9.h),
           decoration: BoxDecoration(
+            color: selected ? AppColors.primaryTint : null,
             border: Border(
               left: BorderSide(color: selected ? AppColors.primary : Colors.transparent, width: 3),
               bottom: const BorderSide(color: AppColors.divider),
@@ -1333,13 +1337,20 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                             fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                             fontSize: 13.sp,
                             color: selected ? AppColors.primary : AppColors.textPrimary)),
-                    SizedBox(height: 1.h),
-                    Text(
-                        '${a.admno}'
-                        '${a.isAllocated && a.allocatedclass != null ? ' • ${a.allocatedclass}' : a.stuclass != null && a.stuclass!.isNotEmpty ? ' • ${a.stuclass}' : ''}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppUI.muted),
+                    SizedBox(height: 4.h),
+                    Row(children: [
+                      AppUI.admTag(a.admno, size: 11.5),
+                      SizedBox(width: 6.w),
+                      Flexible(
+                        child: Text(
+                            a.isAllocated && a.allocatedclass != null
+                                ? a.allocatedclass!
+                                : (a.stuclass ?? ''),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppUI.muted),
+                      ),
+                    ]),
                   ],
                 ),
               ),
@@ -1386,11 +1397,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _studentInfoHeader(),
-                          // ONE PAGE: every group of fields in order (no tabs).
-                          for (var t = 0; t < _tabLabels.length; t++) ...[
-                            _pageHeading(_tabLabels[t], first: t == 0),
-                            ..._tabSections(t),
-                          ],
+                          // ONE PAGE: every group of fields in order (no tabs),
+                          // each as a Royal "notebook" section.
+                          for (var t = 0; t < _tabLabels.length; t++) _notebookSection(t),
                         ],
                       ),
                     ),
@@ -1404,8 +1413,60 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     );
   }
 
+  /// A Royal notebook section: a big Playfair numeral and the section name in
+  /// a left margin, a thin burnt-orange rule, the fields on the right. The
+  /// numeral of the section being edited is maroon, the others faint. On a
+  /// narrow pane it falls back to a plain heading above the fields.
+  Widget _notebookSection(int t) {
+    final title = _tabLabels[t];
+    final active = _activeSection == t;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (has) {
+        if (has && _activeSection != t) setState(() => _activeSection = t);
+      },
+      child: LayoutBuilder(builder: (context, c) {
+        if (c.maxWidth < 900) {
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _pageHeading(title, first: t == 0),
+            ..._tabSections(t),
+          ]);
+        }
+        final words = title.split(' ');
+        return Padding(
+          padding: EdgeInsets.only(top: t == 0 ? 4.h : 26.h),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(
+                width: 150.w,
+                child: Padding(
+                  padding: EdgeInsets.only(right: 18.w, top: 2.h),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text((t + 1).toString().padLeft(2, '0'),
+                        style: AppFonts.heading(size: 40.sp, color: active ? AppColors.primary : AppColors.faint, height: 1)),
+                    SizedBox(height: 6.h),
+                    Text(words.first, textAlign: TextAlign.right, style: AppFonts.heading(size: 17.sp, height: 1.15)),
+                    if (words.length > 1)
+                      Text(words.skip(1).join(' '), textAlign: TextAlign.right, style: AppUI.muted),
+                  ]),
+                ),
+              ),
+              // the margin rule is the fields' left edge, so it is as tall as they are
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.only(left: 22.w),
+                  decoration: BoxDecoration(border: Border(left: BorderSide(color: AppColors.error.withValues(alpha: 0.32), width: 1.5))),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: _tabSections(t)),
+                ),
+              ),
+            ]),
+        );
+      }),
+    );
+  }
+
   /// Heading over each group of the single-page form (Personal Details,
-  /// Academic Details ...).
+  /// Academic Details ...) -- the narrow-pane form of [_notebookSection].
   Widget _pageHeading(String title, {bool first = false}) => Padding(
         padding: EdgeInsets.only(top: first ? 4.h : 22.h, bottom: 10.h),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1973,7 +2034,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         borderRadius: BorderRadius.circular(AppUI.controlRadius),
         borderSide: BorderSide(color: c, width: w));
     return base.copyWith(
-      fillColor: locked ? AppColors.surface : Colors.white,
+      // read-only: transparent over the striped backing (see _text)
+      fillColor: locked ? Colors.transparent : AppColors.fieldBg,
       border: error ? b(AppColors.error, 1) : null,
       enabledBorder: error ? b(AppColors.error, 1) : null,
       focusedBorder: error ? b(AppColors.error, 2) : null,
@@ -2006,7 +2068,19 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(label, required: required, optional: !required && !_conditionalLabels.contains(label)),
-        TextFormField(
+        if (locked || !enabled)
+          DecoratedBox(decoration: AppUI.readOnly(), child: _textField(c, enabled, locked, keyboard, digitsOnly, maxLen, maxLines, filled, hint, bad))
+        else
+          _textField(c, enabled, locked, keyboard, digitsOnly, maxLen, maxLines, filled, hint, bad),
+        _errNote(bad, extraError ? (extraMsg ?? 'Invalid') : 'Required'),
+      ],
+    );
+  }
+
+  Widget _textField(TextEditingController c, bool enabled, bool locked, TextInputType? keyboard, bool digitsOnly, int? maxLen,
+      int maxLines, bool filled, String? hint, bool bad) {
+    final readOnly = locked || !enabled;
+    return TextFormField(
           controller: c,
           enabled: enabled && !locked,
           keyboardType: keyboard,
@@ -2020,12 +2094,10 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           ],
           maxLines: maxLines,
           onChanged: (_) => setState(() {}),
-          style: AppUI.fieldText(context, filled: filled),
-          decoration: _dec(filled: filled, hint: hint, locked: locked, error: bad),
-        ),
-        _errNote(bad, extraError ? (extraMsg ?? 'Invalid') : 'Required'),
-      ],
-    );
+          // a read-only number (e.g. the auto Admission No.) reads as mono
+          style: readOnly ? AppUI.mono.copyWith(color: AppColors.primaryDark, fontWeight: FontWeight.w600) : AppUI.fieldText(context, filled: filled),
+          decoration: _dec(filled: filled, hint: hint, locked: readOnly, error: bad),
+        );
   }
 
   /// A text field that suggests values already used, without restricting the

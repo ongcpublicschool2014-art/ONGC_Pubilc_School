@@ -1126,9 +1126,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                 child: Row(children: [
                   SizedBox(width: 40.w, child: Text('${i + 1}',
                       style: AppUI.cell.copyWith(color: AppColors.textLight))),
-                  Expanded(flex: 3, child: Text(oldNo,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
+                  Expanded(flex: 3, child: Align(alignment: Alignment.centerLeft, child: AppUI.admTag(oldNo))),
                   Expanded(flex: 5, child: Text(s['stuname']?.toString() ?? '',
                       overflow: TextOverflow.ellipsis,
                       style: AppUI.cell)),
@@ -1141,7 +1139,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                     child: TextField(
                       controller: ctl,
                       inputFormatters: [LengthLimitingTextInputFormatter(_maxRegNoLength)],
-                      style: AppUI.fieldText(context, filled: entered).copyWith(color: entered ? tint : null),
+                      style: AppUI.mono.copyWith(color: entered ? tint : null, fontWeight: FontWeight.w600),
                       onChanged: (_) => setState(() {}),
                       // errorText swaps in the kit's red error edge.
                       decoration: AppUI.field(context, schoolTerm('Enter new register no.'),

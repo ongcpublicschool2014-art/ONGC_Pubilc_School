@@ -9,39 +9,60 @@ import 'app_icon.dart';
 /// cards, headers, tables, chips, KPI tiles and empty states from here so no
 /// two screens differ.
 ///
-///   page #F4F6FA · cards white, 1px #E4E7EC, radius 16 · text #101828 /
-///   muted #667085 · accent #2450E6 · controls 44px (40 on <= 1366), radius
-///   10, 2px focus ring · Manrope with tabular figures · 4/8 spacing grid,
-///   20px between cards, 32px page padding.
+///   "Royal" theme (colours in AppColors, fonts in AppFonts): paper page,
+///   cream cards with a 1px line border and soft shadow, radius 10 (controls
+///   8), inputs 42px / buttons 40px, maroon primary, gold accent, Playfair
+///   Display headings with a short gold underline, Source Sans 3 body, IBM
+///   Plex Mono for admission numbers and table amounts, stamp-style status.
 class AppUI {
   AppUI._();
 
   // ── spacing / radius ───────────────────────────────────────────────────
-  static const double cardRadius = 16;
-  static const double controlRadius = 10;
+  static const double cardRadius = 10;
+  static const double controlRadius = 8;
   static double get gap => 20.w; // between cards
   static double get pagePad => 32.w;
   static double get cardPad => 20.w;
 
   static bool compact(BuildContext context) => MediaQuery.of(context).size.width <= 1366;
-  static double controlHeight(BuildContext context) => compact(context) ? 40 : 44;
+  static double controlHeight(BuildContext context) => compact(context) ? 38 : 42; // inputs
+  static double buttonHeight(BuildContext context) => compact(context) ? 36 : 40;
 
   // ── type scale ─────────────────────────────────────────────────────────
-  static TextStyle get pageTitle => TextStyle(fontSize: 26.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3);
-  static TextStyle get cardTitle => TextStyle(fontSize: 17.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary);
+  static TextStyle get pageTitle => AppFonts.heading(size: 25.sp, height: 1.15);
+  static TextStyle get cardTitle => AppFonts.heading(size: 19.sp, height: 1.2);
   static TextStyle get body => TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary);
-  static TextStyle get muted => TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.textLight);
-  static TextStyle get label => TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
-  static TextStyle get caps => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textLight, letterSpacing: 0.6);
-  static TextStyle get tableHead => TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 0.4);
+  static TextStyle get muted => TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.ink3);
+  static TextStyle get label => TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+  /// Eyebrow: 10.5 / 800 / uppercase / 0.15em.
+  static TextStyle get caps => TextStyle(fontSize: 10.5.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 1.6);
+  static TextStyle get tableHead => TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 1.2);
   static TextStyle get cell => TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary);
-  static TextStyle get money => TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
+  /// Amounts in tables -- IBM Plex Mono.
+  static TextStyle get money => AppFonts.mono(size: 13.5.sp, weight: FontWeight.w600);
+  /// Admission numbers / IDs -- IBM Plex Mono.
+  static TextStyle get mono => AppFonts.mono(size: 13.sp, weight: FontWeight.w500);
+  /// Big figures (KPIs, totals) -- Playfair with lining numerals.
+  static TextStyle bigNumber({double size = 30, Color color = AppColors.ink}) => AppFonts.heading(size: size.sp, color: color, height: 1.1);
 
   // ── surfaces ───────────────────────────────────────────────────────────
   static BoxDecoration card({Color? color, double? radius}) => AppCard.decoration(color: color, borderRadius: radius ?? cardRadius);
 
   /// The tinted bar above a table / card section.
-  static BoxDecoration get tableHeadBar => const BoxDecoration(color: AppColors.tableHeadBg);
+  static BoxDecoration get tableHeadBar => const BoxDecoration(color: AppColors.tableHeader);
+
+  /// Read-only field background: diagonal Royal stripes (e.g. the auto
+  /// Admission No.). Put it behind a field whose fillColor is transparent.
+  static BoxDecoration readOnly({double? radius}) => BoxDecoration(
+        borderRadius: BorderRadius.circular(radius ?? controlRadius),
+        gradient: const LinearGradient(
+          begin: Alignment(-1, -1),
+          end: Alignment(-0.92, -0.86),
+          colors: [AppColors.readOnlyA, AppColors.readOnlyA, AppColors.readOnlyB, AppColors.readOnlyB],
+          stops: [0, 0.5, 0.5, 1],
+          tileMode: TileMode.repeated,
+        ),
+      );
 
   // ── fields ─────────────────────────────────────────────────────────────
   /// The one input decoration. [filled] = the field holds a value (accent
@@ -56,29 +77,29 @@ class AppUI {
     bool dense = false,
   }) {
     final c = compact(context);
-    final rest = filled ? AppColors.primary.withValues(alpha: 0.55) : AppColors.border;
+    final rest = filled ? AppColors.lineStrong : AppColors.fieldBorder;
     OutlineInputBorder b(Color col, double w) =>
         OutlineInputBorder(borderRadius: BorderRadius.circular(controlRadius), borderSide: BorderSide(color: col, width: w));
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
       labelText: label,
-      hintStyle: TextStyle(fontSize: c ? 12.5 : 14, fontWeight: FontWeight.w500, color: AppColors.textLight),
+      hintStyle: TextStyle(fontSize: c ? 12.5 : 14, fontWeight: FontWeight.w500, color: AppColors.ink3),
       isDense: true,
       filled: true,
-      fillColor: Colors.white,
+      fillColor: AppColors.fieldBg,
       constraints: BoxConstraints(minHeight: dense ? 36 : controlHeight(context)),
       contentPadding: EdgeInsets.symmetric(horizontal: c ? 12 : 14, vertical: dense ? 8 : (c ? 10 : 12)),
       prefixIcon: leadingIcon == null
           ? null
           : Padding(
               padding: EdgeInsets.only(left: c ? 10 : 12, right: 8),
-              child: AppIcon.linear(leadingIcon, size: c ? 15 : 17, color: filled ? AppColors.primary : AppColors.textLight),
+              child: AppIcon.linear(leadingIcon, size: c ? 15 : 17, color: filled ? AppColors.primary : AppColors.ink3),
             ),
       prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
       suffixIcon: suffix,
       border: b(rest, 1),
       enabledBorder: b(rest, 1),
-      disabledBorder: b(AppColors.cardBorder, 1),
+      disabledBorder: b(AppColors.line, 1),
       focusedBorder: b(AppColors.primary, 2),
       errorBorder: b(AppColors.error, 1),
       focusedErrorBorder: b(AppColors.error, 2),
@@ -89,7 +110,7 @@ class AppUI {
   static TextStyle fieldText(BuildContext context, {bool filled = false}) => TextStyle(
         fontSize: compact(context) ? 12.5 : 14,
         fontWeight: FontWeight.w600,
-        color: filled ? AppColors.primary : AppColors.textPrimary,
+        color: AppColors.ink,
       );
 
   /// A label above a field: "Section *" / "Remarks (optional)".
@@ -105,17 +126,24 @@ class AppUI {
   // ── buttons (the theme already gives 44px / radius 10 / focus ring) ─────
   static ButtonStyle primary(BuildContext context) => ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        minimumSize: Size(0, controlHeight(context)),
+        foregroundColor: AppColors.onPrimary,
+        minimumSize: Size(0, buttonHeight(context)),
       );
   static ButtonStyle secondary(BuildContext context) => OutlinedButton.styleFrom(
-        foregroundColor: AppColors.primary,
-        minimumSize: Size(0, controlHeight(context)),
+        foregroundColor: AppColors.primaryText,
+        backgroundColor: AppColors.card,
+        minimumSize: Size(0, buttonHeight(context)),
+      );
+  /// Gold accent button (e.g. Auto fill).
+  static ButtonStyle accent(BuildContext context) => ElevatedButton.styleFrom(
+        backgroundColor: AppColors.gold,
+        foregroundColor: AppColors.onGold,
+        minimumSize: Size(0, buttonHeight(context)),
       );
   static ButtonStyle danger(BuildContext context) => ElevatedButton.styleFrom(
         backgroundColor: AppColors.error,
         foregroundColor: Colors.white,
-        minimumSize: Size(0, controlHeight(context)),
+        minimumSize: Size(0, buttonHeight(context)),
       );
 
   /// "* Required fields" -- shown near the submit button of every data-entry
@@ -126,24 +154,37 @@ class AppUI {
       ]));
 
   // ── page / card headers ────────────────────────────────────────────────
-  /// Icon tile + title (17/800) + optional muted subtitle + trailing widgets.
+  /// Icon tile + Playfair title with its short gold underline + optional
+  /// muted subtitle + trailing widgets.
   static Widget cardHeader({required String icon, required String title, String? subtitle, List<Widget> trailing = const []}) => Row(children: [
         iconTile(icon),
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(title, style: cardTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+            titleRule(),
             if (subtitle != null) ...[SizedBox(height: 2.h), Text(subtitle, style: muted, maxLines: 2, overflow: TextOverflow.ellipsis)],
           ]),
         ),
         for (final w in trailing) ...[SizedBox(width: 10.w), w],
       ]);
 
+  /// The short 28 x 3 gold underline under a card title.
+  static Widget titleRule() => Container(
+        width: 28,
+        height: 3,
+        margin: EdgeInsets.only(top: 4.h, bottom: 4.h),
+        decoration: BoxDecoration(color: AppColors.gold, borderRadius: BorderRadius.circular(2)),
+      );
+
   static Widget iconTile(String icon, {Color color = AppColors.primary, double size = 20}) => Container(
         width: size + 20,
         height: size + 20,
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(controlRadius)),
+        decoration: BoxDecoration(
+          color: color == AppColors.primary ? AppColors.primarySoft : color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(controlRadius),
+        ),
         child: AppIcon.linear(icon, size: size, color: color),
       );
 
@@ -153,21 +194,60 @@ class AppUI {
         child: Text(text.toUpperCase(), style: caps),
       );
 
-  // ── status chip (colour + text, never colour alone) ─────────────────────
+  // ── status stamp (colour + text, never colour alone) ────────────────────
+  /// A Royal status stamp: uppercase 10px / 800 / 0.12em in a double outline
+  /// (1.5px border, a hairline gap, an inner line) in the status colour.
+  /// Saved = maroon, Pending = gold-dark, Error = burnt orange, Ready = teal.
   static Widget chip(String text, AppStatus status) {
-    final (fg, bg) = switch (status) {
-      AppStatus.success => (AppColors.success, AppColors.successBg),
-      AppStatus.warning => (AppColors.warning, AppColors.warningBg),
-      AppStatus.danger => (AppColors.error, AppColors.errorBg),
-      AppStatus.info => (AppColors.info, AppColors.infoBg),
-      AppStatus.neutral => (AppColors.textSecondary, AppColors.tableHeadBg),
+    final fg = switch (status) {
+      AppStatus.success => AppColors.primary, // saved / settled
+      AppStatus.warning => AppColors.goldDark, // pending
+      AppStatus.danger => AppColors.error,
+      AppStatus.info => AppColors.teal, // ready / editing
+      AppStatus.neutral => AppColors.ink2,
     };
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
-      child: Text(text, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w700, color: fg)),
+      padding: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        border: Border.all(color: fg, width: 1.5),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 7.w, vertical: 2.h),
+        decoration: BoxDecoration(
+          border: Border.all(color: fg.withValues(alpha: 0.55), width: 1),
+          borderRadius: BorderRadius.circular(2),
+        ),
+        child: Text(text.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w800, color: fg, letterSpacing: 1.2, height: 1.2)),
+      ),
     );
   }
+
+  /// Signature admission-number tag: mono text on a pale gold tag with a
+  /// dashed border and a punched hole. [fresh] = a new / unsaved number.
+  static Widget admTag(String no, {bool fresh = false, double? size}) => CustomPaint(
+        painter: _DashedTagPainter(color: fresh ? AppColors.goldLine : AppColors.tagBorder),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(6.w, 2.h, 7.w, 2.h),
+          decoration: BoxDecoration(color: fresh ? AppColors.goldSoft : AppColors.tagBg, borderRadius: BorderRadius.circular(6)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: AppColors.card, border: Border.all(color: AppColors.tagBorder)),
+            ),
+            SizedBox(width: 5.w),
+            Text(no,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppFonts.mono(size: (size ?? 12.5).sp, weight: FontWeight.w600, color: fresh ? AppColors.goldInk : AppColors.primaryDark)),
+          ]),
+        ),
+      );
 
   // ── KPI tile ───────────────────────────────────────────────────────────
   static Widget kpi({required String icon, required String label, required String value, String? sub, Color tint = AppColors.primary}) => Container(
@@ -184,7 +264,7 @@ class AppUI {
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
-                child: Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary), maxLines: 1),
+                child: Text(value, style: AppFonts.heading(size: 24.sp, height: 1.15), maxLines: 1),
               ),
               if (sub != null) ...[SizedBox(height: 2.h), Text(sub, style: muted, maxLines: 1, overflow: TextOverflow.ellipsis)],
             ]),
@@ -208,11 +288,11 @@ class AppUI {
               width: 64,
               height: 64,
               alignment: Alignment.center,
-              decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(cardRadius)),
+              decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(cardRadius)),
               child: AppIcon.linear(icon, size: 28, color: AppColors.primary),
             ),
             SizedBox(height: 14.h),
-            Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+            Text(title, textAlign: TextAlign.center, style: AppFonts.heading(size: 17.sp)),
             if (why != null) ...[SizedBox(height: 6.h), Text(why, textAlign: TextAlign.center, style: muted)],
             if (action != null) ...[SizedBox(height: 16.h), action],
           ]),
@@ -345,7 +425,7 @@ class AppFormFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 12.h),
-        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.divider))),
+        decoration: const BoxDecoration(color: AppColors.sunken, border: Border(top: BorderSide(color: AppColors.line))),
         child: Row(children: [
           if (note == AppText.requiredNote)
             Expanded(child: Align(alignment: Alignment.centerLeft, child: AppUI.requiredNote()))
@@ -376,17 +456,42 @@ class AppStepper extends StatelessWidget {
               height: 28,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: i < current ? AppColors.primary : (i == current ? AppColors.primaryLight : Colors.white),
+                color: i <= current ? AppColors.primary : AppColors.card,
                 shape: BoxShape.circle,
-                border: Border.all(color: i <= current ? AppColors.primary : AppColors.border, width: 1.5),
+                border: Border.all(color: i <= current ? AppColors.primary : AppColors.lineStrong, width: 1.5),
               ),
               child: i < current
-                  ? const Icon(Icons.check, size: 16, color: Colors.white)
-                  : Text('${i + 1}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: i == current ? AppColors.primary : AppColors.textLight)),
+                  ? const Icon(Icons.check, size: 16, color: AppColors.onPrimary)
+                  : Text('${i + 1}', style: AppFonts.heading(size: 13, color: i == current ? AppColors.onPrimary : AppColors.faint)),
             ),
             SizedBox(width: 8.w),
             Text(steps[i], style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: i <= current ? AppColors.textPrimary : AppColors.textLight)),
           ]),
         ],
       ]);
+}
+
+/// Dashed rounded border for [AppUI.admTag].
+class _DashedTagPainter extends CustomPainter {
+  final Color color;
+  const _DashedTagPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()..addRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(6)));
+    for (final m in path.computeMetrics()) {
+      var d = 0.0;
+      while (d < m.length) {
+        canvas.drawPath(m.extractPath(d, d + 3), paint);
+        d += 5;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedTagPainter old) => old.color != color;
 }

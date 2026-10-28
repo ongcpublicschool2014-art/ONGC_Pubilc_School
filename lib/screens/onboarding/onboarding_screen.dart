@@ -7,9 +7,9 @@ import '../../widgets/app_icon.dart';
 import '../../utils/school_terms.dart';
 
 class _TealPalette {
-  static const Color deep = Color(0xFF002147);
-  static const Color amber = Color(0xFFD2913C);
-  static const Color amberPale = Color(0xFFF0D2A5);
+  static const Color deep = Color(0xFF571520);
+  static const Color amber = Color(0xFFC9971C);
+  static const Color amberPale = Color(0xFFF3D58A);
 
   // Diagonal three-stop gradient (matches the welcome panel) so the bg
   // reads as a gradient rather than a flat navy.
@@ -17,9 +17,9 @@ class _TealPalette {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [
-      Color(0xFF1E3A6B),
-      Color(0xFF002147),
-      Color(0xFF000A1A),
+      Color(0xFF7A1F2B),
+      Color(0xFF571520),
+      Color(0xFF2A0910),
     ],
     stops: [0.0, 0.55, 1.0],
   );
@@ -27,7 +27,7 @@ class _TealPalette {
   static const LinearGradient buttonGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFE5A85C), Color(0xFFB5752A)],
+    colors: [Color(0xFFD9AC3C), Color(0xFF8F6A0E)],
   );
 }
 
@@ -86,31 +86,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Students',
           icon: 'profile-2user',
-          tint: Color(0xFF6FB3FF),
+          tint: Color(0xFF9AA6E0),
           previewLabels: ['Roll No.', 'Class', 'Year'],
         ),
         _ModuleCard(
           label: 'Fee Collection',
           icon: 'wallet-1',
-          tint: Color(0xFFE5A85C),
+          tint: Color(0xFFD9AC3C),
           previewLabels: ['Term I', 'Term II', 'Paid'],
         ),
         _ModuleCard(
           label: 'Reports',
           icon: 'chart-2',
-          tint: Color(0xFF8BD4B5),
+          tint: Color(0xFF7CC4C4),
           previewLabels: ['Daily', 'Pending', 'Ledger'],
         ),
         _ModuleCard(
           label: 'Notices',
           icon: 'notification',
-          tint: Color(0xFFEC7D8E),
+          tint: Color(0xFFE7B9BF),
           previewLabels: ['Exam', 'Holiday', 'Fee'],
         ),
         _ModuleCard(
           label: 'Staff',
           icon: 'teacher',
-          tint: Color(0xFFB89BE8),
+          tint: Color(0xFFF3D58A),
           previewLabels: ['Roles', 'Duty', 'Leave'],
         ),
       ],
@@ -124,31 +124,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Fee Demand',
           icon: 'wallet-1',
-          tint: Color(0xFFE5A85C),
+          tint: Color(0xFFD9AC3C),
           previewLabels: ['Course', 'Term', 'Due'],
         ),
         _ModuleCard(
           label: 'Counter',
           icon: 'tick-circle',
-          tint: Color(0xFF8BD4B5),
+          tint: Color(0xFF7CC4C4),
           previewLabels: ['Cash', 'UPI', 'Receipt'],
         ),
         _ModuleCard(
           label: 'Bank Reconciliation',
           icon: 'bank',
-          tint: Color(0xFF6FB3FF),
+          tint: Color(0xFF9AA6E0),
           previewLabels: ['Match', 'Auto', 'Diff'],
         ),
         _ModuleCard(
           label: 'Approvals',
           icon: 'timer',
-          tint: Color(0xFFB89BE8),
+          tint: Color(0xFFF3D58A),
           previewLabels: ['Pending', 'Today', 'Verify'],
         ),
         _ModuleCard(
           label: 'Pending',
           icon: 'clock',
-          tint: Color(0xFFEC7D8E),
+          tint: Color(0xFFE7B9BF),
           previewLabels: ['Course', 'Class', 'Total'],
         ),
       ],
@@ -162,31 +162,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Daily',
           icon: 'calendar-1',
-          tint: Color(0xFF8BD4B5),
+          tint: Color(0xFF7CC4C4),
           previewLabels: ['Today', 'Mode', 'Total'],
         ),
         _ModuleCard(
           label: 'Ledger',
           icon: 'book-1',
-          tint: Color(0xFF6FB3FF),
+          tint: Color(0xFF9AA6E0),
           previewLabels: ['Roll No.', 'Term', 'Balance'],
         ),
         _ModuleCard(
           label: 'Pending',
           icon: 'clock',
-          tint: Color(0xFFEC7D8E),
+          tint: Color(0xFFE7B9BF),
           previewLabels: ['Class', 'Days', 'Owed'],
         ),
         _ModuleCard(
           label: 'Consolidated',
           icon: 'chart-2',
-          tint: Color(0xFFE5A85C),
+          tint: Color(0xFFD9AC3C),
           previewLabels: ['Course', 'Net', 'Paid'],
         ),
         _ModuleCard(
           label: 'Settings',
           icon: 'setting-2',
-          tint: Color(0xFFB89BE8),
+          tint: Color(0xFFF3D58A),
           previewLabels: ['Roles', 'Fines', 'Year'],
         ),
       ],
@@ -367,8 +367,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                           colors: [
-                            Color(0xFFE5A85C),
-                            Color(0xFFB5752A),
+                            Color(0xFFD9AC3C),
+                            Color(0xFF8F6A0E),
                           ],
                         ),
                         shape: BoxShape.circle,
@@ -818,7 +818,7 @@ class _RippleGridPainter extends CustomPainter {
   final double t; // 0..1, repeats forever
   _RippleGridPainter(this.t);
 
-  static const Color _amber = Color(0xFFD2913C);
+  static const Color _amber = Color(0xFFC9971C);
 
   static const double _step = 40;
   static const double _wavelength = 200;

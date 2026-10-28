@@ -631,13 +631,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : (MediaQuery.of(context).size.width < 1100 ? 10.w : 14.w);
 
     return Container(
-      decoration: const BoxDecoration(
-        // Dark navy sidebar — light foreground; selected items go Royal Blue
-        // for the active-page accent.
-        color: AppColors.sidebarBg,
-        border: Border(right: BorderSide(color: AppColors.sidebarBorder, width: 1)),
+      decoration: BoxDecoration(
+        // Royal sidebar: deep maroon with a soft gold glow top-right and a
+        // maroon glow bottom-left.
+        gradient: RadialGradient(
+          center: const Alignment(1.3, -1.15),
+          radius: 1.1,
+          colors: [Color.lerp(AppColors.sideBg, AppColors.gold, 0.20)!, AppColors.sideBg],
+        ),
+        border: const Border(right: BorderSide(color: AppColors.sidebarBorder, width: 1)),
       ),
-      child: Column(
+      child: Stack(children: [
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: const Alignment(-1.4, 1.2),
+                radius: 1.1,
+                colors: [AppColors.primary.withValues(alpha: 0.55), AppColors.primary.withValues(alpha: 0)],
+              ),
+            ),
+          ),
+        ),
+        Column(
         children: [
           // Logo area
           Container(
@@ -649,16 +665,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             child: Row(
               children: [
-                // White plate behind the logo (same treatment as Login /
-                // Welcome). The mark is dark navy on a transparent PNG, so
-                // without this it sinks into the navy sidebar.
+                // Cream plate with a gold ring behind the logo (the mark is
+                // dark on a transparent PNG and would sink into the maroon).
                 ClipRRect(
                   borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
                   child: Container(
                     width: collapsed ? 46 : 56.w,
                     height: collapsed ? 46 : 56.h,
-                    color: Colors.white,
-                    padding: EdgeInsets.all(collapsed ? 4 : 5),
+                    decoration: BoxDecoration(
+                      color: AppColors.onPrimary,
+                      borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
+                      border: Border.all(color: AppColors.gold, width: 2),
+                    ),
+                    padding: EdgeInsets.all(collapsed ? 3 : 4),
                     child: Image.asset(
                       'assets/images/educore360_logo.png',
                       fit: BoxFit.contain,
@@ -672,16 +691,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 if (!collapsed) ...[
                   SizedBox(width: 10.w),
                   Flexible(
-                    child: Text(
-                      'EduCore360',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 16.sp,
-                        color: AppColors.sidebarText,
-                        fontWeight: FontWeight.w700,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: 'EduCore', style: AppFonts.heading(size: 20.sp, color: AppColors.onPrimary)),
+                          TextSpan(text: '360', style: AppFonts.heading(size: 20.sp, color: AppColors.gold)),
+                        ]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
+                      Text(isSchool ? 'SCHOOL ERP' : 'COLLEGE ERP',
+                          style: TextStyle(fontSize: 9.5.sp, fontWeight: FontWeight.w800, letterSpacing: 2.2, color: AppColors.sideMuted)),
+                    ]),
                   ),
                 ],
               ],
@@ -751,19 +772,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           gradient: const LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [AppColors.accent, AppColors.accentDark],
+                            colors: [AppColors.gold, AppColors.goldDark],
                           ),
                           borderRadius: BorderRadius.circular(999),
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.accent.withValues(alpha: 0.40),
+                              color: AppColors.gold.withValues(alpha: 0.40),
                               blurRadius: 10,
                               offset: const Offset(0, 3),
                             ),
                           ],
                         ),
                         alignment: Alignment.center,
-                        child: const Icon(Icons.keyboard_arrow_up, size: 18, color: Colors.white),
+                        child: const Icon(Icons.keyboard_arrow_up, size: 18, color: AppColors.onGold),
                       ),
                     ),
                   ),
@@ -789,19 +810,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           gradient: const LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [AppColors.accent, AppColors.accentDark],
+                            colors: [AppColors.gold, AppColors.goldDark],
                           ),
                           borderRadius: BorderRadius.circular(999),
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.accent.withValues(alpha: 0.40),
+                              color: AppColors.gold.withValues(alpha: 0.40),
                               blurRadius: 10,
                               offset: const Offset(0, 3),
                             ),
                           ],
                         ),
                         alignment: Alignment.center,
-                        child: const Icon(Icons.keyboard_arrow_down, size: 18, color: Colors.white),
+                        child: const Icon(Icons.keyboard_arrow_down, size: 18, color: AppColors.onGold),
                       ),
                     ),
                   ),
@@ -810,6 +831,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
+      ]),
     );
   }
 
@@ -843,24 +865,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             duration: const Duration(milliseconds: 150),
             padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 11.h),
             decoration: BoxDecoration(
-              // On the navy sidebar: a filled blue pill marks the group holding
-              // the active page; an open group gets a subtle translucent chip.
+              // Royal: the group holding the active page (while closed) is the
+              // cream active item with a gold bar; an open group a faint tint.
               color: highlight
-                  ? AppColors.primary
-                  : (expanded ? Colors.white.withValues(alpha: 0.18) : Colors.transparent),
-              borderRadius: BorderRadius.circular(10),
+                  ? AppColors.sideActiveBg
+                  : (expanded ? Colors.white.withValues(alpha: 0.07) : Colors.transparent),
+              border: highlight ? const Border(left: BorderSide(color: AppColors.gold, width: 4)) : null,
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               children: [
-                AppIcon.bold(icon, size: 20.sp, color: highlight ? Colors.white : AppColors.sidebarText),
+                AppIcon.linear(icon, size: 20.sp, color: highlight ? AppColors.sideActiveText : AppColors.sideText),
                 SizedBox(width: 12.w),
                 Expanded(
                   child: Text(
                     label,
                     style: TextStyle(
-                      fontSize: 13.sp,
+                      fontSize: 14.sp,
                       fontWeight: FontWeight.w700,
-                      color: highlight ? Colors.white : AppColors.sidebarText,
+                      color: highlight ? AppColors.sideActiveText : AppColors.sideText,
                     ),
                   ),
                 ),
@@ -872,7 +895,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Icon(
                     Icons.arrow_drop_down,
                     size: 24,
-                    color: highlight ? Colors.white : AppColors.sidebarText,
+                    color: highlight ? AppColors.sideActiveText : AppColors.sideMuted,
                   ),
                 ),
               ],
@@ -890,12 +913,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return SizedBox(
       width: w,
       child: Stack(children: [
-        Positioned(top: 0, bottom: 0, left: w / 2 - 1, width: 2, child: ColoredBox(color: Colors.white.withValues(alpha: 0.12))),
+        // dashed tree line linking the sub-items
+        Positioned(top: 0, bottom: 0, left: w / 2 - 0.5, width: 1, child: const CustomPaint(painter: _DashedVLine(AppColors.sideTreeLine))),
         Positioned.fill(child: Center(child: Container(
-          width: 9.w, height: 9.w,
+          width: selected ? 8.w : 5.w, height: selected ? 8.w : 5.w,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: selected ? Colors.white : AppColors.sidebarText.withValues(alpha: 0.45),
+            color: selected ? AppColors.gold : AppColors.sideTreeLine,
           ),
         ))),
       ]),
@@ -914,10 +938,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // shrink it, and dim it so it reads as a sub-menu, not a top-level menu.
     final sub = inSection && !collapsed;
 
-    const selectedBg = AppColors.primary;
-    const selectedFg = AppColors.textOnPrimary;
-    // Navy sidebar — light foreground reads cleanest on it.
-    final unselectedFg = sub ? AppColors.sidebarText.withValues(alpha: 0.92) : AppColors.sidebarText;
+    // Royal: an active top-level item is cream with a gold bar; an active
+    // sub-item is gold text on a faint gold tint.
+    final selectedBg = sub ? AppColors.gold.withValues(alpha: 0.15) : AppColors.sideActiveBg;
+    final selectedFg = sub ? AppColors.sideSubActive : AppColors.sideActiveText;
+    final unselectedFg = sub ? AppColors.sideSubText : AppColors.sideText;
 
     final iconSize = (MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp) - (sub ? 3 : 0);
 
@@ -954,10 +979,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   vertical: sub ? 6.h : 8.h,
                 ),
                 decoration: BoxDecoration(
-                  // Active top-level tile = solid accent pill;
-                  // active sub-item = flat tinted highlight.
-                  color: isSelected ? (sub ? selectedBg.withValues(alpha: 0.18) : selectedBg) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(sub ? 8 : 10),
+                  color: isSelected ? selectedBg : Colors.transparent,
+                  border: isSelected && !sub ? const Border(left: BorderSide(color: AppColors.gold, width: 4)) : null,
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
@@ -969,16 +993,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       width: collapsed ? 36.0 : (sub ? 25.w : 34.w),
                       height: collapsed ? 36.0 : (sub ? 25.w : 34.w),
                       alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? Colors.white.withValues(alpha: sub ? 0.18 : 0.22)
-                            : Colors.white.withValues(alpha: sub ? 0.12 : 0.08),
-                        borderRadius: BorderRadius.circular(sub ? 6 : 8),
-                        border: Border.all(color: Colors.white.withValues(alpha: isSelected ? 0.30 : 0.16)),
-                      ),
+                      // Royal: plain icons, no chip
                       child: AppIcon(
-                        isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
-                        style: isSelected ? AppIconStyle.bold : AppIconStyle.linear,
+                        item.unselectedIcon ?? item.icon,
+                        style: AppIconStyle.linear,
                         color: isSelected ? selectedFg : unselectedFg,
                         size: iconSize,
                       ),
@@ -991,9 +1009,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                           style: TextStyle(
-                            fontSize: sub ? 11.5.sp : 13.5.sp,
+                            fontSize: sub ? 12.5.sp : 14.sp,
                             color: isSelected ? selectedFg : unselectedFg,
-                            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                            fontWeight: isSelected ? FontWeight.w700 : (sub ? FontWeight.w500 : FontWeight.w600),
                           ),
                         ),
                       ),
@@ -1001,11 +1019,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Container(
                           padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
                           decoration: BoxDecoration(
-                            color: isSelected ? Colors.white.withValues(alpha: 0.20) : AppColors.error,
+                            color: AppColors.gold,
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(badge,
-                              style: TextStyle(fontSize: 11.sp, color: Colors.white, fontWeight: FontWeight.w700)),
+                              style: TextStyle(fontSize: 11.sp, color: AppColors.onGold, fontWeight: FontWeight.w800)),
                         ),
                         SizedBox(width: 6.w),
                       ],
@@ -1131,10 +1149,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildSubMenu(BuildContext context, int parentIndex, AppNavItem item) {
-    // Selected sub-item mirrors a selected main nav item (Admission Master):
-    // a filled blue pill with white icon/text; unselected is light on navy.
-    const selectedFg = AppColors.textOnPrimary;
-    const unselectedFg = AppColors.sidebarText;
+    // Royal: the selected item is gold text on a faint gold tint.
+    const selectedFg = AppColors.sideSubActive;
+    const unselectedFg = AppColors.sideSubText;
     final isParentSelected = _selectedNavIndex == parentIndex;
 
     return Padding(
@@ -1161,7 +1178,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     duration: const Duration(milliseconds: 160),
                     padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 9.h),
                     decoration: BoxDecoration(
-                      color: selected ? AppColors.primary : Colors.transparent,
+                      color: selected ? AppColors.gold.withValues(alpha: 0.15) : Colors.transparent,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -1205,9 +1222,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         horizontal: isDesktop ? (MediaQuery.of(context).size.width < 1100 ? 12 : MediaQuery.of(context).size.width < 1400 ? 16 : 24) : 16,
         vertical: 18,
       ),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.cardBorder)),
+      decoration: const BoxDecoration(
+        color: AppColors.topbar,
+        border: Border(bottom: BorderSide(color: AppColors.line)),
       ),
       child: Row(
         children: [
@@ -1230,24 +1247,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               Text(
                 _navItems[_selectedNavIndex].navTitle,
-                style: TextStyle(fontSize: 26.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3, height: 1.1),
+                style: AppFonts.heading(size: 26.sp, height: 1.1),
               ),
               if (_academicYear.isNotEmpty) ...[
                 SizedBox(height: 5.h),
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: AppColors.accent.withValues(alpha: 0.4)),
+                    color: AppColors.goldSoft,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.goldLine),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      AppIcon('calendar-1', size: 14, color: AppColors.accent),
+                      AppIcon('calendar-1', size: 14, color: AppColors.goldInk),
                       SizedBox(width: 6.w),
                       Text(
                         'AY $_academicYear',
-                        style: TextStyle(fontSize: 12.sp, color: AppColors.accent, fontWeight: FontWeight.w700, letterSpacing: 0.2),
+                        style: TextStyle(fontSize: 12.sp, color: AppColors.goldInk, fontWeight: FontWeight.w800, letterSpacing: 0.2),
                       ),
                     ],
                   ),
@@ -1286,7 +1304,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               Text(
                                 auth.insName!,
                                 textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.3, height: 1.1),
+                                style: AppFonts.heading(size: 20.sp, height: 1.1),
                               ),
                             if (auth.insAddress != null) ...[
                               SizedBox(height: 2.h),
@@ -1377,7 +1395,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Container(
               padding: EdgeInsets.only(left: 4.w, right: 12.w, top: 4.h, bottom: 4.h),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Row(
@@ -1387,14 +1405,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     final compact = MediaQuery.of(context).size.width <= 1366;
                     return CircleAvatar(
                       radius: compact ? 18 : 26,
-                      backgroundColor: AppColors.primaryLight,
+                      backgroundColor: AppColors.primary,
                       child: Text(
                         (auth.userName ?? 'U')[0].toUpperCase(),
-                        style: TextStyle(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w800,
-                          fontSize: compact ? 16.sp : 20.sp,
-                        ),
+                        style: AppFonts.heading(size: compact ? 16.sp : 20.sp, color: AppColors.onPrimary),
                       ),
                     );
                   }),
@@ -1445,8 +1459,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool spinning = false,
     required VoidCallback? onTap,
   }) {
-    final bg = filled ? AppColors.primary : Colors.white;
-    final fg = filled ? Colors.white : AppColors.textSecondary;
+    final bg = filled ? AppColors.primary : AppColors.card;
+    final fg = filled ? AppColors.onPrimary : AppColors.ink2;
     final compact = MediaQuery.of(context).size.width <= 1366;
     final size = compact ? 36.0 : 44.0;
     final iconSize = compact ? 22.0 : 28.0;
@@ -1751,3 +1765,21 @@ class _DashedLinePainter extends CustomPainter {
   bool shouldRepaint(covariant _DashedLinePainter oldDelegate) => oldDelegate.color != color;
 }
 
+/// The dashed tree line in the sidebar that links a group's sub-items.
+class _DashedVLine extends CustomPainter {
+  final Color color;
+  const _DashedVLine(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    for (var y = 0.0; y < size.height; y += 6) {
+      canvas.drawLine(Offset(size.width / 2, y), Offset(size.width / 2, (y + 3).clamp(0, size.height)), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedVLine old) => old.color != color;
+}

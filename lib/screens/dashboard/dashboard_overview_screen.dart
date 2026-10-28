@@ -567,15 +567,15 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   Color _methodColor(String m) {
     switch (m) {
       case 'Cash':
-        return AppColors.success;
+        return AppColors.chart[0];
       case 'Online':
-        return AppColors.primary;
-      case 'Card':
-        return AppColors.demand;
+        return AppColors.chart[1];
       case 'DD/Cheque':
-        return AppColors.warning;
+        return AppColors.chart[3];
+      case 'Card':
+        return AppColors.chart[4];
       default:
-        return AppColors.textLight;
+        return AppColors.chart[2];
     }
   }
 
@@ -782,18 +782,18 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   Widget _hero() {
     final parts = <(String, double, Color, String, VoidCallback?)>[
       if (_may('dash:collected'))
-        ('Collected', _collected, AppColors.success, 'money-recive',
+        ('Collected', _collected, AppColors.primary, 'money-recive',
             () => _showRegArrBreakdown('paid', 'Total Collected', AppColors.success, 'money-recive')),
       if (_may('dash:concession')) ('Waived (concession)', _concession, AppColors.info, 'discount-shape', null),
       if (_may('dash:outstanding'))
-        ('Outstanding', _pending, AppColors.warning, 'wallet-money',
+        ('Outstanding', _pending, AppColors.goldMuted, 'wallet-money',
             () => _showRegArrBreakdown('outstanding', 'Outstanding', AppColors.today, 'wallet-money')),
     ];
     final total = _demand <= 0 ? 1.0 : _demand;
     Widget legend((String, double, Color, String, VoidCallback?) p) {
       final waiting = p.$1.startsWith('Waived') && _heavyLoading;
       final body = Row(children: [
-        AppUI.iconTile(p.$4, color: p.$3, size: 18),
+        AppUI.iconTile(p.$4, color: p.$3 == AppColors.goldMuted ? AppColors.goldDark : p.$3, size: 18),
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -805,7 +805,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: Text(waiting ? '…' : _inrFull(p.$2),
-                  maxLines: 1, style: TextStyle(fontSize: 19.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                  maxLines: 1, style: AppFonts.heading(size: 21.sp)),
             ),
             SizedBox(height: 2.h),
             Text(waiting ? 'loading' : '${_pct(p.$2).toStringAsFixed(1)}% of fees due${p.$5 != null ? ' · click for details' : ''}',
@@ -839,7 +839,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
                 child: Text(_inrFull(_demand),
-                    maxLines: 1, style: TextStyle(fontSize: 34.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.5)),
+                    maxLines: 1, style: AppFonts.heading(size: 42.sp, height: 1.1)),
               ),
               SizedBox(height: 4.h),
               Text('Regular + arrear · click for the split', style: AppUI.muted),
@@ -856,7 +856,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
                 if (p.$2 > 0) Expanded(flex: ((p.$2 / total) * 1000).round().clamp(1, 1000), child: Container(color: p.$3)),
               Expanded(
                 flex: (1000 - parts.fold<double>(0, (a, p) => a + (p.$2 / total) * 1000)).round().clamp(0, 1000),
-                child: Container(color: AppColors.tableHeadBg),
+                child: Container(color: AppColors.track),
               ),
             ]),
           ),
@@ -1031,11 +1031,20 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
   }
 
   Widget _kpiCard(_Kpi k) {
-    // Same anatomy as AppUI.kpi (icon tile, CAPS label, 20/800 value, muted
+    if (k.label == "Today's Collection") return _receiptCard(k);
+    final action = k.label == 'Pending Approval';
+    // Same anatomy as AppUI.kpi (icon tile, CAPS label, Playfair value, muted
     // sub) plus a tap chevron and a value that shrinks rather than clips.
+    // Pending Approval is the gold "action needed" card.
     final card = Container(
       padding: EdgeInsets.all(16.w),
-      decoration: AppUI.card(),
+      decoration: action
+          ? BoxDecoration(
+              color: AppColors.goldTint,
+              borderRadius: BorderRadius.circular(AppUI.cardRadius),
+              border: Border.all(color: AppColors.goldLine),
+            )
+          : AppUI.card(),
       child: Row(children: [
         AppUI.iconTile(k.icon, color: k.color),
         SizedBox(width: 12.w),
@@ -1045,6 +1054,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
               Expanded(
                 child: Text(k.label.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps),
               ),
+              if (action) ...[AppUI.chip('Action', AppStatus.warning), SizedBox(width: 6.w)],
               if (k.onTap != null)
                 Icon(Icons.chevron_right, size: 16.sp, color: AppColors.textLight),
             ]),
@@ -1052,8 +1062,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: Text(k.value, maxLines: 1,
-                  style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+              child: Text(k.value, maxLines: 1, style: AppFonts.heading(size: 26.sp, height: 1.15)),
             ),
             SizedBox(height: 2.h),
             Text(k.sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
@@ -1066,6 +1075,43 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
       color: Colors.transparent,
       child: InkWell(onTap: k.onTap, borderRadius: BorderRadius.circular(AppUI.cardRadius), child: card),
     );
+  }
+
+  /// Today's Collection as the Royal receipt: a solid maroon card with a
+  /// dashed tear line, mono figures and a scalloped bottom edge.
+  Widget _receiptCard(_Kpi k) {
+    final card = ClipPath(
+      clipper: const _ScallopClipper(),
+      child: Container(
+        padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 20.h),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [AppColors.primary, AppColors.primaryDark]),
+          borderRadius: BorderRadius.circular(AppUI.cardRadius),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Expanded(
+              child: Text("TODAY'S COLLECTION · ${formatDmy(DateTime.now())}",
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps.copyWith(color: AppColors.onPrimaryAccent)),
+            ),
+            if (k.onTap != null) Icon(Icons.chevron_right, size: 16.sp, color: AppColors.onPrimaryMuted),
+          ]),
+          SizedBox(height: 6.h),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(k.value, maxLines: 1, style: AppFonts.heading(size: 28.sp, color: AppColors.onPrimary, height: 1.1)),
+          ),
+          SizedBox(height: 8.h),
+          // dashed tear line
+          SizedBox(height: 1, width: double.infinity, child: CustomPaint(painter: _DashedHLine(AppColors.onPrimaryMuted.withValues(alpha: 0.6)))),
+          SizedBox(height: 8.h),
+          Text(k.sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppFonts.mono(size: 11.5.sp, color: AppColors.onPrimaryMuted)),
+        ]),
+      ),
+    );
+    if (k.onTap == null) return card;
+    return Material(color: Colors.transparent, child: InkWell(onTap: k.onTap, borderRadius: BorderRadius.circular(AppUI.cardRadius), child: card));
   }
 
   /// Drill-down for the Today Collection card: split today's total into fee,
@@ -1481,7 +1527,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(_inr(total),
-                    style: TextStyle(fontSize: 15.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                    style: AppFonts.heading(size: 18.sp)),
               ),
             ]),
           ]),
@@ -1520,7 +1566,7 @@ class _DashboardOverviewScreenState extends State<DashboardOverviewScreen> {
       AppUI.iconTile(icon, color: color, size: 18),
       SizedBox(height: 8.h),
       Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          style: AppFonts.heading(size: 21.sp)),
       SizedBox(height: 2.h),
       Text(label.toUpperCase(), textAlign: TextAlign.center, style: AppUI.caps),
     ]);
@@ -1573,6 +1619,9 @@ class _BarPainter extends CustomPainter {
   final Color color;
   _BarPainter(this.values, this.labels, this.maxV, this.color);
 
+  /// Royal: past months muted maroon, the current (last) month gold.
+  Color barColor(int i) => i == values.length - 1 ? AppColors.gold : AppColors.primaryMuted;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty || maxV <= 0) return;
@@ -1596,7 +1645,7 @@ class _BarPainter extends CustomPainter {
       final top = h - bh;
       // faint track behind each bar
       final track = RRect.fromRectAndRadius(Rect.fromLTWH(left, topPad, barW, h - topPad), const Radius.circular(5));
-      canvas.drawRRect(track, Paint()..color = AppColors.tableHeadBg);
+      canvas.drawRRect(track, Paint()..color = AppColors.track);
       if (bh <= 0) continue;
       final rect = RRect.fromRectAndCorners(
         Rect.fromLTWH(left, top, barW, bh),
@@ -1605,7 +1654,7 @@ class _BarPainter extends CustomPainter {
       );
       canvas.drawRRect(rect, Paint()
         ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [
-          color, color.withValues(alpha: 0.55),
+          barColor(i), barColor(i).withValues(alpha: 0.85),
         ]).createShader(Rect.fromLTWH(left, top, barW, bh)));
 
       // value label above the bar
@@ -1664,3 +1713,44 @@ class _DonutPainter extends CustomPainter {
   bool shouldRepaint(_DonutPainter old) => old.slices != slices || old.total != total;
 }
 
+/// Scalloped (torn receipt) bottom edge for the Today's Collection card.
+class _ScallopClipper extends CustomClipper<Path> {
+  const _ScallopClipper();
+
+  @override
+  Path getClip(Size size) {
+    const r = 5.0;
+    final path = Path()..lineTo(0, size.height - r);
+    var x = 0.0;
+    while (x < size.width) {
+      path.arcToPoint(Offset((x + 2 * r).clamp(0, size.width), size.height - r), radius: const Radius.circular(r), clockwise: false);
+      x += 2 * r;
+    }
+    path
+      ..lineTo(size.width, 0)
+      ..close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(_ScallopClipper oldClipper) => false;
+}
+
+/// A dashed horizontal rule.
+class _DashedHLine extends CustomPainter {
+  final Color color;
+  const _DashedHLine(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    for (var x = 0.0; x < size.width; x += 7) {
+      canvas.drawLine(Offset(x, 0), Offset((x + 4).clamp(0, size.width), 0), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedHLine old) => old.color != color;
+}

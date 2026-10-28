@@ -153,17 +153,17 @@ class _CollectionChartsState extends State<CollectionCharts> {
   Color _methodColor(String method) {
     switch (method) {
       case 'Cash':
-        return AppColors.success;
+        return AppColors.chart[0];
       case 'Online':
-        return AppColors.primary;
+        return AppColors.chart[1];
       case 'Cheque':
-        return AppColors.warning;
+        return AppColors.chart[3];
       case 'DD':
-        return AppColors.demand;
+        return AppColors.chart[2];
       case 'Card':
-        return AppColors.today;
+        return AppColors.chart[4];
       default:
-        return AppColors.textLight;
+        return AppColors.ink3;
     }
   }
 
@@ -506,16 +506,7 @@ class _DonutPainter extends CustomPainter {
 
 /// Cohesive categorical palette for chart bars — distinct hues that still sit
 /// in the app's cool, blue-anchored family. Cycled per bar so each reads apart.
-const List<Color> _barPalette = [
-  Color(0xFF2563EB), // royal blue
-  Color(0xFF14B8A6), // teal
-  Color(0xFF8B5CF6), // violet
-  Color(0xFFF59E0B), // amber
-  Color(0xFF22C55E), // emerald
-  Color(0xFF0EA5E9), // sky
-  Color(0xFFEC4899), // pink
-  Color(0xFF6366F1), // indigo
-];
+const List<Color> _barPalette = AppColors.chart; // Royal series order
 
 Color _barColor(int i) => _barPalette[i % _barPalette.length];
 Color _barColorDark(int i) => Color.lerp(_barColor(i), Colors.black, 0.18)!;

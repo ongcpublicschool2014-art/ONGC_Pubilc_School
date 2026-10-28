@@ -40,13 +40,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   // in the Institutions Overview gets its own visually distinct highlight
   // without depending on a server-supplied palette.
   static const List<Color> _insCodePalette = [
-    Color(0xFFE65100), // deep orange
-    Color(0xFF1565C0), // strong blue
-    Color(0xFF2E7D32), // forest green
-    Color(0xFF6A1B9A), // purple
-    Color(0xFFC62828), // crimson
-    Color(0xFF00838F), // teal
-    Color(0xFFEF6C00), // amber
+    Color(0xFF7A1F2B), // maroon
+    Color(0xFFC9971C), // gold
+    Color(0xFF3F4F9A), // navy
+    Color(0xFF1F7F80), // teal
+    Color(0xFFC2410C), // burnt orange
+    Color(0xFF8F6A0E), // dark gold
+    Color(0xFFD9A9B0), // muted maroon
   ];
   Color _colorForInsCode(String code) {
     if (code.isEmpty) return _insCodePalette[0];

@@ -1118,7 +1118,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 5.h),
       child: Row(children: [
         SizedBox(width: 40.w, child: Text('${i + 1}', style: AppUI.cell.copyWith(color: AppColors.textLight))),
-        Expanded(flex: 3, child: Text(k, overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
+        Expanded(flex: 3, child: Align(alignment: Alignment.centerLeft, child: AppUI.admTag(k))),
         Expanded(flex: 5, child: Text((s['stuname'] ?? '').toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
         if (_class == null)
           Expanded(
