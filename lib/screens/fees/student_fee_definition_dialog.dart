@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import 'package:provider/provider.dart';
 import '../../utils/friendly_error.dart';
@@ -75,7 +76,7 @@ class _DefRow {
     this.dueDate,
   })  : origAmount = amount,
         amountCtrl = TextEditingController(
-            text: amount.abs() < 0.005 ? '' : amount.toStringAsFixed(2));
+            text: amount.abs() < 0.005 ? '' : _plainAmount(amount));
 
   double get amount => double.tryParse(amountCtrl.text.trim()) ?? 0;
 
@@ -435,8 +436,8 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
     for (final r in _rows) {
       if ((r.opted || r.locked) && r.paidAmount - r.amount > 0.005) {
         setState(() => _error =
-            '${r.feeType}: amount ₹${r.amount.toStringAsFixed(2)} cannot be less '
-            'than the already-paid ₹${r.paidAmount.toStringAsFixed(2)}.');
+            '${r.feeType}: amount ₹${formatIndianNumber(r.amount)} cannot be less '
+            'than the already-paid ₹${formatIndianNumber(r.paidAmount)}.');
         return;
       }
     }
@@ -814,8 +815,8 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                     ),
                   ),
                   SizedBox(width: 12.w),
-                  SizedBox(width: 80.w, child: Text(r.balance.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
-                  SizedBox(width: 96.w, child: Text(r.concession.toStringAsFixed(2), textAlign: TextAlign.right, style: c())),
+                  SizedBox(width: 80.w, child: Text(formatIndianNumber(r.balance), textAlign: TextAlign.right, style: c())),
+                  SizedBox(width: 96.w, child: Text(formatIndianNumber(r.concession), textAlign: TextAlign.right, style: c())),
                 ]),
               ));
             },
@@ -887,7 +888,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
           Row(
         children: [
           Text('Fees to be Received: ', style: AppUI.muted),
-          Text('₹ ${_toReceive.toStringAsFixed(2)}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
+          Text('₹ ${formatIndianNumber(_toReceive)}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
           const Spacer(),
           OutlinedButton(onPressed: _close, child: const Text('Cancel')),
           SizedBox(width: 10.w),
@@ -905,3 +906,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
     );
   }
 }
+
+/// An amount for an editable box: no ".00" on a whole number, paise kept
+/// when there are any.
+String _plainAmount(num v) => v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
