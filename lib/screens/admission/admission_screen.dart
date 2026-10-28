@@ -777,6 +777,10 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           _snack('Aadhaar No. must be exactly 12 digits.', AppColors.error);
           return false;
         }
+        if (emisInvalid(_emisController.text)) {
+          _snack('$kEmisRuleMsg.', AppColors.error);
+          return false;
+        }
         return true;
       case 1: // Academic Details
         if (_regMode == null) {
@@ -1721,7 +1725,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               // EMIS comes from the school record and UMIS is issued on
               // university enrolment, so a fresher often has one and not the
               // other. Digits-only, but no fixed length — formats vary by year.
-              _text(schoolTerm('EMIS No'), _emisController, digitsOnly: true, maxLen: 30),
+              _text(schoolTerm('EMIS No'), _emisController, digitsOnly: true, maxLen: emisMaxLength,
+                  extraError: emisInvalid(_emisController.text), extraMsg: kEmisRuleMsg),
               if (isSchool) const Spacer() else _text('UMIS No', _umisController, digitsOnly: true, maxLen: 30),
               const Spacer(),
               const Spacer(),

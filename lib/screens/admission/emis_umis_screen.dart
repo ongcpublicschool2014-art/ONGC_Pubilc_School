@@ -503,7 +503,9 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         final raw = at(numCol[col]);
         if (raw.isEmpty) continue; // blank leaves the number as it is
         final v = _cleanNumber(raw);
-        if (_digits.hasMatch(v)) {
+        if (col == 0 && _digits.hasMatch(v) && emisInvalid(v)) {
+          e.flag(numCol[col], 'Invalid ${_label[col]}', '$kEmisRuleMsg -- "$raw" has ${v.length}');
+        } else if (_digits.hasMatch(v)) {
           e.values[col] = v;
         } else {
           e.flag(numCol[col], 'Invalid ${_label[col]}',
@@ -717,6 +719,13 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           [_onScreen(s, 0) != _stored(s, 0), !isSchool && _onScreen(s, 1) != _stored(s, 1)],
         ),
     ];
+
+    // A changed school EMIS No. must be exactly 12 digits.
+    for (final e in entries) {
+      if (e.changedCol[0] && emisInvalid(e.values[0])) {
+        e.flag(0, 'Invalid ${_label[0]}', '$kEmisRuleMsg -- ${e.values[0]} has ${e.values[0].length}');
+      }
+    }
 
     // As in Import: students that fail keep their stored number, so check
     // again until nothing new fails.
@@ -1125,14 +1134,14 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
               flex: 3,
               child: Text((s['stuclass'] ?? '').toString(),
                   overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
-        Expanded(flex: 3, child: _numField(emis, schoolTerm('Enter EMIS no.'), clash(0, emis))),
+        Expanded(flex: 3, child: _numField(emis, schoolTerm('Enter EMIS no.'), clash(0, emis), invalid: emisInvalid(emis.text), maxLen: emisMaxLength)),
         if (umis != null) Expanded(flex: 3, child: _numField(umis, 'Enter UMIS no.', clash(1, umis))),
       ]),
     );
   }
 
-  Widget _numField(TextEditingController c, String hint, List<Map<String, dynamic>> clash) {
-    final bad = clash.isNotEmpty;
+  Widget _numField(TextEditingController c, String hint, List<Map<String, dynamic>> clash, {bool invalid = false, int maxLen = 30}) {
+    final bad = clash.isNotEmpty || invalid;
     final has = c.text.trim().isNotEmpty;
     final red = OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppUI.controlRadius),
@@ -1148,7 +1157,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           fillColor: bad ? AppColors.errorBg : null,
           suffixIcon: bad
               ? Tooltip(
-                  message: 'Also on ${_list(clash.map(_who).toList())}',
+                  message: clash.isEmpty ? kEmisRuleMsg : 'Also on ${_list(clash.map(_who).toList())}',
                   child: Icon(Icons.error_outline_rounded, size: 17.sp, color: AppColors.error),
                 )
               : null,
@@ -1157,7 +1166,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         keyboardType: TextInputType.number,
         inputFormatters: [
           FilteringTextInputFormatter.digitsOnly,
-          LengthLimitingTextInputFormatter(30),
+          LengthLimitingTextInputFormatter(maxLen),
         ],
         onChanged: (_) => setState(() {}),
       ),

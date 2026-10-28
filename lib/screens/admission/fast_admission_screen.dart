@@ -420,6 +420,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       if (_regNoBad(r)) miss.add(schoolTerm('Register No (already used)'));
       if (!isSchool && _batchBad(r.batch.text)) miss.add('Batch (YYYY-YYYY)');
       if (_mobileBad(r.parentMobile.text)) miss.add('Mobile (10 digits)');
+      if (emisInvalid(r.emisNo.text)) miss.add('EMIS No. / APAAR ID (12 digits)');
       if (miss.isNotEmpty) problems.add('Row ${_rows.indexOf(r) + 1}: ${miss.join(', ')}');
     }
     if (problems.isNotEmpty) {
@@ -964,7 +965,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                   hint: 'Select', required: true)),
           _cell(w(_wFather), _textCell(r.parentName, hint: 'Enter name', required: true)),
           _cell(w(_wFmob), _textCell(r.parentMobile, hint: 'Enter mobile', required: true, digitsOnly: true, maxLen: 10, invalid: _mobileBad(r.parentMobile.text))),
-          _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('Enter EMIS no.'), digitsOnly: true, maxLen: 30)),
+          _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('Enter EMIS no.'), digitsOnly: true, maxLen: emisMaxLength,
+              invalid: emisInvalid(r.emisNo.text))),
           // Removing a row belongs ON the row -- a single button at the bottom
           // cannot say WHICH row, and this grid runs to dozens of them.
           SizedBox(

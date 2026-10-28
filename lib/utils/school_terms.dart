@@ -96,6 +96,23 @@ String collegeTerm(String header) {
   return header.replaceAllMapped(_schoolWordRe, (m) => _collegeWords[m.group(0)!] ?? m.group(0)!);
 }
 
+/// School EMIS No. / APAAR ID: exactly 12 digits. (The college's EMIS / UMIS
+/// keep their own, looser rule.)
+const int kSchoolEmisLength = 12;
+final RegExp _emisRe = RegExp(r'^\d{12}$');
+
+/// Longest number the EMIS field accepts.
+int get emisMaxLength => isSchool ? kSchoolEmisLength : 30;
+
+/// True for a filled school EMIS No. that is not exactly 12 digits (blank is
+/// allowed -- the field is optional).
+bool emisInvalid(String v) {
+  final t = v.trim();
+  return isSchool && t.isNotEmpty && !_emisRe.hasMatch(t);
+}
+
+const String kEmisRuleMsg = 'EMIS No. / APAAR ID must be exactly 12 digits';
+
 /// Sidebar sub-items that do not exist for a school (keys, not display text).
 const Set<String> kSchoolHiddenSubItems = {'Admission Type', 'Quota'};
 
