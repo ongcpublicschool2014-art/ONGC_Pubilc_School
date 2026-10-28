@@ -29,6 +29,11 @@ import '../fees/reports_screen.dart';
 import '../reports/admission_register_screen.dart';
 import '../reports/tc_report_screen.dart';
 import '../reports/consolidated_summary_screen.dart';
+import '../reports/receiptwise_report_screen.dart';
+import '../reports/division_summary_screen.dart';
+import '../reports/fee_matrix_screen.dart';
+import '../reports/pending_fee_report_screen.dart';
+import '../reports/advance_reconciliation_report_screen.dart';
 import '../tc/tc_certificate_screen.dart';
 import '../tc/tc_format_screen.dart';
 import '../tc/tc_list_screens.dart';
@@ -1498,7 +1503,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Screens that manage their own scroll and need full bounded height
   bool _isFullHeightScreen() {
     final label = _navItems[_selectedNavIndex].label;
-    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Demand Import' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Daily Collection' || label == 'Pending Payment' || label == 'Pending Details' || label == 'Consolidated Status' || label == 'Consolidated Summary' || label == 'TC Certificate' || label == 'TC Approval' || label == 'TC Print' || label == 'TC Format' || label == 'DCB Register' || label == 'Advance Register' || label == 'Admission Register' || label == 'TC Report' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Course Transfer' || label == 'Transfer Certificate' || label == 'New Roll Number' || label == 'EMIS / UMIS' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Fee Refund' || label == 'Fee Cancel Receipt' || label == 'Misc Collection' || label == 'Advance Collection' || label == 'Advance Fee Collection' || label == 'Advance Adjustment' || label == 'Year End Process' || label == 'Fee Collection Import' || label == 'Roles & Access' || label == kSequenceMenu;
+    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Demand Import' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Daily Collection' || label == 'Pending Payment' || label == 'Pending Details' || label == 'Consolidated Status' || label == 'Consolidated Summary' || label == 'Receiptwise Report' || label == 'Division Summary' || label == 'Fee Matrix' || label == 'Pending Fee Report' || label == 'Advance Reconciliation Report' || label == 'TC Certificate' || label == 'TC Approval' || label == 'TC Print' || label == 'TC Format' || label == 'DCB Register' || label == 'Advance Register' || label == 'Admission Register' || label == 'TC Report' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Course Transfer' || label == 'Transfer Certificate' || label == 'New Roll Number' || label == 'EMIS / UMIS' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Fee Refund' || label == 'Fee Cancel Receipt' || label == 'Misc Collection' || label == 'Advance Collection' || label == 'Advance Fee Collection' || label == 'Advance Adjustment' || label == 'Year End Process' || label == 'Fee Collection Import' || label == 'Roles & Access' || label == kSequenceMenu;
   }
 
   /// Which tab a sidebar sub-item opens, resolved by LABEL.
@@ -1588,6 +1593,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'TC Report') {
       return const TcReportScreen();
     }
+    if (selectedMenu == 'Receiptwise Report') return const ReceiptwiseReportScreen();
+    if (selectedMenu == 'Division Summary') return const DivisionSummaryScreen();
+    if (selectedMenu == 'Fee Matrix') return const FeeMatrixScreen();
+    if (selectedMenu == 'Pending Fee Report') return const PendingFeeReportScreen();
+    if (selectedMenu == 'Advance Reconciliation Report') return const AdvanceReconciliationReportScreen();
     if (selectedMenu == 'Consolidated Summary') {
       return const ConsolidatedSummaryScreen();
     }

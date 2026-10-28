@@ -138,6 +138,13 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('chart-2', 'Consolidated Status', section: 'REPORTS'),
   // School: the old product's Consolidated Summary Statement (per student).
   AppNavItem('document-text', 'Consolidated Summary', section: 'REPORTS'),
+  // School: the old product's report formats (receipt-wise, division
+  // summary, fee matrix, pending fee, advance reconciliation).
+  AppNavItem('receipt-item', 'Receiptwise Report', section: 'REPORTS'),
+  AppNavItem('category-2', 'Division Summary', section: 'REPORTS'),
+  AppNavItem('grid-1', 'Fee Matrix', section: 'REPORTS'),
+  AppNavItem('clock', 'Pending Fee Report', section: 'REPORTS'),
+  AppNavItem('wallet-check', 'Advance Reconciliation Report', section: 'REPORTS'),
   AppNavItem('grid-1', 'DCB Register', section: 'REPORTS'),
   AppNavItem('wallet-money', 'Advance Register', section: 'REPORTS'),
   AppNavItem('book-1', 'Admission Register', section: 'REPORTS'),

@@ -121,4 +121,4 @@ const Set<String> kSchoolHiddenSubItems = {'Admission Type', 'Quota'};
 const Set<String> kSchoolHiddenNavItems = {'Advance Collection'};
 
 /// Sidebar sub-items that only a school has.
-const Set<String> kCollegeHiddenSubItems = {'Class Matching', 'Advance Fee Definition', 'Advance Fee Collection', 'Advance Fee Receipt No', 'Year End Process', 'Consolidated Summary', 'TC Certificate', 'TC Approval', 'TC Print', 'TC Format'};
+const Set<String> kCollegeHiddenSubItems = {'Class Matching', 'Advance Fee Definition', 'Advance Fee Collection', 'Advance Fee Receipt No', 'Year End Process', 'Consolidated Summary', 'Receiptwise Report', 'Division Summary', 'Fee Matrix', 'Pending Fee Report', 'Advance Reconciliation Report', 'TC Certificate', 'TC Approval', 'TC Print', 'TC Format'};
