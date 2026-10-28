@@ -795,10 +795,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           _snack('Select the date of admission.', AppColors.error);
           return false;
         }
-        if (_source == null) {
-          _snack('Select the admission source.', AppColors.error);
-          return false;
-        }
         if (isSchool && (_selectedDivision == null || _selectedDivision!.trim().isEmpty)) {
           _snack('Select a division.', AppColors.error);
           return false;
@@ -1691,7 +1687,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             ]),
             _row([
               _dateField(AppText.dateOfAdmission, _admDate, (d) => setState(() => _admDate = d), hint: 'Select date of admission', locked: _coreLocked, required: true),
-              _dropdown('Source', _source, _sources, (v) => setState(() => _source = v), required: true, display: _sourceLabels),
+              _dropdown('Source', _source, _sources, (v) => setState(() => _source = v), display: _sourceLabels),
               // Batch stays editable after allocation, unlike the other core
               // fields. It is a label for the intake year, not part of the
               // student's identity or enrolment -- correcting a mistyped batch
