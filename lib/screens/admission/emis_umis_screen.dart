@@ -887,7 +887,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
     }
 
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+      padding: EdgeInsets.all(16.w),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Title in its own card, matching New Roll Number: the page then reads
         // as three stacked panels rather than a bare heading over two cards.
@@ -931,7 +931,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                     label: 'Sort By', icon: 'sort', child: _orderDrop())),
             SizedBox(width: 12.w),
             Expanded(
-              flex: 5,
+              flex: 4,
               child: FormFieldLabel(
                 label: AppText.search,
                 icon: 'hashtag',
@@ -939,13 +939,20 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                 controller: _search,
                 style: AppUI.fieldText(context),
                 decoration: AppUI.field(context, schoolTerm('Search by register no. or name')).copyWith(
-                  prefixIcon: const Icon(Icons.search, size: 18),
+                  prefixIcon: Icon(Icons.search, size: 17.sp, color: AppColors.textSecondary),
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: AppText.clear,
+                          icon: Icon(Icons.close, size: 15.sp, color: AppColors.textSecondary),
+                          onPressed: () => setState(_search.clear),
+                        ),
                 ),
                 onChanged: (_) => setState(() {}),
                 ),
               ),
             ),
-            SizedBox(width: 12.w),
+            SizedBox(width: 14.w),
             OutlinedButton.icon(
               onPressed: _busyIo || _saving ? null : _export,
               icon: const Icon(Icons.download_outlined, size: 16),
@@ -1006,38 +1013,73 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           ),
         SizedBox(height: AppUI.gap),
 
+        // The table (with its headers) is always on screen; the message for
+        // "no students" sits inside the body -- as on New Register Number.
+        Expanded(child: _table(visible, holders)),
+
+        // ── Note
+        Container(
+          width: double.infinity,
+          margin: EdgeInsets.only(top: 10.h),
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+          decoration: BoxDecoration(
+            color: AppColors.warningBg,
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+            border: Border.all(color: AppColors.warning.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            Icon(Icons.info_outline, size: 15.sp, color: AppColors.warning),
+            SizedBox(width: 7.w),
+            Expanded(
+                child: Text(
+              isSchool
+                  ? schoolTerm('Each EMIS No. belongs to one student -- a number another student already has is marked red '
+                      'and is not saved. Use Export to fill the numbers in Excel and Import to bring them back; Save stores them.')
+                  : 'Each EMIS and UMIS number belongs to one student -- a number another student already has is marked red '
+                      'and is not saved. Use Export to fill the numbers in Excel and Import to bring them back; Save stores them.',
+              style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.35),
+            )),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _table(List<Map<String, dynamic>> visible, List<Map<String, List<Map<String, dynamic>>>> holders) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: AppUI.card(),
+      child: Column(children: [
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          decoration: const BoxDecoration(
+            color: AppColors.tableHeadBg,
+            border: Border(bottom: BorderSide(color: AppColors.divider)),
+          ),
+          child: Row(children: [
+            SizedBox(width: 40.w, child: Text('#', style: _hStyle())),
+            _hc(schoolTerm('Register No.'), 3, 'hashtag'),
+            _hc('Student Name', 5, 'profile-2user'),
+            // Class only earns a column when the list spans more than one.
+            if (_class == null) _hc(schoolTerm('Class'), 3, 'book'),
+            _hc(schoolTerm('EMIS No.'), 3, 'note-1'),
+            if (!isSchool) _hc('UMIS No.', 3, 'note-1'),
+          ]),
+        ),
         Expanded(
           child: visible.isEmpty
-              ? AppUI.empty(
-                  title: 'No students for this filter',
-                  why: schoolTerm('Select another course or class, or clear the search.'),
-                  icon: 'people')
-              : Container(
-                  decoration: AppUI.card(),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(children: [
-                    Container(
-                      decoration: AppUI.tableHeadBar,
-                      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                      child: Row(children: [
-                        SizedBox(width: 44, child: Text('#', style: _hStyle())),
-                        SizedBox(width: 150.w, child: _h(schoolTerm('REGISTER NO.'), 'hashtag')),
-                        Expanded(child: _h('STUDENT NAME', 'profile-2user')),
-                        SizedBox(width: 140.w, child: _h(schoolTerm('CLASS'), 'book')),
-                        SizedBox(width: 190.w, child: _h(schoolTerm('EMIS NO'), 'note-1')),
-                        if (!isSchool) SizedBox(width: 190.w, child: _h('UMIS NO', 'note-1')),
-                      ]),
-                    ),
-                    const Divider(height: 1, color: AppColors.divider),
-                    Expanded(
-                      child: ListView.separated(
-                        itemCount: visible.length,
-                        separatorBuilder: (_, __) =>
-                            const Divider(height: 1, color: AppColors.divider),
-                        itemBuilder: (_, i) => _row(visible[i], i, holders),
-                      ),
-                    ),
-                  ]),
+              ? _search.text.trim().isNotEmpty
+                  ? AppUI.empty(title: 'No matches', why: 'No student here matches "${_search.text.trim()}".', icon: 'search-normal')
+                  : AppUI.empty(
+                      title: 'No students',
+                      why: _class == null
+                          ? schoolTerm('There are no active students for this course.')
+                          : schoolTerm('This class has no active students.'),
+                      icon: 'people')
+              : ListView.separated(
+                  itemCount: visible.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                  itemBuilder: (_, i) => _row(visible[i], i, holders),
                 ),
         ),
       ]),
@@ -1046,13 +1088,15 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
 
   TextStyle _hStyle() => AppUI.tableHead;
 
-  /// A column heading with the glyph that names it, matching New Roll Number.
-  Widget _h(String t, String icon) => Row(children: [
-        AppIcon.linear(icon, size: 13, color: AppColors.textSecondary),
-        SizedBox(width: 5.w),
-        Flexible(
-            child: Text(t, overflow: TextOverflow.ellipsis, style: _hStyle())),
-      ]);
+  /// A column heading with the glyph that names it, as on New Register Number.
+  Widget _hc(String t, int flex, String icon) => Expanded(
+        flex: flex,
+        child: Row(children: [
+          AppIcon.linear(icon, size: 13, color: AppColors.textSecondary),
+          SizedBox(width: 5.w),
+          Flexible(child: Text(t.toUpperCase(), overflow: TextOverflow.ellipsis, style: _hStyle())),
+        ]),
+      );
 
   Widget _row(Map<String, dynamic> s, int i,
       List<Map<String, List<Map<String, dynamic>>>> holders) {
@@ -1068,31 +1112,21 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           .toList();
     }
 
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
+    final entered = _onScreen(s, 0) != _stored(s, 0) || (!isSchool && _onScreen(s, 1) != _stored(s, 1));
+    return Container(
+      color: entered ? AppColors.accent.withValues(alpha: 0.045) : Colors.transparent,
+      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 5.h),
       child: Row(children: [
-        SizedBox(
-            width: 44,
-            child: Text('${i + 1}',
-                style: AppUI.cell.copyWith(color: AppColors.textLight))),
-        SizedBox(
-            width: 150.w,
-            child: Text(k,
-                style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
-        Expanded(
-            child: Text((s['stuname'] ?? '').toString(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppUI.cell)),
-        SizedBox(
-            width: 140.w,
-            child: Text((s['stuclass'] ?? '').toString(),
-                style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
-        SizedBox(width: 190.w, child: _numField(emis, schoolTerm('Enter EMIS no.'), clash(0, emis))),
-        if (umis != null) ...[
-          SizedBox(width: 8.w),
-          SizedBox(width: 182.w, child: _numField(umis, 'Enter UMIS no.', clash(1, umis))),
-        ],
+        SizedBox(width: 40.w, child: Text('${i + 1}', style: AppUI.cell.copyWith(color: AppColors.textLight))),
+        Expanded(flex: 3, child: Text(k, overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(fontWeight: FontWeight.w600))),
+        Expanded(flex: 5, child: Text((s['stuname'] ?? '').toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
+        if (_class == null)
+          Expanded(
+              flex: 3,
+              child: Text((s['stuclass'] ?? '').toString(),
+                  overflow: TextOverflow.ellipsis, style: AppUI.cell.copyWith(color: AppColors.textSecondary))),
+        Expanded(flex: 3, child: _numField(emis, schoolTerm('Enter EMIS no.'), clash(0, emis))),
+        if (umis != null) Expanded(flex: 3, child: _numField(umis, 'Enter UMIS no.', clash(1, umis))),
       ]),
     );
   }
@@ -1153,11 +1187,11 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
   }
 
   Widget _courseDrop() => DropdownButtonFormField<String>(
+        key: ValueKey('emcourse-${_course ?? ''}'),
         initialValue: _course,
         isExpanded: true,
         style: AppUI.fieldText(context, filled: _course != null),
-        decoration: AppUI.field(context, '', label: schoolTerm('Course')),
-        hint: Text(schoolTerm('All courses')),
+        decoration: AppUI.field(context, schoolTerm('All courses')),
         items: [
           DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All courses'))),
           ..._courses.map((c) => DropdownMenuItem(
@@ -1174,7 +1208,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         initialValue: _order,
         isExpanded: true,
         style: AppUI.fieldText(context),
-        decoration: AppUI.field(context, '', label: 'Sort By'),
+        decoration: AppUI.field(context, schoolTerm('Register No.')),
         items: [
           DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Register No.'))),
           const DropdownMenuItem(value: 'name', child: Text('Name')),
@@ -1183,11 +1217,11 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
       );
 
   Widget _classDrop() => DropdownButtonFormField<String>(
+        key: ValueKey('emclass-${_class ?? ''}-${_course ?? ''}'),
         initialValue: _class,
         isExpanded: true,
         style: AppUI.fieldText(context, filled: _class != null),
-        decoration: AppUI.field(context, '', label: schoolTerm('Class')),
-        hint: Text(schoolTerm('All classes')),
+        decoration: AppUI.field(context, schoolTerm('All classes')),
         items: [
           DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All classes'))),
           ..._classOptions.map((c) => DropdownMenuItem(
