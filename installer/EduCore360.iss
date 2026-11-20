@@ -7,13 +7,22 @@
 ;   3. Compile this script:        iscc EduCore360.iss
 ;      (or open in the Inno Setup IDE and press F9)
 
-#define MyAppName       "EduCore360"
-#define MyAppVersion    "0.0.16"
+; FIT School is its own product, separate from the college app (EduCore360):
+; its own AppId (Windows keeps the two installs, uninstalls and upgrades
+; apart), install folder, data folder ("FIT School", Runner.rc ProductName)
+; and update manifest (app-updates/latest-windows.json on the school's
+; Supabase project). Until 2026-11-06 it reused the college AppId and data
+; folder, so a setup of either app upgraded the other's install and the two
+; shared one config.json and activation.
+#define MyAppName       "FIT School"
+#define MyFilePrefix    "FITSchool"
+#define MyAppVersion    "0.0.0"
 #define MyAppPublisher  "TBS Technologies Private Limited"
 #define MyAppExeName    "school_admin.exe"
-; UUID for this product line — bumping it makes Windows treat upgrades as
-; fresh installs (don't change unless you intentionally want that).
-#define MyAppId         "{{B0F1A2C3-D4E5-4F67-8A9B-EDU-CORE-360}"
+; UUID for FIT School. Never reuse the college app's
+; {B0F1A2C3-D4E5-4F67-8A9B-EDU-CORE-360}, and keep this one from now on:
+; changing it makes Windows treat the next setup as a different app.
+#define MyAppId         "{{875025D7-2E5A-4654-ADE0-25ABB7446C4A}"
 
 [Setup]
 AppId={#MyAppId}
@@ -27,7 +36,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 OutputDir=.\dist
-OutputBaseFilename=EduCore360-Setup-{#MyAppVersion}
+OutputBaseFilename={#MyFilePrefix}-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -59,6 +68,10 @@ Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignore
 ; Bundle the config.json template (rename to config.json to point at another
 ; Supabase project). Never overwrites a real config.json — different filename.
 Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
+; No config.json is shipped: the school's live project is the app's
+; compiled-in default (lib/config/supabase_config.dart). No [InstallDelete] of
+; EduCore360 shortcuts either -- on a PC with both apps those are the college
+; app's.
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

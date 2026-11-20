@@ -14,6 +14,8 @@ import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/peacock_backdrop.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Pull a clean, human-readable message out of whatever an Edge Function
 /// call threw — FunctionException wraps the server's {"error": "..."}
@@ -284,58 +286,19 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage(
-                'assets/images/vimal-s-J69ERsG93hI-unsplash.jpg'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            child: FadeInUp(
-              duration: const Duration(milliseconds: 350),
-              child: Container(
-                width: 720.w,
-                padding: EdgeInsets.all(28.w),
-                margin:
-                    EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
-                // Kit card; the deeper shadow keeps it legible over the photo.
-                decoration: AppUI.card().copyWith(
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.textPrimary.withValues(alpha: 0.20),
-                      blurRadius: 32,
-                      offset: const Offset(0, 12),
-                    ),
-                  ],
-                ),
+    // The sign-in screen's Peacock background and card (peacock_backdrop.dart).
+    return PeacockBackdrop(
+      child: FadeInUp(
+        duration: const Duration(milliseconds: 350),
+        child: PeacockCard(
+          width: 720.w,
+          icon: Icons.verified_user_rounded,
+          title: 'Activate This PC',
+          subtitle: 'Each PC is activated once by the office before it can sign in.',
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Center(
-                      child: Container(
-                        width: 46.w,
-                        height: 46.w,
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(AppUI.controlRadius),
-                        ),
-                        alignment: Alignment.center,
-                        child: Icon(Icons.verified_user_rounded,
-                            size: 24.sp, color: AppColors.primary),
-                      ),
-                    ),
-                    SizedBox(height: 12.h),
-                    Text(
-                      'Activate This PC',
-                      textAlign: TextAlign.center,
-                      style: AppUI.cardTitle,
-                    ),
-                    SizedBox(height: 12.h),
                     TabBar(
                       controller: _tabController,
                       dividerColor: AppColors.divider,
@@ -357,9 +320,6 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
                     ),
                   ],
                 ),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -504,7 +464,7 @@ class _DeviceActivationScreenState extends State<DeviceActivationScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _fieldLabel('Institution / Trust'),
-        DropdownButtonFormField<int>(
+        AppDropdownField<int>(
           value: _selectedInsId,
           isExpanded: true,
           dropdownColor: Colors.white,

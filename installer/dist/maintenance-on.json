@@ -1,0 +1,8 @@
+{
+  "maintenance": true,
+  "title": "Scheduled maintenance",
+  "message": "We are updating the fee system. Please do not collect fees or take payments until this notice clears.",
+  "time": "24-09-2026, 8:00 PM",
+  "duration": "about 30 minutes",
+  "notice": "Any payment started now may not be recorded. Please wait until the system is back."
+}

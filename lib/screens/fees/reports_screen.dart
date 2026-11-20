@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:pdf/pdf.dart';
@@ -23,6 +24,8 @@ import '../../utils/formatters.dart';
 import '../../utils/fee_kind.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/school_terms.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 const _termOrder = [
   'I SEMESTER', 'I TERM', 'II SEMESTER', 'II TERM', 'III SEMESTER', 'III TERM',
@@ -374,11 +377,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   /// photo, so it is looked up once per pick. Null shows the initial.
   String? _ledgerPhoto;
   final TextEditingController _ledgerSearchCtrl = TextEditingController();
-
-  bool _isCashMode(String paymethod) {
-    final m = paymethod.toUpperCase();
-    return m.contains('CASH') || m.contains('CHEQUE') || m.contains('DD');
-  }
+  /// School only (null on a college): what the old product's Debit / Credit
+  /// ledger needs beyond the register above -- see [_loadLedgerOldExtras].
+  _LedgerOldExtras? _ledgerOld;
+  /// School: show the ledger on screen in the old Debit / Credit layout (the
+  /// default, as the exports) or as the detailed register.
+  bool _ledgerOldView = true;
 
   String _prefixOf(String paynumber) {
     final m = RegExp(r'^[A-Za-z]+').firstMatch(paynumber);
@@ -428,6 +432,23 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     return list;
   }
 
+  /// Which of these students are pre-admissions (stu_id as text) -- an
+  /// advance is "Advance (Admission)" only for them. Empty on failure, so
+  /// the rows still list as plain "Advance".
+  Future<Set<String>> _preAdmissionIds(Iterable<dynamic> stuIds) async {
+    final ids = stuIds.where((x) => x != null).map((x) => '$x').toSet().toList();
+    if (ids.isEmpty) return {};
+    try {
+      final rows = await SupabaseService.fromSchema('students')
+          .select('stu_id')
+          .eq('preadmission', 1)
+          .inFilter('stu_id', ids);
+      return {for (final r in rows as List) '${(r as Map)['stu_id']}'};
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Every transaction type Daily Collection knows, in reading order.
   static const List<String> _kDailyTypes = [
     'Regular',
@@ -440,6 +461,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     // day the advance was taken.
     'Advance Adjusted',
     'Cancelled',
+    'Bounced',
   ];
 
   /// The types actually present in the loaded range, once the fee group has
@@ -859,7 +881,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final allResults = <Map<String, dynamic>>[];
     while (true) {
       final batch = await SupabaseService.fromSchema('feedemand')
-          .select('fee_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, paidstatus, stuclass, courname, stuadmno, demfeetype, demfeeterm, activestatus')
+          .select('dem_id, fee_id, stu_id, feeamount, conamount, paidamount, fineamount, balancedue, reconbalancedue, paidstatus, stuclass, courname, stuadmno, demfeetype, demfeeterm, demseqtype, demfeeyear, activestatus')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .range(offset, offset + batchSize - 1);
@@ -1114,7 +1136,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // report as 'Misc'-type receipts with their own fee-type breakdown.
       try {
         final mc = await SupabaseService.fromSchema('misc_collection')
-            .select('mc_id, mcno, mcdate, regno, stuname, stuclass, courname, paymode, collectedby, totalamount, recon_status, activestatus, voidedby')
+            .select('mc_id, mcno, mcdate, regno, stuname, stuclass, courname, paymode, collectedby, totalamount, recon_status, activestatus, voidedby, paystatus')
             .eq('ins_id', insId)
             // activestatus 9 = cancelled. Listed, not hidden: void_misc_receipt
             // leaves a hole in the receipt register (...3173, 3175) and that gap
@@ -1169,7 +1191,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               'courname': h['courname']?.toString() ?? '',
               'stuclass': h['stuclass']?.toString() ?? '',
               'semester': '',
-              'type': cancelled ? 'Cancelled' : 'Misc',
+              'type': cancelled ? (h['paystatus']?.toString() == 'B' ? 'Bounced' : 'Cancelled') : 'Misc',
               'total': amount,
               'fine': 0.0,
               'paymethod': h['paymode']?.toString() ?? '',
@@ -1189,62 +1211,45 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       // Merge ADVANCE collections. This is money over the counter on the day it
       // was taken, so it belongs in the day's collection exactly as a misc
-      // receipt does. An ADMISSION advance carries its fee-type breakdown; a
-      // STUDENT advance is a single amount and gets one 'ADVANCE' column.
+      // receipt does. Every advance, of any kind, is one amount in the
+      // 'ADVANCE' column.
       //
       // The matching 'Advance Adjustment' receipts are EXCLUDED further up (see
       // the paymethod filter): they settle a demand with money already counted
       // here on an earlier day, so counting them again would double the total.
       try {
         final ac = await SupabaseService.fromSchema('advance_collection')
-            .select('adv_id, advno, advdate, advtype, stuadmno, stuname, stuclass, courname, '
-                'paymethod, createdby, transtotalamount, recon_status, activestatus')
+            .select('adv_id, advno, advdate, advtype, stu_id, stuadmno, stuname, stuclass, courname, '
+                'paymethod, createdby, transtotalamount, recon_status, activestatus, paystatus')
             .eq('ins_id', insId)
             // activestatus 9 = cancelled. Listed, not hidden: a receipt that
             // simply disappears from a day already printed is exactly what an
             // auditor asks about, and it is how the other cancelled receipts
             // are treated.
             .inFilter('activestatus', [1, 9])
-            .inFilter('paystatus', ['C', 'R'])
+            // B = cheque / DD bounced: listed like a cancelled one
+            .inFilter('paystatus', ['C', 'R', 'B'])
             // advdate is a timestamp: the upper bound must be the next day,
             // exclusive, or everything after midnight on the last day is lost.
             .gte('advdate', d(_dailyFrom!))
             .lt('advdate', d(_dailyTo!.add(const Duration(days: 1))));
         final advHeaders = List<Map<String, dynamic>>.from(ac as List);
+        // "Advance (Admission)" only for a pre-admission student; any other
+        // student's advance is just "Advance" (user, 2026-11-14).
+        final preIds = await _preAdmissionIds(advHeaders.map((h) => h['stu_id']));
         if (advHeaders.isNotEmpty) {
-          final ids = advHeaders.map((h) => h['adv_id']).where((id) => id != null).toList();
-          final byAdv = <dynamic, Map<String, double>>{};
-          try {
-            final det = await SupabaseService.fromSchema('advance_detail')
-                .select('adv_id, feetype, amount')
-                .eq('activestatus', 1)
-                .inFilter('adv_id', ids);
-            for (final dd in List<Map<String, dynamic>>.from(det as List)) {
-              final ft = dd['feetype']?.toString() ?? 'ADVANCE';
-              final amt = (dd['amount'] as num?)?.toDouble() ?? 0;
-              final m = byAdv[dd['adv_id']] ??= <String, double>{};
-              m[ft] = (m[ft] ?? 0) + amt;
-              feeTypeSet.add(ft);
-            }
-          } catch (_) {
-            // No advance_detail table yet — student advances have no breakdown
-            // anyway, so fall through to the single ADVANCE column below.
-          }
           for (final h in advHeaders) {
             final raw = h['advdate']?.toString() ?? '';
             final cancelled = ((h['activestatus'] as num?)?.toInt() ?? 1) == 9;
             final amount =
                 cancelled ? 0.0 : ((h['transtotalamount'] as num?)?.toDouble() ?? 0);
-            var fees = byAdv[h['adv_id']];
-            if (fees == null || fees.isEmpty) {
-              // A student advance, or an admission advance whose breakdown could
-              // not be read: one column so the row still totals correctly.
-              fees = {'ADVANCE': amount};
-              feeTypeSet.add('ADVANCE');
-            }
-            // A cancelled advance took no money, so it carries no breakdown
-            // either -- same treatment a cancelled fee receipt gets.
-            if (cancelled) fees = <String, double>{};
+            // An advance is next year's money, so it always goes in the ADVANCE
+            // column -- never under this year's fee type (TUTION FEE etc.).
+            // A cancelled advance took no money and carries nothing.
+            final fees = cancelled
+                ? <String, double>{}
+                : <String, double>{'ADVANCE': amount};
+            if (!cancelled) feeTypeSet.add('ADVANCE');
             // Cash is realised on the spot; a cheque/UPI advance waits for the
             // bank and belongs with the other unreconciled receipts. A
             // cancelled one is neither: it goes in the main list, at zero.
@@ -1261,9 +1266,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               'stuclass': h['stuclass']?.toString() ?? '',
               'semester': '',
               'type': cancelled
-                  ? 'Cancelled'
+                  ? (h['paystatus']?.toString() == 'B' ? 'Bounced' : 'Cancelled')
                   : switch ((h['advtype']?.toString() ?? 'S').toUpperCase()) {
-                      'A' => 'Advance (Admission)',
+                      'A' => preIds.contains('${h['stu_id']}') ? 'Advance (Admission)' : 'Advance',
                       // Banked into the hostel account, not the college one,
                       // so it has to be countable on its own in this report.
                       'M' => 'Advance (Mess)',
@@ -1354,12 +1359,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // other row.
       try {
         final voided = await SupabaseService.fromSchema('payment')
-            .select('pay_id, paynumber, paydate, paymethod, stu_id, createdby, voidedby')
+            .select('pay_id, paynumber, paydate, paymethod, paystatus, stu_id, createdby, voidedby')
             .eq('ins_id', insId)
             .eq('activestatus', 9)
-            .eq('paystatus', 'R')
-            .gte('paydate', d(_dailyFrom!))
-            .lte('paydate', '${d(_dailyTo!)}T23:59:59');
+            // R = cancelled, B = cheque / DD bounced
+            .inFilter('paystatus', ['R', 'B'])
+            // paydate is UTC: the local From / To days as UTC instants
+            .gte('paydate', DateTime(_dailyFrom!.year, _dailyFrom!.month, _dailyFrom!.day).toUtc().toIso8601String())
+            .lt('paydate', DateTime(_dailyTo!.year, _dailyTo!.month, _dailyTo!.day + 1).toUtc().toIso8601String());
         final vrows = List<Map<String, dynamic>>.from(voided as List)
             .where((v) => (v['voidedby']?.toString() ?? '').trim().isNotEmpty)
             .toList();
@@ -1377,15 +1384,19 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           for (final v in vrows) {
             final s = stuMap[v['stu_id']] ?? const {};
             final raw = v['paydate']?.toString() ?? '';
+            final local = serverTimeToLocal(raw);
             rows.add({
-              'paydate': raw.length >= 10 ? raw.substring(0, 10) : raw,
+              'paydate': local == null
+                  ? (raw.length >= 10 ? raw.substring(0, 10) : raw)
+                  : '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}',
               'paynumber': v['paynumber']?.toString() ?? '',
               'stuadmno': s['stuadmno']?.toString() ?? '',
               'stuname': s['stuname']?.toString() ?? '',
               'courname': s['courname']?.toString() ?? '',
               'stuclass': s['stuclass']?.toString() ?? '',
               'semester': '',
-              'type': 'Cancelled',
+              // a bounced cheque / DD is its own type: no money, like a cancel
+              'type': v['paystatus']?.toString() == 'B' ? 'Bounced' : 'Cancelled',
               'total': 0.0,
               'fine': 0.0,
               'paymethod': v['paymethod']?.toString() ?? '',
@@ -1537,7 +1548,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             .any((e) => e.value > 0 && _feeTypeAllowed(e.key))) return false;
       }
       if (_selectedMode != null) {
-        final isCash = _isCashMode(r['paymethod']?.toString() ?? '');
+        // Same split as the CASH / BANK columns: cheque and DD are BANK.
+        final isCash = _paymentBucket(r['paymethod']?.toString() ?? '') == 'cash';
         if (_selectedMode == 'cash' && !isCash) return false;
         if (_selectedMode == 'bank' && isCash) return false;
       }
@@ -1779,7 +1791,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             : '$selectedCount $pluralNoun';
     final Widget shell = SizedBox(
       key: anchor,
-      width: width,
+      // Same width rule as _checkMultiSelect.
+      width: _filterWidth(width, [emptyLabel, '99 $pluralNoun']),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppUI.controlRadius),
         onTap: enabled ? onTap : null,
@@ -1792,15 +1805,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           child: Row(
             children: [
               Expanded(
-                child: Text(
+                // Placeholder ("All Fee Types") = w500; selected value = accent.
+                child: _fitText(
                   label,
-                  // Placeholder ("All Fee Types") = w500; selected value = accent.
-                  style: !enabled
+                  !enabled
                       ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)
                       : filled
                           ? AppUI.fieldText(context, filled: true)
                           : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Icon(Icons.arrow_drop_down,
@@ -2094,7 +2106,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             : '$count $pluralNoun';
     final Widget shell = SizedBox(
       key: anchorKey,
-      width: width,
+      // Wide enough for the "All ..." label and the "N things" summary, so
+      // the box keeps one width whatever is picked.
+      width: _filterWidth(width, [allLabel, '99 $pluralNoun']),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppUI.controlRadius),
         onTap: enabled ? onTap : null,
@@ -2107,14 +2121,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           child: Row(
             children: [
               Expanded(
-                child: Text(
+                child: _fitText(
                   label,
-                  style: !enabled
+                  !enabled
                       ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)
                       : filled
                           ? AppUI.fieldText(context, filled: true)
                           : AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Icon(Icons.arrow_drop_down,
@@ -2258,6 +2271,35 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     if (result != null) onApply(result);
   }
 
+  /// Width for a filter control: at least [width], and wide enough that each
+  /// of [labels] reads in full (field padding + chevron included). The widths
+  /// are design units (.w) and shrink with the window while the text does
+  /// not, so on a 1280px screen "All Standards" was cut to "All Stand...".
+  /// [cap] stops one very long value from stretching the bar; anything past
+  /// it shrinks to fit instead (see _fitText).
+  double _filterWidth(double width, Iterable<String> labels, {double cap = 260}) {
+    final style = AppUI.fieldText(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    double widest = 0;
+    for (final s in labels) {
+      final tp = TextPainter(
+        text: TextSpan(text: s, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        textScaler: scaler,
+      )..layout();
+      if (tp.width > widest) widest = tp.width;
+    }
+    // Field content padding (both sides) + the 24px chevron + a little air.
+    final chrome = (AppUI.compact(context) ? 24.0 : 28.0) + 24 + 8;
+    var need = widest + chrome;
+    if (need > cap) need = cap;
+    return need > width ? need : width;
+  }
+
+  /// One-line filter text that shrinks slightly instead of ending in "...".
+  Widget _fitText(String text, TextStyle style) => AppFitText(text, style: style);
+
   Widget _filterDropdown<T>({
     required T value,
     required String hint,
@@ -2268,10 +2310,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }) {
     // Filled = a specific value is selected (not the "All"/null default).
     final filled = value != null;
+    String itemText(DropdownMenuItem<T> m) =>
+        m.child is Text ? ((m.child as Text).data ?? '') : '';
     // Frame matches the Fee Master filter dropdowns: AppUI.field.
     return SizedBox(
-      width: width,
-      child: DropdownButtonFormField<T>(
+      width: _filterWidth(width, [hint, ...items.map(itemText)]),
+      child: AppDropdownField<T>(
         key: key,
         value: value,
         isExpanded: true,
@@ -2284,7 +2328,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         decoration: AppUI.field(context, hint, filled: filled),
         items: items,
         // Filled value reads bold + accent, distinct from the muted placeholder. Mirrors items 1:1.
-        selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text(m.child is Text ? ((m.child as Text).data ?? '') : '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: filled)))).toList(),
+        selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: _fitText(itemText(m), AppUI.fieldText(context, filled: filled)))).toList(),
         onChanged: onChanged,
       ),
     );
@@ -2918,7 +2962,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final hdr = xl.CellStyle(
         bold: true,
         fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final money = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
@@ -3031,14 +3075,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         bold: true,
         fontSize: 10,
         horizontalAlign: xl.HorizontalAlign.Right,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#E2E8F0'),
+        backgroundColorHex: XlTheme.totalBg,
       );
       sheet.cell(at(0, row))
         ..value = xl.TextCellValue('GRAND TOTAL')
         ..cellStyle = xl.CellStyle(
             bold: true,
             fontSize: 10,
-            backgroundColorHex: xl.ExcelColor.fromHexString('#E2E8F0'));
+            backgroundColorHex: XlTheme.totalBg);
       for (var c = 1; c < 5; c++) {
         sheet.cell(at(c, row)).cellStyle = grand;
       }
@@ -3125,7 +3169,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             ),
             Expanded(
               child: _stickyTable(
-            columnWidths: const [90, 110, 90, 110, 200, 120, 90, 110, 110, 120, 100, 110],
+            // First column wide enough for the "GRAND TOTAL" footer label.
+            columnWidths: const [125, 110, 90, 110, 200, 120, 90, 110, 110, 120, 100, 110],
             headers: [schoolTerm('COURSE'), schoolTerm('CLASS'), 'STRENGTH', schoolTerm('SEMESTER'), 'CATEGORY', 'STUDENT COUNT', 'TYPE', 'DUE', 'CONCESSION', 'NET DEMAND', 'PAID', 'BALANCE'],
             rows: [
               for (final r in rows)
@@ -3658,6 +3703,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     required double demand,
     required double concess,
     required double collected,
+    double other = 0,
     required double refund,
     required double balance,
   }) {
@@ -3721,6 +3767,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             card('receipt-2', AppColors.demand, 'DEMAND', _formatNumber(demand)),
             card('discount-shape', violet, 'CONCESSION', _formatNumber(concess)),
             card('money-recive', green, 'COLLECTED', _formatNumber(collected)),
+            // Misc and advance money: taken from the student but not against
+            // this year's demand, so kept out of COLLECTED.
+            if (other != 0)
+              card('wallet-money', AppColors.accent, 'MISC / ADVANCE', _formatNumber(other)),
             if (refund != 0)
               card('money-send', red, 'REFUND', _formatNumber(refund)),
             card(settled ? 'tick-circle' : 'wallet-money', settled ? green : amber,
@@ -3964,6 +4014,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       _ledgerConcDet = {};
       _ledgerRefDet = {};
       _ledgerTc = null;
+      _ledgerOld = null;
       _ledgerStudent = _studentsForLedger().firstWhere(
         (s) => s['stuadmno'] == admno,
         orElse: () => {'stuadmno': admno},
@@ -4043,40 +4094,57 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         String k(Map r) =>
             '${r['demfeetype']}|${r['demfeeterm']}|${(r['feeamount'] as num?)?.toDouble() ?? 0}|${seq(r)}';
         final idOf = <String, int>{};
-        final demRow = <String, Map<String, dynamic>>{};
+        final byId = <int, Map<String, dynamic>>{};
         for (final r in fd) {
           final id = (r['dem_id'] as num?)?.toInt();
           if (id != null) {
             idOf[k(r)] = id;
-            demRow[k(r)] = r;
+            byId[id] = r;
           }
         }
         for (final row in list) {
-          final id = idOf[k(row)];
+          // The RPC now returns dem_id; the type|term|amount match is only a
+          // fallback for an older server.
+          final id = (row['dem_id'] as num?)?.toInt() ?? idOf[k(row)];
           if (id != null) row['dem_id'] = id;
           // The Demand line of the transaction register needs the demand's own
           // date and document number; the ledger RPC returns neither.
-          final m = demRow[k(row)];
+          final m = id == null ? null : byId[id];
           if (m != null) {
             row['demno'] = m['demno'];
             row['demdate'] = m['createdat'] ?? m['duedate'];
           }
         }
-        final demIds = idOf.values.toList();
+        final demIds = list
+            .map((r) => (r['dem_id'] as num?)?.toInt())
+            .whereType<int>()
+            .toSet()
+            .toList();
         if (demIds.isNotEmpty) {
           // One collection line per RECEIPT that touched the demand.
-          final pd = await SupabaseService.fetchAll(() => SupabaseService
-              .fromSchema('paymentdetails')
-              .select('dem_id, pay_id, transtotalamount')
-              .eq('ins_id', insId)
-              .inFilter('dem_id', demIds));
+          // fineamount = the fine on that receipt line (older databases
+          // lack the column).
+          List<Map<String, dynamic>> pd;
+          try {
+            pd = await SupabaseService.fetchAll(() => SupabaseService
+                .fromSchema('paymentdetails')
+                .select('dem_id, pay_id, transtotalamount, fineamount')
+                .eq('ins_id', insId)
+                .inFilter('dem_id', demIds));
+          } catch (_) {
+            pd = await SupabaseService.fetchAll(() => SupabaseService
+                .fromSchema('paymentdetails')
+                .select('dem_id, pay_id, transtotalamount')
+                .eq('ins_id', insId)
+                .inFilter('dem_id', demIds));
+          }
           final payIds =
               pd.map((e) => (e['pay_id'] as num?)?.toInt()).whereType<int>().toSet().toList();
           final pays = <int, Map<String, dynamic>>{};
           if (payIds.isNotEmpty) {
             final pr = await SupabaseService.fetchAll(() => SupabaseService
                 .fromSchema('payment')
-                .select('pay_id, paynumber, paydate, activestatus, paystatus')
+                .select('pay_id, paynumber, paydate, activestatus, paystatus, recon_status')
                 .eq('ins_id', insId)
                 .inFilter('pay_id', payIds));
             for (final r in pr) {
@@ -4109,9 +4177,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             final pay = pays[pid];
             if (pay == null) continue;
             (alloc[d] ??= []).add({
+              'pay_id': pid,
               'amount': (r['transtotalamount'] as num?)?.toDouble() ?? 0,
+              'fine': (r['fineamount'] as num?)?.toDouble() ?? 0,
               'docno': pay['paynumber']?.toString() ?? '',
               'docdate': pay['paydate']?.toString() ?? '',
+              // 'P' = waiting on bank reconciliation; null reads as reconciled.
+              'awaiting': pay['recon_status']?.toString() == 'P',
             });
           }
           // Concession vouchers against these demands, with their doc numbers.
@@ -4170,7 +4242,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             if (rfIds.isNotEmpty) {
               final rh = await SupabaseService.fetchAll(() => SupabaseService
                   .fromSchema('fee_refund')
-                  .select('rf_id, doc_no, refunddate, activestatus')
+                  .select('rf_id, doc_no, refunddate, activestatus, pay_id')
                   .eq('ins_id', insId)
                   .inFilter('rf_id', rfIds));
               for (final r in rh) {
@@ -4183,14 +4255,44 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 rfs[(r['rf_id'] as num).toInt()] = Map<String, dynamic>.from(r);
               }
             }
+            // A refund comes off the FEE part of its receipt first, then the
+            // fine (process_refund). Only the fee part puts the fee back on
+            // the ledger, so each refund is capped at what is left of its
+            // receipt's fee part for that demand.
+            final feeLeft = <String, double>{};
+            final rfPayIds = rfs.values
+                .map((h) => (h['pay_id'] as num?)?.toInt())
+                .whereType<int>()
+                .toSet()
+                .toList();
+            if (rfPayIds.isNotEmpty) {
+              final pl = await SupabaseService.fetchAll(() => SupabaseService
+                  .fromSchema('paymentdetails')
+                  .select('pay_id, dem_id, transtotalamount, fineamount')
+                  .inFilter('pay_id', rfPayIds));
+              for (final l in pl) {
+                final k = '${(l['pay_id'] as num?)?.toInt()}|${(l['dem_id'] as num?)?.toInt()}';
+                final fee = ((l['transtotalamount'] as num?)?.toDouble() ?? 0) -
+                    ((l['fineamount'] as num?)?.toDouble() ?? 0);
+                feeLeft[k] = (feeLeft[k] ?? 0) + (fee < 0 ? 0 : fee);
+              }
+            }
+            rd.sort((a, b) => ((a['rf_id'] as num?)?.toInt() ?? 0).compareTo((b['rf_id'] as num?)?.toInt() ?? 0));
             for (final r in rd) {
               final d = (r['dem_id'] as num?)?.toInt();
-              final amt = (r['refundamount'] as num?)?.toDouble() ?? 0;
+              var amt = (r['refundamount'] as num?)?.toDouble() ?? 0;
               if (d == null || amt <= 0.004) continue;
               if (((r['activestatus'] as num?)?.toInt() ?? 1) == 9) continue;
               final rid = (r['rf_id'] as num?)?.toInt() ?? -1;
               if (voidedRfs.contains(rid)) continue;
               final h = rfs[rid];
+              final k = '${(h?['pay_id'] as num?)?.toInt()}|$d';
+              final left = feeLeft[k];
+              if (left != null) {
+                if (amt > left) amt = left;
+                feeLeft[k] = left - amt;
+                if (amt <= 0.004) continue;
+              }
               (refDet[d] ??= []).add({
                 'amount': amt,
                 'docno': h?['doc_no']?.toString() ?? '',
@@ -4213,8 +4315,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         list[i]['pay_id'] = pid;
         payMap[pid] = {'paynumber': pn, 'paydate': list[i]['paydate']};
       }
+      // The school prints the old Debit / Credit ledger, which also needs the
+      // payment modes and the advance money behind each line.
+      final old = isSchool ? await _loadLedgerOldExtras(insId, admno, list, alloc) : null;
       if (mounted) {
         setState(() {
+          _ledgerOld = old;
           _ledgerDemands = list;
           _ledgerMisc = misc;
           _ledgerAdv = adv;
@@ -4232,6 +4338,148 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
+  /// School only: what the old product's Debit / Credit ledger needs beyond
+  /// the register -- each receipt's payment mode (with cheque no. and date),
+  /// the advance money behind a line, and the modes of the misc and advance
+  /// receipts. Every part fails soft: a missing table only loses that detail.
+  ///
+  /// Advance money is split the way rpt_receiptwise splits it. An advadjustment
+  /// (this year's advance applied to a fee) or an advreconcile (last year's
+  /// advance reconciled onto a demand) riding on a receipt is not money that
+  /// receipt took, so it comes off that receipt's collection and gets its own
+  /// credit line. An advreconcile with NO receipt -- the old Advfeerecon, and
+  /// the usual case -- is credited on its own: feedemand.paidamount already
+  /// carries it, so without that line the closing balance would be too high by
+  /// exactly the advance.
+  Future<_LedgerOldExtras> _loadLedgerOldExtras(
+    int insId,
+    String admno,
+    List<Map<String, dynamic>> demands,
+    Map<int, List<Map<String, dynamic>>> alloc,
+  ) async {
+    final x = _LedgerOldExtras();
+    final demIds = demands
+        .map((r) => (r['dem_id'] as num?)?.toInt())
+        .whereType<int>()
+        .toSet()
+        .toList();
+    final payIds = alloc.values
+        .expand((l) => l)
+        .map((a) => (a['pay_id'] as num?)?.toInt())
+        .whereType<int>()
+        .toSet()
+        .toList();
+    if (payIds.isNotEmpty) {
+      try {
+        final rows = await SupabaseService.fetchAll(() => SupabaseService
+            .fromSchema('payment')
+            .select('pay_id, paymethod, paychequeno, paychequedate')
+            .eq('ins_id', insId)
+            .inFilter('pay_id', payIds));
+        for (final r in rows) {
+          x.pays[(r['pay_id'] as num).toInt()] = Map<String, dynamic>.from(r);
+        }
+      } catch (e) {
+        debugPrint('ledger payment modes: $e');
+      }
+    }
+    if (demIds.isNotEmpty) {
+      try {
+        final rows = await SupabaseService.fetchAll(() => SupabaseService
+            .fromSchema('advadjustment')
+            .select('pay_id, dem_id, adjustamount, adjustdate, paynumber')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .inFilter('dem_id', demIds));
+        for (final r in rows) {
+          x.addAdvance(r['dem_id'], r['pay_id'], r['adjustamount'], false,
+              r['paynumber'], r['adjustdate']);
+        }
+      } catch (e) {
+        debugPrint('ledger advance adjustments: $e');
+      }
+      try {
+        final rows = await SupabaseService.fetchAll(() => SupabaseService
+            .fromSchema('advreconcile')
+            .select('pay_id, dem_id, amount, advno, ac_id, createdat, reversedat')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .inFilter('dem_id', demIds));
+        final live = rows.where((r) => r['reversedat'] == null).toList();
+        // The carried advance's own receipt date, as the old ledger printed
+        // the previous year's receipt; the reconcile date if it is missing.
+        final acIds = live
+            .map((r) => (r['ac_id'] as num?)?.toInt())
+            .whereType<int>()
+            .toSet()
+            .toList();
+        final acDate = <int, String>{};
+        if (acIds.isNotEmpty) {
+          try {
+            final ac = await SupabaseService.fetchAll(() => SupabaseService
+                .fromSchema('advcarry')
+                .select('ac_id, advdate')
+                .inFilter('ac_id', acIds));
+            for (final r in ac) {
+              final d = r['advdate']?.toString() ?? '';
+              if (d.isNotEmpty) acDate[(r['ac_id'] as num).toInt()] = d;
+            }
+          } catch (_) {/* no carry table: the reconcile date stands */}
+        }
+        for (final r in live) {
+          x.addAdvance(r['dem_id'], r['pay_id'], r['amount'], true, r['advno'],
+              acDate[(r['ac_id'] as num?)?.toInt()] ?? r['createdat']);
+        }
+      } catch (e) {
+        debugPrint('ledger advance reconcile: $e');
+      }
+    }
+    try {
+      final rows = await SupabaseService.fromSchema('misc_collection')
+          .select('mcno, paymode')
+          .eq('ins_id', insId)
+          .eq('regno', admno);
+      for (final r in List<Map<String, dynamic>>.from(rows as List)) {
+        x.docModes[r['mcno']?.toString() ?? ''] = _payModeText(r['paymode']);
+      }
+    } catch (e) {
+      debugPrint('ledger misc modes: $e');
+    }
+    try {
+      final rows = await SupabaseService.fromSchema('advance_collection')
+          .select('advno, paymethod, paychequeno, paychequedate')
+          .eq('ins_id', insId)
+          .eq('stuadmno', admno);
+      for (final r in List<Map<String, dynamic>>.from(rows as List)) {
+        x.docModes[r['advno']?.toString() ?? ''] =
+            _payModeText(r['paymethod'], r['paychequeno'], r['paychequedate']);
+      }
+    } catch (e) {
+      debugPrint('ledger advance modes: $e');
+    }
+    return x;
+  }
+
+  /// The payment mode as the old ledger appended it to "... Collection":
+  /// Cash, Cheque, UPI ... For a cheque the number and date follow, as the
+  /// old " Chq.NO : <no> Date : <date>".
+  String _payModeText(dynamic mode, [dynamic chqNo, dynamic chqDate]) {
+    final m = (mode?.toString() ?? '').trim();
+    final up = m.toUpperCase();
+    final name = switch (up) {
+      '' => '',
+      'UPI' || 'DD' || 'NEFT' || 'RTGS' || 'IMPS' || 'POS' => up,
+      _ => m
+          .split(RegExp(r'\s+'))
+          .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
+          .join(' '),
+    };
+    final no = (chqNo?.toString() ?? '').trim();
+    if (no.isEmpty || !(up.contains('CHEQUE') || up.contains('CHQ') || up == 'DD')) return name;
+    final d = chqDate?.toString() ?? '';
+    return '$name Chq.NO : $no${d.length >= 10 ? ' Date : ${_fmtDay(d)}' : ''}';
+  }
+
   /// Advances taken from this student. Like a misc collection they settle no
   /// demand of their own -- the money is HELD -- so they move no balance here.
   ///
@@ -4240,8 +4488,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<List<Map<String, dynamic>>> _loadLedgerAdvance(
       int insId, String admno) async {
     try {
+      // "Advance (Admission)" only for a pre-admission (user, 2026-11-14).
+      var pre = false;
+      try {
+        final st = await SupabaseService.fromSchema('students')
+            .select('preadmission').eq('ins_id', insId).eq('stuadmno', admno).limit(1).maybeSingle();
+        pre = ((st?['preadmission'] as num?)?.toInt() ?? 0) == 1;
+      } catch (_) {}
       final ac = await SupabaseService.fromSchema('advance_collection')
-          .select('adv_id, advno, advdate, advtype, transtotalamount, adjustedamount')
+          .select('adv_id, advno, advdate, advtype, transtotalamount, adjustedamount, recon_status')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .eq('paystatus', 'C')
@@ -4267,6 +4522,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final raw = h['advdate']?.toString() ?? '';
         final date = raw.length >= 10 ? raw.substring(0, 10) : raw;
         final total = (h['transtotalamount'] as num?)?.toDouble() ?? 0;
+        final awaiting = h['recon_status']?.toString() == 'P';
         final lines = byAdv[h['adv_id']] ?? const <Map<String, dynamic>>[];
         if (lines.isEmpty) {
           rows.add({
@@ -4274,16 +4530,21 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             'amount': total,
             'docno': h['advno']?.toString() ?? '',
             'docdate': date,
-            'advtype': h['advtype']?.toString() ?? 'S',
+            'advtype': h['advtype']?.toString() ?? 'S', 'preadm': pre,
+            'awaiting': awaiting,
           });
         } else {
           for (final d in lines) {
+            final ft = d['feetype']?.toString() ?? '';
             rows.add({
-              'feetype': d['feetype']?.toString() ?? 'ADVANCE',
+              // Next year's fee paid early -- named so it never reads as this
+              // year's tuition.
+              'feetype': ft.isEmpty ? 'ADVANCE' : 'ADVANCE – $ft',
               'amount': (d['amount'] as num?)?.toDouble() ?? 0,
               'docno': h['advno']?.toString() ?? '',
               'docdate': date,
-              'advtype': h['advtype']?.toString() ?? 'S',
+              'advtype': h['advtype']?.toString() ?? 'S', 'preadm': pre,
+              'awaiting': awaiting,
             });
           }
         }
@@ -4299,8 +4560,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             'amount': -used,
             'docno': h['advno']?.toString() ?? '',
             'docdate': date,
-            'advtype': h['advtype']?.toString() ?? 'S',
+            'advtype': h['advtype']?.toString() ?? 'S', 'preadm': pre,
             'adjusted': true,
+            'awaiting': awaiting,
           });
         }
       }
@@ -4344,7 +4606,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<List<Map<String, dynamic>>> _loadLedgerMisc(int insId, String admno) async {
     try {
       final mc = await SupabaseService.fromSchema('misc_collection')
-          .select('mc_id, mcno, mcdate')
+          .select('mc_id, mcno, mcdate, recon_status')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .eq('regno', admno)
@@ -4370,6 +4632,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             'amount': (d['amount'] as num?)?.toDouble() ?? 0,
             'docno': h['mcno']?.toString() ?? '',
             'docdate': date,
+            'awaiting': h['recon_status']?.toString() == 'P',
           });
         }
       }
@@ -4428,12 +4691,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final voucherCon =
           concs.fold<double>(0, (t, c) => t + ((c['amount'] as num?)?.toDouble() ?? 0));
       final baseCon = (conTotal - voucherCon).clamp(0.0, conTotal > 0 ? conTotal : 0.0);
+      // An arrear is last year's fee: its details carry the year it came from.
+      final year = d['demfeeyear']?.toString().trim() ?? '';
+      final details = arrear && year.isNotEmpty ? '$year $term' : term;
 
       ev.add({
         'sort': demDate, 'seq': 0, 'kind': 'data',
-        'type': 'Demand',
+        'type': arrear ? 'Arrear Demand' : 'Demand',
         'date': _fmtDay(demDate),
-        'details': term,
+        'details': details,
         'feetype': feetype,
         'demand': fee,
         'concess': baseCon > 0.004 ? baseCon : null,
@@ -4447,33 +4713,56 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // earliest receipt that touched it — otherwise the fine would be double
       // counted, once inside Collection and once in its own column.
       var fineLeft = (d['fineamount'] as num?)?.toDouble() ?? 0;
-      final receipts = demId == null
-          ? const <Map<String, dynamic>>[]
-          : (_ledgerAlloc[demId] ?? const <Map<String, dynamic>>[]);
+      // Earliest receipt first (date, then number), so the fine comes off the
+      // right one rather than whichever the query returned first.
+      final receipts = [
+        ...(demId == null
+            ? const <Map<String, dynamic>>[]
+            : (_ledgerAlloc[demId] ?? const <Map<String, dynamic>>[]))
+      ]..sort((a, b) {
+          final c = d10(a['docdate']).compareTo(d10(b['docdate']));
+          return c != 0
+              ? c
+              : (a['docno']?.toString() ?? '').compareTo(b['docno']?.toString() ?? '');
+        });
+      // Receipts saved since 2026-11-05 carry their own fine; use that. Older
+      // ones only have the demand's figure, peeled off the earliest receipt.
+      final lineFines = receipts.any((r) => ((r['fine'] as num?) ?? 0) > 0.004);
       for (final r in receipts) {
         var amt = (r['amount'] as num?)?.toDouble() ?? 0;
         double? f;
-        if (fineLeft > 0.004) {
+        if (lineFines) {
+          final lf = (r['fine'] as num?)?.toDouble() ?? 0;
+          if (lf > 0.004) {
+            f = lf > amt ? amt : lf;
+            amt -= f;
+          }
+        } else if (fineLeft > 0.004) {
           f = fineLeft > amt ? amt : fineLeft;
           amt -= f;
           fineLeft -= f;
         }
         final dt = d10(r['docdate']);
+        // Not yet reconciled: listed, but not counted as collected and the
+        // balance stays owed until the bank confirms it.
+        final awaiting = r['awaiting'] == true;
         ev.add({
           'sort': dt, 'seq': 1, 'kind': 'data',
-          'type': arrear ? 'Arrear Collection' : 'Regular Collection',
+          'type': '${arrear ? 'Arrear Collection' : 'Regular Collection'}'
+              '${awaiting ? ' (awaiting bank)' : ''}',
           'date': _fmtDay(dt),
-          'details': term,
+          'details': details,
           'feetype': feetype,
           'demand': null, 'concess': null, 'net': null,
           'collection': amt, 'refund': null, 'fine': f,
+          'awaiting': awaiting,
           'docno': r['docno']?.toString() ?? '',
           // Only the fee portion moves the balance. The fine is shown in its
           // own column but never entered the balance as a charge -- there is no
           // demand row for it, because a fine is not part of the demand.
           // Subtracting it here drove the closing balance negative by exactly
           // the fine (Demand 32,325 = Collection 32,325, yet it read -100).
-          'delta': -amt,
+          'delta': awaiting ? 0.0 : -amt,
         });
       }
 
@@ -4484,11 +4773,33 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           'sort': dt, 'seq': 2, 'kind': 'data',
           'type': 'Concession',
           'date': _fmtDay(dt),
-          'details': term,
+          'details': details,
           'feetype': feetype,
           'demand': null, 'concess': amt, 'net': null,
           'collection': null, 'refund': null, 'fine': null,
           'docno': c['docno']?.toString() ?? '',
+          'delta': -amt,
+        });
+      }
+
+      // School: an advance applied with no receipt behind it (last year's
+      // advance reconciled onto this demand). feedemand already counts it as
+      // paid, so it settles the balance like a collection -- left out, the
+      // ledger showed the full demand still owing. Null on a college.
+      for (final a in (demId == null
+          ? const <Map<String, dynamic>>[]
+          : (_ledgerOld?.noReceipt[demId] ?? const <Map<String, dynamic>>[]))) {
+        final amt = (a['amount'] as num?)?.toDouble() ?? 0;
+        final dt = d10(a['docdate']);
+        ev.add({
+          'sort': dt, 'seq': 1, 'kind': 'data',
+          'type': a['prev'] == true ? 'Previous Year Advance' : 'Advance Applied',
+          'date': _fmtDay(dt),
+          'details': details,
+          'feetype': feetype,
+          'demand': null, 'concess': null, 'net': null,
+          'collection': amt, 'refund': null, 'fine': null,
+          'docno': a['docno']?.toString() ?? '',
           'delta': -amt,
         });
       }
@@ -4503,7 +4814,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           'sort': dt, 'seq': 3, 'kind': 'data',
           'type': 'Refund',
           'date': _fmtDay(dt),
-          'details': term,
+          'details': details,
           'feetype': feetype,
           'demand': null, 'concess': null, 'net': null,
           'collection': null, 'refund': amt, 'fine': null,
@@ -4514,17 +4825,22 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
 
     // Misc collections have no demand behind them, so they move no balance.
+    // Their money sits in 'other' (Misc / Advance), never in Collection, so
+    // Demand - Collected still equals the balance.
     for (final m in _ledgerMisc) {
       final dt = d10(m['docdate']);
+      final awaiting = m['awaiting'] == true;
       ev.add({
         'sort': dt, 'seq': 4, 'kind': 'data',
-        'type': 'Misc Collection',
+        'type': awaiting ? 'Misc Collection (awaiting bank)' : 'Misc Collection',
         'date': _fmtDay(dt),
         'details': 'Miscellaneous',
         'feetype': m['feetype']?.toString() ?? 'Misc',
         'demand': null, 'concess': null, 'net': null,
-        'collection': (m['amount'] as num?)?.toDouble() ?? 0,
+        'collection': null,
+        'other': (m['amount'] as num?)?.toDouble() ?? 0,
         'refund': null, 'fine': null,
+        'awaiting': awaiting,
         'docno': m['docno']?.toString() ?? '',
         'delta': 0.0,
       });
@@ -4535,21 +4851,26 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     for (final a in _ledgerAdv) {
       final dt = d10(a['docdate']);
       final isAdjusted = a['adjusted'] == true;
+      final awaiting = a['awaiting'] == true;
       ev.add({
         'sort': dt, 'seq': 4, 'kind': 'data',
         'type': isAdjusted
             ? 'Advance Adjusted'
-            : switch ((a['advtype']?.toString() ?? 'S').toUpperCase()) {
-                'A' => 'Advance (Admission)',
-                'M' => 'Advance (Mess)',
-                _ => 'Advance',
-              },
+            : awaiting
+                ? 'Advance (awaiting bank)'
+                : switch ((a['advtype']?.toString() ?? 'S').toUpperCase()) {
+                    'A' => a['preadm'] == true ? 'Advance (Admission)' : 'Advance',
+                    'M' => 'Advance (Mess)',
+                    _ => 'Advance',
+                  },
         'date': _fmtDay(dt),
-        'details': isAdjusted ? 'Applied to fees' : 'Advance received',
+        'details': isAdjusted ? 'Applied to fees' : 'Advance for next year',
         'feetype': a['feetype']?.toString() ?? 'ADVANCE',
         'demand': null, 'concess': null, 'net': null,
-        'collection': (a['amount'] as num?)?.toDouble() ?? 0,
+        'collection': null,
+        'other': (a['amount'] as num?)?.toDouble() ?? 0,
         'refund': null, 'fine': null,
+        'awaiting': awaiting,
         'docno': a['docno']?.toString() ?? '',
         'delta': 0.0,
       });
@@ -4574,6 +4895,301 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       e['balance'] = running;
     }
     return ev;
+  }
+
+  /// Column totals for the ledger, shared by the screen, Excel and PDF.
+  /// Lines awaiting bank reconciliation are listed but counted in no total.
+  ({double demand, double concess, double collection, double other, double refund, double fine})
+      _ledgerTotals(List<Map<String, dynamic>> lines) {
+    double demand = 0, concess = 0, collection = 0, other = 0, refund = 0, fine = 0;
+    for (final l in lines) {
+      if (l['kind'] != 'data' || l['awaiting'] == true) continue;
+      demand += (l['demand'] as double?) ?? 0;
+      concess += (l['concess'] as double?) ?? 0;
+      collection += (l['collection'] as double?) ?? 0;
+      other += (l['other'] as double?) ?? 0;
+      refund += (l['refund'] as double?) ?? 0;
+      fine += (l['fine'] as double?) ?? 0;
+    }
+    return (
+      demand: demand, concess: concess, collection: collection,
+      other: other, refund: refund, fine: fine,
+    );
+  }
+
+  /// The school's Student Ledger in the old product's layout (PsFees
+  /// sp_studledger, "STUDENT LEDGER - YEAR"): Date | Doc No. | Term | Fee Type
+  /// | Reference | Debit (Rs.) | Credit (Rs.), then G Total and Closing Bal.
+  /// Shared by the screen, the Excel sheet and the PDF.
+  ///
+  /// Arrear first, then regular; within each, the demands (term, then fee
+  /// order), then the collections (date, receipt), then concessions, then
+  /// refunds. References, as the old ledger worded them:
+  ///   Debit   Arr Demand / Reg Demand        one per fee type and term, gross
+  ///                                          fee, no date or document
+  ///           Arr Fee Refund / Reg Fee Refund  money handed back is owed again
+  ///   Credit  Arr Collection<mode> / Reg Collection<mode>  one per receipt
+  ///                                          and term, fee type blank, the
+  ///                                          fee part only (a fine was never
+  ///                                          debited, so it is not credited)
+  ///           PreYr Adv Collection           last year's advance reconciled
+  ///                                          onto the demand
+  ///           Adv Adjustment                 this year's advance applied
+  ///           Arrear Concession / Concession the demand's concession: a
+  ///                                          voucher with its number and
+  ///                                          date, the rest undated
+  /// Debits less credits is exactly what the register above calls Balance.
+  ///
+  /// After the closing balance, the money that moves no balance gets its own
+  /// block, as the old report's "Adv Fee Details" / "Misc. Fee Collection":
+  /// advances held for next year (Adv Collection<mode>, Adv Adjusted when
+  /// used), misc receipts (Misc Collection<mode>), and receipts still awaiting
+  /// bank reconciliation (counted nowhere until the bank confirms them, as in
+  /// the register).
+  ///
+  /// Each line: date, doc, term, fee, ref, dr, cr, and kind -- 'line',
+  /// 'total' (G Total, Closing Bal, block totals), 'head' (block title) or
+  /// 'blank' -- plus tone (demand / collection / refund) for the screen tint.
+  List<Map<String, dynamic>> _ledgerOldLines() {
+    String d10(dynamic v) {
+      final t = v?.toString() ?? '';
+      return t.length >= 10 ? t.substring(0, 10) : t;
+    }
+
+    final x = _ledgerOld ?? _LedgerOldExtras();
+    final termRank = <String, int>{};
+    for (final d in _ledgerDemands) {
+      termRank.putIfAbsent(d['demfeeterm']?.toString() ?? '', () => termRank.length);
+    }
+    int feeRank(String f) => _feeOrder[f] ?? 1 << 20;
+
+    Map<String, dynamic> line(String ref,
+            {String iso = '', String doc = '', String term = '', String fee = '',
+             double? dr, double? cr, String tone = '', int termOrd = 0, int feeOrd = 0}) =>
+        {
+          'kind': 'line', 'iso': iso, 'date': _fmtDay(iso), 'doc': doc,
+          'term': term, 'fee': fee, 'ref': ref, 'dr': dr, 'cr': cr,
+          'tone': tone, 'termOrd': termOrd, 'feeOrd': feeOrd,
+        };
+
+    // Credits on receipts are one line per receipt and term, as the old
+    // ledger printed them: lines of one receipt add up under one key.
+    final pending = <String, Map<String, dynamic>>{};
+    void addCredit(Map<String, Map<String, dynamic>> into, Map<String, dynamic> l) {
+      final key = '${l['ref']}|${l['doc']}|${l['iso']}|${l['term']}|${l['fee']}';
+      final had = into[key];
+      if (had == null) {
+        into[key] = l;
+      } else {
+        had['cr'] = ((had['cr'] as double?) ?? 0) + ((l['cr'] as double?) ?? 0);
+      }
+    }
+
+    final out = <Map<String, dynamic>>[];
+    final consumed = <String>{};
+    for (final arrear in const [true, false]) {
+      final kind = arrear ? 'Arr' : 'Reg';
+      final dem = <Map<String, dynamic>>[];
+      final col = <String, Map<String, dynamic>>{};
+      final con = <Map<String, dynamic>>[];
+      final ref = <Map<String, dynamic>>[];
+      for (final d in _ledgerDemands) {
+        final isArr = (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+        if (isArr != arrear) continue;
+        final demId = (d['dem_id'] as num?)?.toInt();
+        final feetype = d['demfeetype']?.toString() ?? '';
+        final rawTerm = d['demfeeterm']?.toString() ?? '';
+        // An arrear is last year's fee: its term carries the year it came from.
+        final year = d['demfeeyear']?.toString().trim() ?? '';
+        final term = arrear && year.isNotEmpty ? '$year $rawTerm' : rawTerm;
+        final tOrd = termRank[rawTerm] ?? 0;
+        final fOrd = feeRank(feetype);
+        final fee = (d['feeamount'] as num?)?.toDouble() ?? 0;
+        dem.add(line('$kind Demand', term: term, fee: feetype, dr: fee,
+            tone: 'demand', termOrd: tOrd, feeOrd: fOrd));
+
+        // Concession: the vouchers with their numbers, and whatever the demand
+        // already carried when it was raised (no voucher) as one undated line.
+        final concs = demId == null
+            ? const <Map<String, dynamic>>[]
+            : (_ledgerConcDet[demId] ?? const <Map<String, dynamic>>[]);
+        final conTotal = (d['conamount'] as num?)?.toDouble() ?? 0;
+        final voucherCon =
+            concs.fold<double>(0, (t, c) => t + ((c['amount'] as num?)?.toDouble() ?? 0));
+        final baseCon = conTotal - voucherCon;
+        final conRef = arrear ? 'Arrear Concession' : 'Concession';
+        if (baseCon > 0.004) {
+          con.add(line(conRef, term: term, fee: feetype, cr: baseCon, termOrd: tOrd, feeOrd: fOrd));
+        }
+        for (final c in concs) {
+          con.add(line(conRef,
+              iso: d10(c['docdate']), doc: c['docno']?.toString() ?? '', term: term,
+              fee: feetype, cr: (c['amount'] as num?)?.toDouble() ?? 0,
+              termOrd: tOrd, feeOrd: fOrd));
+        }
+
+        // Receipts: the fine comes off the earliest one, exactly as the
+        // register does it, so the two agree to the rupee.
+        var fineLeft = (d['fineamount'] as num?)?.toDouble() ?? 0;
+        final receipts = [
+          ...(demId == null
+              ? const <Map<String, dynamic>>[]
+              : (_ledgerAlloc[demId] ?? const <Map<String, dynamic>>[]))
+        ]..sort((a, b) {
+            final c = d10(a['docdate']).compareTo(d10(b['docdate']));
+            return c != 0
+                ? c
+                : (a['docno']?.toString() ?? '').compareTo(b['docno']?.toString() ?? '');
+          });
+        // Same rule as the register: the receipt's own fine when it has one.
+        final lineFines = receipts.any((r) => ((r['fine'] as num?) ?? 0) > 0.004);
+        for (final r in receipts) {
+          var amt = (r['amount'] as num?)?.toDouble() ?? 0;
+          if (lineFines) {
+            final lf = (r['fine'] as num?)?.toDouble() ?? 0;
+            amt -= lf > amt ? amt : lf;
+          } else if (fineLeft > 0.004) {
+            final f = fineLeft > amt ? amt : fineLeft;
+            amt -= f;
+            fineLeft -= f;
+          }
+          final iso = d10(r['docdate']);
+          final doc = r['docno']?.toString() ?? '';
+          final into = r['awaiting'] == true ? pending : col;
+          final pid = (r['pay_id'] as num?)?.toInt();
+          final pay = pid == null ? null : x.pays[pid];
+          // Advance money riding on the receipt is credited as what it is.
+          final key = '$pid|$demId';
+          if (pid != null && demId != null && consumed.add(key)) {
+            for (final a in x.onReceipt[key] ?? const <Map<String, dynamic>>[]) {
+              final want = (a['amount'] as num?)?.toDouble() ?? 0;
+              final take = want < amt ? want : amt;
+              if (take <= 0.004) continue;
+              amt -= take;
+              addCredit(into, line(a['prev'] == true ? 'PreYr Adv Collection' : 'Adv Adjustment',
+                  iso: iso, doc: doc, term: term, cr: take, tone: 'collection', termOrd: tOrd));
+            }
+          }
+          if (amt <= 0.004) continue;
+          final mode = pay?['paymethod']?.toString() ?? '';
+          addCredit(
+              into,
+              line(
+                  mode.trim().toLowerCase() == 'advance adjustment'
+                      ? 'Adv Adjustment'
+                      : '$kind Collection${_payModeText(mode, pay?['paychequeno'], pay?['paychequedate'])}',
+                  iso: iso, doc: doc, term: term, cr: amt, tone: 'collection', termOrd: tOrd));
+        }
+        if (demId != null) {
+          // Advances applied with no receipt, and any whose receipt is not
+          // listed above: still money that settled this demand.
+          final loose = [
+            ...(x.noReceipt[demId] ?? const <Map<String, dynamic>>[]),
+            for (final e in x.onReceipt.entries)
+              if (e.key.endsWith('|$demId') && !consumed.contains(e.key)) ...e.value,
+          ];
+          for (final a in loose) {
+            addCredit(col, line(a['prev'] == true ? 'PreYr Adv Collection' : 'Adv Adjustment',
+                iso: d10(a['docdate']), doc: a['docno']?.toString() ?? '', term: term,
+                cr: (a['amount'] as num?)?.toDouble() ?? 0, tone: 'collection', termOrd: tOrd));
+          }
+        }
+
+        for (final r in (demId == null
+            ? const <Map<String, dynamic>>[]
+            : (_ledgerRefDet[demId] ?? const <Map<String, dynamic>>[]))) {
+          ref.add(line('$kind Fee Refund',
+              iso: d10(r['docdate']), doc: r['docno']?.toString() ?? '', term: term,
+              fee: feetype, dr: (r['amount'] as num?)?.toDouble() ?? 0,
+              tone: 'refund', termOrd: tOrd, feeOrd: fOrd));
+        }
+      }
+      int byTermFee(Map a, Map b) {
+        final t = (a['termOrd'] as int).compareTo(b['termOrd'] as int);
+        if (t != 0) return t;
+        final f = (a['feeOrd'] as int).compareTo(b['feeOrd'] as int);
+        return f != 0 ? f : (a['fee'] as String).compareTo(b['fee'] as String);
+      }
+
+      int byDate(Map a, Map b) {
+        final c = (a['iso'] as String).compareTo(b['iso'] as String);
+        if (c != 0) return c;
+        final n = (a['doc'] as String).compareTo(b['doc'] as String);
+        return n != 0 ? n : byTermFee(a, b);
+      }
+
+      out
+        ..addAll(dem..sort(byTermFee))
+        ..addAll(col.values.toList()..sort(byDate))
+        ..addAll(con..sort(byDate))
+        ..addAll(ref..sort(byDate));
+    }
+
+    double sum(Iterable<Map<String, dynamic>> ls, String k) =>
+        ls.fold<double>(0, (t, l) => t + ((l[k] as double?) ?? 0));
+    Map<String, dynamic> total(String label, double? dr, double? cr) =>
+        {'kind': 'total', 'date': label, 'doc': '', 'term': '', 'fee': '', 'ref': '', 'dr': dr, 'cr': cr};
+    Map<String, dynamic> head(String label) =>
+        {'kind': 'head', 'date': label, 'doc': '', 'term': '', 'fee': '', 'ref': '', 'dr': null, 'cr': null};
+    const blank = {'kind': 'blank', 'date': '', 'doc': '', 'term': '', 'fee': '', 'ref': '', 'dr': null, 'cr': null};
+
+    final dr = sum(out, 'dr'), cr = sum(out, 'cr');
+    final bal = dr - cr;
+    out
+      ..add(total('G Total', dr, cr))
+      ..add(total('Closing Bal', bal >= 0 ? bal : null, bal < 0 ? -bal : null));
+
+    void block(String title, List<Map<String, dynamic>> ls, {String? balLabel}) {
+      if (ls.isEmpty) return;
+      final d = sum(ls, 'dr'), c = sum(ls, 'cr');
+      out
+        ..add(Map<String, dynamic>.from(blank))
+        ..add(head(title))
+        ..addAll(ls)
+        ..add(total('Total', d, c));
+      if (balLabel != null) out.add(total(balLabel, null, c - d));
+    }
+
+    // Advances held for next year, and what of them has since been applied.
+    final adv = <Map<String, dynamic>>[];
+    for (final a in _ledgerAdv) {
+      final amt = (a['amount'] as num?)?.toDouble() ?? 0;
+      final iso = d10(a['docdate']);
+      final doc = a['docno']?.toString() ?? '';
+      final ft = a['feetype']?.toString() ?? '';
+      final fee = ft.startsWith('ADVANCE – ') ? ft.substring('ADVANCE – '.length) : (ft == 'ADVANCE' ? '' : ft);
+      if (a['adjusted'] == true) {
+        adv.add(line('Adv Adjusted', iso: iso, doc: doc, dr: -amt));
+      } else if (a['awaiting'] == true) {
+        addCredit(pending, line('Adv Collection${x.docModes[doc] ?? ''}', iso: iso, doc: doc, fee: fee, cr: amt));
+      } else {
+        adv.add(line('Adv Collection${x.docModes[doc] ?? ''}', iso: iso, doc: doc, fee: fee, cr: amt, tone: 'collection'));
+      }
+    }
+    final yr = RegExp(r'^(\d{4})-(\d{4})$').firstMatch(_academicYearLabel);
+    block(
+        yr == null
+            ? 'Adv Fee Details'
+            : 'Adv Fee Details - ${int.parse(yr.group(1)!) + 1}-${int.parse(yr.group(2)!) + 1}',
+        adv,
+        balLabel: 'Advance Bal');
+
+    final misc = <Map<String, dynamic>>[];
+    for (final m in _ledgerMisc) {
+      final l = line('Misc Collection${x.docModes[m['docno']?.toString() ?? ''] ?? ''}',
+          iso: d10(m['docdate']), doc: m['docno']?.toString() ?? '',
+          fee: m['feetype']?.toString() ?? '', cr: (m['amount'] as num?)?.toDouble() ?? 0,
+          tone: 'collection');
+      if (m['awaiting'] == true) {
+        addCredit(pending, l);
+      } else {
+        misc.add(l);
+      }
+    }
+    block('Misc. Fee Collection :', misc);
+    block('Not Reconciled :', pending.values.toList()
+      ..sort((a, b) => (a['iso'] as String).compareTo(b['iso'] as String)));
+    return out;
   }
 
   /// "TC ISSUED" on a ledger whose student has left, with the certificate's
@@ -4612,15 +5228,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
     // One row per transaction, oldest first, with a running balance.
     final lines = _ledgerLines();
-    double totDemand = 0, totConcess = 0, totCollection = 0, totRefund = 0, totFine = 0;
-    for (final l in lines) {
-      if (l['kind'] != 'data') continue;
-      totDemand += (l['demand'] as double?) ?? 0;
-      totConcess += (l['concess'] as double?) ?? 0;
-      totCollection += (l['collection'] as double?) ?? 0;
-      totRefund += (l['refund'] as double?) ?? 0;
-      totFine += (l['fine'] as double?) ?? 0;
-    }
+    final tot = _ledgerTotals(lines);
+    final totDemand = tot.demand, totConcess = tot.concess,
+        totCollection = tot.collection, totOther = tot.other,
+        totRefund = tot.refund, totFine = tot.fine;
     // Net Demand is derived, not summed: only Demand rows carry a net, so
     // adding the column would ignore every concession granted later.
     final totNetDemand = totDemand - totConcess;
@@ -4686,6 +5297,17 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   secondary: true,
                 ),
                 SizedBox(width: AppBtn.gap(context)),
+                // School: the old Debit / Credit ledger (what the exports
+                // print) or the detailed register -- the same money either way.
+                if (isSchool) ...[
+                  _miniExportBtn(
+                    onPressed: () => setState(() => _ledgerOldView = !_ledgerOldView),
+                    icon: _ledgerOldView ? Icons.view_list_rounded : Icons.receipt_long_rounded,
+                    label: _ledgerOldView ? 'Detailed View' : 'Debit / Credit',
+                    secondary: true,
+                  ),
+                  SizedBox(width: AppBtn.gap(context)),
+                ],
               ],
               _miniExportBtn(
                 onPressed: _ledgerDemands.isEmpty ? () {} : _exportStudentLedgerExcel,
@@ -4717,11 +5339,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             demand: totDemand,
             concess: totConcess,
             collected: totCollection,
+            other: totOther,
             refund: totRefund,
             balance: totBalance,
           ),
           Expanded(
-            child: _stickyTable(
+            child: isSchool && _ledgerOldView
+                ? _ledgerOldTable()
+                : _stickyTable(
               // Demand rows read amber, collections green, refunds red --
               // a ledger is two opposite kinds of line and the eye should not
               // have to read the TRANSACTION TYPE column to tell them apart.
@@ -4741,8 +5366,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               cellFontSize: 11.5,
               headerFontSize: 10.5,
               cellGap: 12,
-              columnWidths: const [105, 145, 130, 150, 100, 105, 110, 105, 95, 80, 115, 105],
-              headers: const ['DATE', 'TRANSACTION TYPE', 'DETAILS', 'FEE TYPE', 'DEMAND', 'CONCESSION', 'NET DEMAND', 'COLLECTION', 'REFUND', 'FINE', 'DOCUMENT NO', 'BALANCE'],
+              columnWidths: const [105, 200, 150, 190, 100, 105, 110, 105, 120, 95, 80, 115, 105],
+              headers: const ['DATE', 'TRANSACTION TYPE', 'DETAILS', 'FEE TYPE', 'DEMAND', 'CONCESSION', 'NET DEMAND', 'COLLECTION', 'MISC / ADVANCE', 'REFUND', 'FINE', 'DOCUMENT NO', 'BALANCE'],
               rows: [
                 for (final l in lines)
                   [
@@ -4754,6 +5379,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                     _amt(l['concess'] as double?),
                     _amt(l['net'] as double?),
                     _amt(l['collection'] as double?),
+                    _amt(l['other'] as double?),
                     _amt(l['refund'] as double?),
                     _amt(l['fine'] as double?),
                     l['docno'] as String? ?? '',
@@ -4766,12 +5392,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 _formatNumber(totConcess),
                 _formatNumber(totNetDemand),
                 _formatNumber(totCollection),
+                _formatNumber(totOther),
                 _formatNumber(totRefund),
                 _formatNumber(totFine),
                 '',
                 _formatNumber(totBalance),
               ],
-              numericCols: const {4, 5, 6, 7, 8, 9, 11},
+              numericCols: const {4, 5, 6, 7, 8, 9, 10, 12},
             ),
           ),
         ] else if (students.isNotEmpty) ...[
@@ -4828,8 +5455,224 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     );
   }
 
+  /// School: the old Debit / Credit ledger on screen, the same lines the
+  /// exports print. The closing balance is the sticky footer; G Total and the
+  /// advance / misc / not-reconciled blocks are rows, tinted as headings.
+  Widget _ledgerOldTable() {
+    final all = _ledgerOldLines();
+    final closing = all.firstWhere((l) => l['kind'] == 'total' && l['date'] == 'Closing Bal');
+    final lines = [for (final l in all) if (!identical(l, closing)) l];
+    String amt(dynamic v, Map l) =>
+        v == null ? '' : (l['kind'] == 'total' ? _formatNumber(v as double) : _amt(v as double));
+    return _stickyTable(
+      rowTints: [
+        for (final l in lines)
+          switch (l['kind'] == 'line' ? l['tone'] : l['kind']) {
+            'demand' => AppColors.warningBg,
+            'refund' => AppColors.errorBg,
+            'collection' => AppColors.successBg,
+            'total' || 'head' => AppColors.tableHeadBg,
+            _ => null,
+          },
+      ],
+      columnWidths: const [110, 130, 170, 280, 330, 130, 130],
+      headers: const ['DATE', 'DOC NO.', 'TERM', 'FEE TYPE', 'REFERENCE', 'DEBIT (RS.)', 'CREDIT (RS.)'],
+      rows: [
+        for (final l in lines)
+          [
+            l['date'] as String? ?? '',
+            l['doc'] as String? ?? '',
+            l['term'] as String? ?? '',
+            l['fee'] as String? ?? '',
+            l['ref'] as String? ?? '',
+            amt(l['dr'], l),
+            amt(l['cr'], l),
+          ],
+      ],
+      footer: ['Closing Bal', '', '', '', '', amt(closing['dr'], closing), amt(closing['cr'], closing)],
+      numericCols: const {5, 6},
+    );
+  }
+
+  /// Excel cells for the school's old-format Student Ledger: the institution
+  /// block in column C, the title with the signed-in year, Class / Student
+  /// Name / Admission No, then the seven columns from row 8 (as the old
+  /// "Student Ledger.xlsx").
+  Future<void> _exportStudentLedgerOldExcel() async {
+    final excel = xl.Excel.createExcel();
+    final sheet = excel['Student Ledger'];
+    excel.delete('Sheet1');
+    final bold = xl.CellStyle(bold: true, fontSize: 11);
+    final head = xl.CellStyle(
+      bold: true,
+      fontSize: 10,
+      backgroundColorHex: XlTheme.headerBg,
+      fontColorHex: XlTheme.headerFg,
+    );
+    final headNum = xl.CellStyle(
+      bold: true,
+      fontSize: 10,
+      backgroundColorHex: XlTheme.headerBg,
+      fontColorHex: XlTheme.headerFg,
+      horizontalAlign: xl.HorizontalAlign.Right,
+    );
+    final boldNum = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
+    void put(int c, int r, String v, [xl.CellStyle? st]) {
+      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
+      cell.value = xl.TextCellValue(v);
+      if (st != null) cell.cellStyle = st;
+    }
+
+    void putAmount(int c, int r, double? v, [xl.CellStyle? st]) {
+      if (v == null) return;
+      final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
+      // Whole rupees go in as whole numbers, as the old sheet (3500, not 3500.0).
+      cell.value = (v - v.roundToDouble()).abs() < 0.005
+          ? xl.IntCellValue(v.round())
+          : xl.DoubleCellValue(v);
+      if (st != null) cell.cellStyle = st;
+    }
+
+    // Name / address / city, as the other old-format reports split them.
+    final parts = _insAddress.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final city = parts.length > 1 ? parts.removeLast() : '';
+    put(2, 0, _insName.toUpperCase(), bold);
+    if (parts.isNotEmpty) put(2, 1, parts.join(', ').toUpperCase(), bold);
+    if (city.isNotEmpty) put(2, 2, city.toUpperCase(), bold);
+    put(2, 3, 'STUDENT LEDGER - YEAR: $_academicYearLabel', bold);
+    put(1, 4, 'Class        : ${_ledgerStudent?['stuclass'] ?? ''}', bold);
+    put(1, 5, 'Student Name : ${_ledgerStudent?['stuname'] ?? ''}', bold);
+    put(3, 5, 'Admission No : ${_ledgerStudent?['stuadmno'] ?? ''}', bold);
+    // A student who has left: say so, or the balance reads as an ordinary due.
+    if (_ledgerTcText.isNotEmpty) put(1, 6, _ledgerTcText, bold);
+
+    const headers = ['Date', 'Doc No.', 'Term', 'Fee Type', 'Reference', 'Debit (Rs.)', 'Credit (Rs.)'];
+    for (var c = 0; c < headers.length; c++) {
+      put(c, 7, headers[c], c >= 5 ? headNum : head);
+    }
+    var r = 8;
+    for (final l in _ledgerOldLines()) {
+      final strong = l['kind'] != 'line';
+      put(0, r, l['date'] as String? ?? '', strong ? bold : null);
+      put(1, r, l['doc'] as String? ?? '');
+      put(2, r, l['term'] as String? ?? '');
+      put(3, r, l['fee'] as String? ?? '');
+      put(4, r, l['ref'] as String? ?? '');
+      // A line shows only the side it moves; a total shows its figure even
+      // when it is nil.
+      for (final (c, k) in const [(5, 'dr'), (6, 'cr')]) {
+        final v = l[k] as double?;
+        if (v == null || (!strong && v.abs() < 0.005)) continue;
+        putAmount(c, r, v, strong ? boldNum : null);
+      }
+      r++;
+    }
+    const widths = [12.0, 14.0, 16.0, 32.0, 30.0, 12.0, 12.0];
+    for (var c = 0; c < widths.length; c++) {
+      sheet.setColumnWidth(c, widths[c]);
+    }
+    await _saveExcel(excel, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
+  }
+
+  /// PDF of the school's old-format Student Ledger: the same heading lines
+  /// and seven columns as the Excel sheet, totals in bold.
+  Future<void> _exportStudentLedgerOldPdf() async {
+    final lines = _ledgerOldLines();
+    final parts = _insAddress.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final city = parts.length > 1 ? parts.removeLast() : '';
+    const fs = 8.0;
+    const plain = pw.TextStyle(fontSize: fs);
+    final strong = pw.TextStyle(fontSize: fs, fontWeight: pw.FontWeight.bold);
+    pw.Widget cell(String t, pw.TextStyle st, {bool right = false}) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+          child: pw.Text(t, style: st, textAlign: right ? pw.TextAlign.right : pw.TextAlign.left),
+        );
+    String amt(double? v, bool total) =>
+        v == null ? '' : (total ? _formatNumber(v) : _amt(v));
+    const headers = ['Date', 'Doc No.', 'Term', 'Fee Type', 'Reference', 'Debit (Rs.)', 'Credit (Rs.)'];
+    final pdf = pw.Document();
+    pdf.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(20, 18, 20, 18),
+      header: (_) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(_insName.toUpperCase(), style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+          if (parts.isNotEmpty) pw.Text(parts.join(', ').toUpperCase(), style: const pw.TextStyle(fontSize: 9)),
+          if (city.isNotEmpty) pw.Text(city.toUpperCase(), style: const pw.TextStyle(fontSize: 9)),
+          pw.SizedBox(height: 4),
+          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+            pw.Text('STUDENT LEDGER - YEAR: $_academicYearLabel',
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+            pw.Text('Date: ${_formatDate(DateTime.now())}', style: const pw.TextStyle(fontSize: 9)),
+          ]),
+          pw.SizedBox(height: 4),
+          pw.Text('Class : ${_ledgerStudent?['stuclass'] ?? ''}', style: const pw.TextStyle(fontSize: 9)),
+          pw.Row(children: [
+            pw.Expanded(
+                child: pw.Text('Student Name : ${_ledgerStudent?['stuname'] ?? ''}',
+                    style: const pw.TextStyle(fontSize: 9))),
+            pw.Text('Admission No : ${_ledgerStudent?['stuadmno'] ?? ''}',
+                style: const pw.TextStyle(fontSize: 9)),
+          ]),
+          if (_ledgerTcText.isNotEmpty)
+            pw.Text(_ledgerTcText, style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+        ],
+      ),
+      footer: (ctx) => pw.Align(
+        alignment: pw.Alignment.centerRight,
+        child: pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
+            style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+      ),
+      build: (_) => [
+        pw.Table(
+          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.25),
+            1: pw.FlexColumnWidth(1.4),
+            2: pw.FlexColumnWidth(1.4),
+            3: pw.FlexColumnWidth(2.6),
+            4: pw.FlexColumnWidth(2.6),
+            5: pw.FlexColumnWidth(1.2),
+            6: pw.FlexColumnWidth(1.2),
+          },
+          children: [
+            pw.TableRow(
+              repeat: true,
+              decoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
+              children: [
+                for (var c = 0; c < headers.length; c++)
+                  cell(headers[c],
+                      pw.TextStyle(fontSize: fs, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+                      right: c >= 5),
+              ],
+            ),
+            for (final l in lines)
+              () {
+                final total = l['kind'] != 'line';
+                final st = total ? strong : plain;
+                return pw.TableRow(children: [
+                  cell(l['date'] as String? ?? '', st),
+                  cell(l['doc'] as String? ?? '', plain),
+                  cell(l['term'] as String? ?? '', plain),
+                  cell(l['fee'] as String? ?? '', plain),
+                  cell(l['ref'] as String? ?? '', plain),
+                  cell(amt(l['dr'] as double?, total), st, right: true),
+                  cell(amt(l['cr'] as double?, total), st, right: true),
+                ]);
+              }(),
+          ],
+        ),
+      ],
+    ));
+    await _savePdf(pdf, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
+  }
+
   Future<void> _exportStudentLedgerExcel() async {
     try {
+      // The school prints the old product's Debit / Credit ledger.
+      if (isSchool) return await _exportStudentLedgerOldExcel();
       final excel = xl.Excel.createExcel();
       final sheet = excel['Student Ledger'];
       excel.delete('Sheet1');
@@ -4869,7 +5712,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       }
       row++;
 
-      final headers = ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Document No', 'Balance'];
+      final headers = ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Misc / Advance', 'Refund', 'Fine', 'Document No', 'Balance'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).cellStyle = headerStyle;
@@ -4877,7 +5720,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       row++;
 
       final lines = _ledgerLines();
-      double totDemand = 0, totConcess = 0, totCollection = 0, totRefund = 0, totFine = 0;
+      final tot = _ledgerTotals(lines);
 
       void put(int col, double? v) {
         if (v == null || v.abs() < 0.005) return;
@@ -4886,50 +5729,41 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       }
 
       for (final l in lines) {
-        final demand = l['demand'] as double?;
-        final conc = l['concess'] as double?;
-        final collection = l['collection'] as double?;
-        final refund = l['refund'] as double?;
-        final fine = l['fine'] as double?;
-        totDemand += demand ?? 0;
-        totConcess += conc ?? 0;
-        totCollection += collection ?? 0;
-        totRefund += refund ?? 0;
-        totFine += fine ?? 0;
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue(l['date'] as String? ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value = xl.TextCellValue(l['type'] as String? ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(l['details'] as String? ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(l['feetype'] as String? ?? '');
-        put(4, demand);
-        put(5, conc);
+        put(4, l['demand'] as double?);
+        put(5, l['concess'] as double?);
         put(6, l['net'] as double?);
-        put(7, collection);
-        put(8, refund);
-        put(9, fine);
-        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: row)).value = xl.TextCellValue(l['docno'] as String? ?? '');
-        put(11, l['balance'] as double?);
+        put(7, l['collection'] as double?);
+        put(8, l['other'] as double?);
+        put(9, l['refund'] as double?);
+        put(10, l['fine'] as double?);
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: row)).value = xl.TextCellValue(l['docno'] as String? ?? '');
+        put(12, l['balance'] as double?);
         row++;
       }
 
       // Net Demand is derived and Balance is the closing figure — neither is a
       // sum of its column.
-      final totNetDemand = totDemand - totConcess;
+      final totNetDemand = tot.demand - tot.concess;
       final totBalance = lines.isEmpty ? 0.0 : ((lines.last['balance'] as double?) ?? 0);
 
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value = xl.TextCellValue('Total');
       sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).cellStyle = boldStyle;
-      for (final e in <int, double>{4: totDemand, 5: totConcess, 6: totNetDemand,
-                                    7: totCollection, 8: totRefund, 9: totFine,
-                                    11: totBalance}.entries) {
+      for (final e in <int, double>{4: tot.demand, 5: tot.concess, 6: totNetDemand,
+                                    7: tot.collection, 8: tot.other, 9: tot.refund,
+                                    10: tot.fine, 12: totBalance}.entries) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: e.key, rowIndex: row)).value = xl.DoubleCellValue(e.value);
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: e.key, rowIndex: row)).cellStyle = totalStyle;
       }
 
       sheet.setColumnWidth(0, 12);
-      sheet.setColumnWidth(1, 20);
-      sheet.setColumnWidth(2, 16);
-      sheet.setColumnWidth(3, 22);
-      for (int c = 4; c < 12; c++) sheet.setColumnWidth(c, 13);
+      sheet.setColumnWidth(1, 30);
+      sheet.setColumnWidth(2, 18);
+      sheet.setColumnWidth(3, 28);
+      for (int c = 4; c < 13; c++) sheet.setColumnWidth(c, 13);
 
       await _saveExcel(excel, 'Student_Ledger_${_ledgerStudent?['stuadmno'] ?? ''}');
     } catch (e) {
@@ -4939,37 +5773,30 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
   Future<void> _exportStudentLedgerPdf() async {
     try {
+      if (isSchool) return await _exportStudentLedgerOldPdf();
       final pdf = pw.Document();
       final lines = _ledgerLines();
-      double totDemand = 0, totConcess = 0, totCollection = 0, totRefund = 0, totFine = 0;
+      final tot = _ledgerTotals(lines);
       final rows = <List<String>>[];
       for (final l in lines) {
-        final demand = l['demand'] as double?;
-        final conc = l['concess'] as double?;
-        final collection = l['collection'] as double?;
-        final refund = l['refund'] as double?;
-        final fine = l['fine'] as double?;
-        totDemand += demand ?? 0;
-        totConcess += conc ?? 0;
-        totCollection += collection ?? 0;
-        totRefund += refund ?? 0;
-        totFine += fine ?? 0;
         rows.add([
           l['date'] as String? ?? '',
           l['type'] as String? ?? '',
           l['details'] as String? ?? '',
           l['feetype'] as String? ?? '',
-          _amt(demand), _amt(conc), _amt(l['net'] as double?),
-          _amt(collection), _amt(refund), _amt(fine),
+          _amt(l['demand'] as double?), _amt(l['concess'] as double?), _amt(l['net'] as double?),
+          _amt(l['collection'] as double?), _amt(l['other'] as double?),
+          _amt(l['refund'] as double?), _amt(l['fine'] as double?),
           l['docno'] as String? ?? '',
           _formatNumber((l['balance'] as double?) ?? 0),
         ]);
       }
-      final totNetDemand = totDemand - totConcess;
+      final totNetDemand = tot.demand - tot.concess;
       final totBalance = lines.isEmpty ? 0.0 : ((lines.last['balance'] as double?) ?? 0);
       rows.add(['Total', '', '', '',
-        _formatNumber(totDemand), _formatNumber(totConcess), _formatNumber(totNetDemand),
-        _formatNumber(totCollection), _formatNumber(totRefund), _formatNumber(totFine),
+        _formatNumber(tot.demand), _formatNumber(tot.concess), _formatNumber(totNetDemand),
+        _formatNumber(tot.collection), _formatNumber(tot.other),
+        _formatNumber(tot.refund), _formatNumber(tot.fine),
         '', _formatNumber(totBalance)]);
 
       pdf.addPage(pw.MultiPage(
@@ -4997,12 +5824,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ),
         build: (ctx) => [
           pw.Table.fromTextArray(
-            headers: ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Refund', 'Fine', 'Document No', 'Balance'],
+            headers: ['Date', 'Transaction Type', 'Details', 'Fee Type', 'Demand', 'Concession', 'Net Demand', 'Collection', 'Misc / Advance', 'Refund', 'Fine', 'Document No', 'Balance'],
             data: rows,
             headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
             cellStyle: const pw.TextStyle(fontSize: 7.5),
-            cellAlignments: {for (int i = 4; i < 10; i++) i: pw.Alignment.centerRight, 11: pw.Alignment.centerRight},
+            cellAlignments: {for (int i = 4; i < 11; i++) i: pw.Alignment.centerRight, 12: pw.Alignment.centerRight},
             border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
           ),
         ],
@@ -5238,7 +6065,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                           // A cancelled receipt is LISTED for audit but shows no
                           // paid amount — blank every money column. (Refunds are
                           // never here — they're in the separate Refunds section.)
-                          final cancelled = (r['type']?.toString() ?? '') == 'Cancelled';
+                          final cancelled = const {'Cancelled', 'Bounced'}.contains(r['type']?.toString() ?? '');
                           final typeText = r['type']?.toString() ?? 'Regular';
                           return <String>[
                             pd != null ? _formatDate(pd) : (r['paydate']?.toString() ?? ''),
@@ -5323,10 +6150,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 SizedBox(
                   height: 190.h,
                   child: _stickyTable(
-                    columnWidths: const [110, 130, 130, 200, 150, 140, 130, 100, 130],
+                    columnWidths: const [110, 130, 130, 200, 150, 140, 175, 130, 100, 130],
                     headers: [
                       'DATE', 'RECEIPT NO', schoolTerm('REGISTER NO'), 'STUDENT NAME', schoolTerm('CLASS'),
-                      schoolTerm('SEMESTER'), 'MODE', 'FINE', 'TOTAL',
+                      schoolTerm('SEMESTER'), 'TYPE', 'MODE', 'FINE', 'TOTAL',
                     ],
                     rows: [
                       for (final r in unrecRows)
@@ -5340,6 +6167,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                             r['stuname']?.toString() ?? '',
                             r['stuclass']?.toString() ?? '',
                             r['semester']?.toString() ?? '',
+                            r['type']?.toString() ?? 'Regular',
                             r['paymethod']?.toString() ?? '',
                             fine != 0 ? _formatNumber(fine) : '',
                             _formatNumber(rowDisplayTotal(r)),
@@ -5347,11 +6175,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                         }(),
                     ],
                     footer: <String>[
-                      'TOTAL', '', '', '', '', '', '',
+                      'TOTAL', '', '', '', '', '', '', '',
                       _formatNumber(unrecFine),
                       _formatNumber(unrecTotal),
                     ],
-                    numericCols: const {7, 8},
+                    numericCols: const {8, 9},
                   ),
                 ),
               ],
@@ -5802,14 +6630,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       final darkHeader = xl.CellStyle(
         bold: true, fontSize: 14,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#1E2532'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
         horizontalAlign: xl.HorizontalAlign.Center,
       );
       final subHeader = xl.CellStyle(bold: true, fontSize: 11);
       final colHeader = xl.CellStyle(
         bold: true, fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final totalStyle = xl.CellStyle(bold: true, fontSize: 11);
@@ -5942,14 +6770,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       final darkHeader = xl.CellStyle(
         bold: true, fontSize: 14,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#1E2532'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
         horizontalAlign: xl.HorizontalAlign.Center,
       );
       final subHeader = xl.CellStyle(bold: true, fontSize: 11);
       final colHeader = xl.CellStyle(
         bold: true, fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final totalStyle = xl.CellStyle(bold: true, fontSize: 11);
@@ -6094,7 +6922,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final boldStyle = xl.CellStyle(bold: true, fontSize: 11);
       final headerStyle = xl.CellStyle(
         bold: true, fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final numStyle = xl.CellStyle(fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
@@ -6107,9 +6935,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final showCheque = false;
       final showBank = _selectedMode == null || _selectedMode == 'bank';
       final modeCols = (showCash ? 1 : 0) + (showCheque ? 1 : 0) + (showBank ? 1 : 0);
-      // 5 text columns now (Course removed): Receipt No, Reg No, Name, Class,
-      // Semester -- then the fee types, fine, total, mode columns and net.
-      final totalCols = 5 + feeTypes.length + 2 + modeCols + 2; // + Adjusted, Net
+      // 6 text columns (Course removed): Receipt No, Reg No, Name, Class,
+      // Semester, Type -- then the fee types, fine, total, mode columns and net.
+      final totalCols = 6 + feeTypes.length + 2 + modeCols + 2; // + Adjusted, Net
 
       int row = 0;
       void merged(String text, xl.CellStyle style) {
@@ -6136,7 +6964,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (showCheque) 'Cheque',
         if (showBank) 'Bank',
       ];
-      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'), schoolTerm('Semester'),
+      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'), schoolTerm('Semester'), 'Type',
         ...feeTypes.map(_feeHdr), 'Fine', 'Total', ...modeHeaders, 'Adjusted', 'Net Amount'];
       for (int c = 0; c < headers.length; c++) {
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: row)).value = xl.TextCellValue(headers[c]);
@@ -6153,9 +6981,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       double totalAdj = 0;
       double totalNet = 0;
 
-      final fineCol = 5 + feeTypes.length;
-      final totalCol = 6 + feeTypes.length;
-      int cursor = 7 + feeTypes.length;
+      final fineCol = 6 + feeTypes.length;
+      final totalCol = 7 + feeTypes.length;
+      int cursor = 8 + feeTypes.length;
       final cashCol = showCash ? cursor++ : -1;
       final chequeCol = showCheque ? cursor++ : -1;
       final bankCol = showBank ? cursor++ : -1;
@@ -6186,11 +7014,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Styles for the per-date header + subtotal rows.
       final dateHeaderStyle = xl.CellStyle(
         bold: true, fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#CBD5E1'),
+        backgroundColorHex: XlTheme.groupBg,
       );
       final subtotalStyle = xl.CellStyle(
         bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#EDF2F7'),
+        backgroundColorHex: XlTheme.totalBg,
       );
 
       // Collection date of a receipt, as a sortable yyyy-MM-dd key.
@@ -6222,7 +7050,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         // refunded receipt carries a NEGATIVE amount so it nets out of the day's
         // total; its refund also accumulates into the grand-total breakdown.
         // Only collections reach here (refunds are handled in their own section).
-        final cancelled = (r['type']?.toString() ?? '') == 'Cancelled';
+        final cancelled = const {'Cancelled', 'Bounced'}.contains(r['type']?.toString() ?? '');
         final total = cancelled ? 0.0 : exportRowTotal(r);
         final bucket = _paymentBucket(r['paymethod']?.toString() ?? '');
         final adj = cancelled ? 0.0 : exportRowAdj(r);
@@ -6241,14 +7069,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuclass']?.toString() ?? '');
         sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(cancelled ? 'CANCELLED' : (r['semester']?.toString() ?? ''));
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['type']?.toString() ?? 'Regular');
         if (!cancelled) {
           for (int c = 0; c < feeTypes.length; c++) {
             final v = fees[feeTypes[c]] ?? 0;
             ftAcc[feeTypes[c]] = (ftAcc[feeTypes[c]] ?? 0) + v;
             ftTotals[feeTypes[c]] = (ftTotals[feeTypes[c]] ?? 0) + v;
             if (v > 0) {
-              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
-              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).cellStyle = numStyle;
+              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
+              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).cellStyle = numStyle;
             }
           }
           if (fine > 0) {
@@ -6285,8 +7114,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         for (int c = 0; c < feeTypes.length; c++) {
           final v = ftAcc[feeTypes[c]] ?? 0;
           if (v > 0) {
-            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
-            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).cellStyle = subtotalStyle;
+            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
+            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).cellStyle = subtotalStyle;
           }
         }
         if (acc[1] > 0) {
@@ -6338,8 +7167,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       for (int c = 0; c < feeTypes.length; c++) {
         final v = ftTotals[feeTypes[c]] ?? 0;
         if (v > 0) {
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
-          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).cellStyle = totalStyle;
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).cellStyle = totalStyle;
         }
       }
       if (totalFine > 0) {
@@ -6401,11 +7230,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value = xl.TextCellValue(r['stuname']?.toString() ?? '');
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value = xl.TextCellValue(r['stuclass']?.toString() ?? '');
           sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value = xl.TextCellValue(r['semester']?.toString() ?? '');
+          sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value = xl.TextCellValue(r['type']?.toString() ?? 'Regular');
           for (int c = 0; c < feeTypes.length; c++) {
             final v = fees[feeTypes[c]] ?? 0;
             if (v != 0) {
-              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
-              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5 + c, rowIndex: row)).cellStyle = numStyle;
+              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).value = xl.DoubleCellValue(v);
+              sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6 + c, rowIndex: row)).cellStyle = numStyle;
             }
           }
           if (fine != 0) {
@@ -6497,8 +7327,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       sheet.setColumnWidth(2, 24); // Student Name
       sheet.setColumnWidth(3, 12); // Class
       sheet.setColumnWidth(4, 14); // Semester
+      sheet.setColumnWidth(5, 18); // Type
       for (int c = 0; c < feeTypes.length; c++) {
-        sheet.setColumnWidth(5 + c, 12);
+        sheet.setColumnWidth(6 + c, 12);
       }
       sheet.setColumnWidth(fineCol, 8);
       sheet.setColumnWidth(totalCol, 10);
@@ -6536,8 +7367,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         SupabaseService.fromSchema('feetype').select('fee_id, feedesc, fg_id, type').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.fromSchema('feegroup').select('fg_id, fgdesc').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.fetchAll(() => SupabaseService.fromSchema('payment')
-            .select('stu_id, paynumber, paydate')
-            .eq('ins_id', insId).eq('paystatus', 'C').eq('recon_status', 'R').eq('activestatus', 1)),
+            .select('pay_id, stu_id, paynumber, paydate')
+            // 'R' = later refunded: still the student's receipt
+            .eq('ins_id', insId).inFilter('paystatus', ['C', 'R']).eq('recon_status', 'R').eq('activestatus', 1)),
         SupabaseService.getClassOrder(insId),
       ]);
       final students = results[0] as List;
@@ -6581,9 +7413,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final sid = (p['stu_id'] as num?)?.toInt();
         if (sid == null) continue;
         final pd = p['paydate']?.toString() ?? '';
+        final pid = (p['pay_id'] as num?)?.toInt() ?? 0;
         final ex = receipts[sid];
-        if (ex == null || pd.compareTo(ex['paydate'] as String) > 0) {
-          receipts[sid] = {'paynumber': p['paynumber']?.toString() ?? '', 'paydate': pd};
+        // Same date: the higher pay_id is the later receipt.
+        final c = ex == null ? 1 : pd.compareTo(ex['paydate'] as String);
+        if (c > 0 || (c == 0 && pid > (ex!['pay_id'] as int))) {
+          receipts[sid] = {'paynumber': p['paynumber']?.toString() ?? '', 'paydate': pd, 'pay_id': pid};
         }
       }
 
@@ -6654,7 +7489,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   /// Flattened DCB display rows for [course]. Each map has 'kind':
-  /// 'data' | 'subtotal' | 'grand'. Data rows are one per (student, term);
+  /// 'data' | 'split' | 'subtotal' | 'grand'. Data rows are one per (student,
+  /// Regular/Arrear, year, term); 'split' is a Regular or Arrear line before a total;
   /// Sl No / Name / Receipt appear only on a student's first row.
   List<Map<String, dynamic>> _dcbRows(String course) {
     final groups = <String, Map<String, dynamic>>{};
@@ -6679,13 +7515,23 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (!_dcbAdmnTypes.contains(at)) continue;
       }
       final term = d['demfeeterm']?.toString() ?? '';
-      final key = '$admno$term';
-      final fee = (d['feeamount'] as num?)?.toDouble() ?? 0;
+      // An ARREAR demand carries the same term as this year's, so the key has
+      // to include REGULAR / ARREAR and the year or the two merge into one row.
+      final arrear =
+          (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+      final year = d['demfeeyear']?.toString().trim() ?? '';
+      final key = '$admno|${arrear ? 'ARREAR' : 'REGULAR'}|$year|$term';
+      // Net of concession, so Demand = Collection + Balance (reconbalancedue
+      // is already net of concession).
+      final fee = ((d['feeamount'] as num?)?.toDouble() ?? 0) -
+          ((d['conamount'] as num?)?.toDouble() ?? 0);
       final recBal = (d['reconbalancedue'] as num?)?.toDouble() ?? 0;
       final transport = _isTransportDemand(d);
       final g = groups.putIfAbsent(key, () => {
         'admno': admno,
         'term': term,
+        'arrear': arrear,
+        'year': year,
         'stuId': (d['stu_id'] as num?)?.toInt(),
         'name': d['stuname']?.toString() ?? (_stuInfo[admno]?['stuname'] as String? ?? ''),
         'cls': d['stuclass']?.toString() ?? '',
@@ -6705,6 +7551,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
     for (final list in byStudent.values) {
       list.sort((a, b) {
+        // Arrears (older years) first, then this year's terms.
+        final ar = (a['arrear'] as bool ? 0 : 1).compareTo(b['arrear'] as bool ? 0 : 1);
+        if (ar != 0) return ar;
+        final y = (a['year'] as String).compareTo(b['year'] as String);
+        if (y != 0) return y;
         final r = _dcbTermRank(a['term'] as String).compareTo(_dcbTermRank(b['term'] as String));
         return r != 0 ? r : (a['term'] as String).compareTo(b['term'] as String);
       });
@@ -6724,13 +7575,16 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final rows = <Map<String, dynamic>>[];
     int sl = 0;
     String? curClass;
-    double sCol = 0, sTra = 0, sDem = 0, sColl = 0, sBal = 0;
-    double gCol = 0, gTra = 0, gDem = 0, gColl = 0, gBal = 0;
+    // [college, transport, demand, collection, balance], Regular and Arrear
+    // kept apart so each total can show its split.
+    var sReg = List<double>.filled(5, 0), sArr = List<double>.filled(5, 0);
+    final gReg = List<double>.filled(5, 0), gArr = List<double>.filled(5, 0);
 
     void flushSubtotal() {
       if (curClass == null) return;
-      rows.add({'kind': 'subtotal', 'college': sCol, 'transport': sTra, 'demand': sDem, 'collection': sColl, 'balance': sBal});
-      sCol = sTra = sDem = sColl = sBal = 0;
+      _dcbAddTotal(rows, 'subtotal', sReg, sArr);
+      sReg = List<double>.filled(5, 0);
+      sArr = List<double>.filled(5, 0);
     }
 
     for (final admno in students) {
@@ -6749,8 +7603,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final demand = college + transport;
         final balance = t['balance'] as double;
         final collection = demand - balance;
-        sCol += college; sTra += transport; sDem += demand; sColl += collection; sBal += balance;
-        gCol += college; gTra += transport; gDem += demand; gColl += collection; gBal += balance;
+        final arrear = t['arrear'] as bool;
+        final vals = [college, transport, demand, collection, balance];
+        for (var k = 0; k < 5; k++) {
+          (arrear ? sArr : sReg)[k] += vals[k];
+          (arrear ? gArr : gReg)[k] += vals[k];
+        }
+        final year = t['year'] as String;
         rows.add({
           'kind': 'data',
           'slno': i == 0 ? '$sl' : '',
@@ -6758,7 +7617,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           'admno': i == 0 ? admno : '',
           'cls': cls,
           'batch': info['batch'] ?? '',
-          'sem': t['term'],
+          'sem': arrear
+              ? '${t['term']} (Arrear${year.isEmpty ? '' : ' $year'})'
+              : t['term'],
           'college': college,
           'transport': transport,
           'demand': demand,
@@ -6773,8 +7634,29 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       }
     }
     flushSubtotal();
-    rows.add({'kind': 'grand', 'college': gCol, 'transport': gTra, 'demand': gDem, 'collection': gColl, 'balance': gBal});
+    _dcbAddTotal(rows, 'grand', gReg, gArr);
     return rows;
+  }
+
+  /// Adds a DCB total row of [kind]. When any arrear is in it, a Regular and an
+  /// Arrear line ('split' rows) go first so the total can be read both ways.
+  void _dcbAddTotal(List<Map<String, dynamic>> rows, String kind,
+      List<double> reg, List<double> arr) {
+    Map<String, dynamic> row(String k, List<double> a, [String? label]) => {
+          'kind': k,
+          if (label != null) 'label': label,
+          'college': a[0], 'transport': a[1], 'demand': a[2],
+          'collection': a[3], 'balance': a[4],
+        };
+    if (arr.any((v) => v.abs() > 0.004)) {
+      rows.add(row('split', reg, 'Regular'));
+      rows.add(row('split', arr, 'Arrear'));
+    }
+    rows.add({
+      ...row(kind, [for (var k = 0; k < 5; k++) reg[k] + arr[k]]),
+      // Carried so the all-courses total can split too.
+      'reg': reg, 'arr': arr,
+    });
   }
 
   /// Combined DCB rows for every course (used when no course is selected).
@@ -6782,24 +7664,24 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   /// in a per-course 'grand' total), followed by a final 'overall' total.
   List<Map<String, dynamic>> _dcbAllCoursesRows() {
     final rows = <Map<String, dynamic>>[];
-    double oCol = 0, oTra = 0, oDem = 0, oColl = 0, oBal = 0;
+    final oReg = List<double>.filled(5, 0), oArr = List<double>.filled(5, 0);
     for (final course in _courses) {
       final cr = _dcbRows(course);
       if (cr.isEmpty) continue;
       rows.add({'kind': 'courseheader', 'course': course});
       for (final r in cr) {
         if (r['kind'] == 'grand') {
-          oCol += r['college'] as double;
-          oTra += r['transport'] as double;
-          oDem += r['demand'] as double;
-          oColl += r['collection'] as double;
-          oBal += r['balance'] as double;
+          final reg = r['reg'] as List<double>, arr = r['arr'] as List<double>;
+          for (var k = 0; k < 5; k++) {
+            oReg[k] += reg[k];
+            oArr[k] += arr[k];
+          }
         }
         rows.add(r);
       }
     }
     if (rows.isEmpty) return [];
-    rows.add({'kind': 'overall', 'college': oCol, 'transport': oTra, 'demand': oDem, 'collection': oColl, 'balance': oBal});
+    _dcbAddTotal(rows, 'overall', oReg, oArr);
     return rows;
   }
 
@@ -7441,8 +8323,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   Widget _dcbTable(List<Map<String, dynamic>> rows) {
-    const base = <double>[56, 200, 92, 84, 84, 92, 100, 92, 100, 92, 110, 130, 140];
-    final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
+    // SEMESTER/Term is wide enough for "TERM 1 (Arrear 2025-2026)" on two lines.
+    const base = <double>[56, 200, 92, 84, 140, 92, 100, 92, 100, 92, 110, 130, 140];
+    final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'NET DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
     const numCols = {5, 6, 7, 8, 9};
     // A school has no batch, quota or admission type: those columns are
     // skipped. Indexes stay the college's, so every lookup below is unchanged.
@@ -7465,14 +8348,16 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           child: Text(r['course'] as String, style: AppUI.label.copyWith(fontWeight: FontWeight.w800, color: AppColors.primary)),
         );
       }
-      if (kind == 'subtotal' || kind == 'grand' || kind == 'overall') {
+      if (kind == 'subtotal' || kind == 'grand' || kind == 'overall' || kind == 'split') {
         final isGrand = kind == 'grand';
         final isOverall = kind == 'overall';
-        final style = AppUI.money.copyWith(fontWeight: FontWeight.w800, color: (isGrand || isOverall) ? AppColors.primary : AppColors.textPrimary);
+        // Regular / Arrear lines that precede a total.
+        final isSplit = kind == 'split';
+        final style = AppUI.money.copyWith(fontWeight: isSplit ? FontWeight.w600 : FontWeight.w800, color: (isGrand || isOverall) ? AppColors.primary : AppColors.textPrimary);
         String n(String k) => _formatNumber((r[k] as double?) ?? 0);
-        final vals = ['', isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal', '', '', '', n('college'), n('transport'), n('demand'), n('collection'), n('balance'), '', '', ''];
+        final vals = ['', isSplit ? (r['label'] as String? ?? '') : isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal', '', '', '', n('college'), n('transport'), n('demand'), n('collection'), n('balance'), '', '', ''];
         return Container(
-          color: isOverall ? AppColors.primaryLight : isGrand ? AppColors.infoBg : AppColors.tableHeadBg,
+          color: isSplit ? AppColors.surface : isOverall ? AppColors.primaryLight : isGrand ? AppColors.infoBg : AppColors.tableHeadBg,
           child: Row(children: [
             for (final i in cols)
               Container(width: widths[i], padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 9.h), alignment: numCols.contains(i) ? Alignment.centerRight : Alignment.centerLeft, child: Text(vals[i], style: style, overflow: TextOverflow.ellipsis)),
@@ -7548,7 +8433,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         if (style != null) cell.cellStyle = style;
       }
       final titleStyle = xl.CellStyle(bold: true, fontSize: 12, horizontalAlign: xl.HorizontalAlign.Center);
-      final headStyle = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'), fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'));
+      final headStyle = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: XlTheme.headerBg, fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'));
       final boldNum = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);
       final boldTxt = xl.CellStyle(bold: true, fontSize: 10);
 
@@ -7558,7 +8443,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       put(r, 1, 'DCB Register for $course', style: titleStyle);
       put(r, 8, 'Date: ${_formatDate(DateTime.now())}');
       r += 2;
-      final headers = [AppText.serialNo, 'Name & Register No', 'Class', 'Batch', 'Semester', isSchool ? 'School Demand' : 'College Demand', 'Transport Demand', 'Demand', 'Collection', 'Balance', 'Quota', 'Admission Type', 'Receipt No & Date'];
+      final headers = [AppText.serialNo, 'Name & Register No', 'Class', 'Batch', 'Semester', isSchool ? 'School Demand' : 'College Demand', 'Transport Demand', 'Net Demand', 'Collection', 'Balance', 'Quota', 'Admission Type', 'Receipt No & Date'];
       // A school has no batch, quota or admission type: those columns are left
       // out and the ones after them close up. putC() writes by college column.
       final hidden = isSchool ? const {3, 10, 11} : const <int>{};
@@ -7590,7 +8475,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         } else {
           final isOverall = kind == 'overall';
           final isGrand = kind == 'grand';
-          put(r, (isGrand || isOverall) ? 0 : 1, isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal', style: boldTxt);
+          final lbl = kind == 'split'
+              ? (row['label']?.toString() ?? '')
+              : isOverall ? 'OVERALL' : isGrand ? 'Grand Total' : 'Subtotal';
+          put(r, (isGrand || isOverall) ? 0 : 1, lbl, style: boldTxt);
           putC(r, 5, row['college'], style: boldNum);
           putC(r, 6, row['transport'], style: boldNum);
           putC(r, 7, row['demand'], style: boldNum);
@@ -7611,7 +8499,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _exportDcbPdf(String course, List<Map<String, dynamic>> rows) async {
     setState(() => _dcbExporting = true);
     try {
-      final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
+      final headers = ['S. NO.', 'NAME & REGISTER NO', 'CLASS', 'BATCH', 'SEMESTER', isSchool ? 'SCHOOL' : 'COLLEGE', 'TRANSPORT', 'NET DEMAND', 'COLLECTION', 'BALANCE', 'QUOTA', 'ADMISSION TYPE', 'RECEIPT'];
       // A school has no batch, quota or admission type: those columns are left
       // out of the printed table (and the figures after them close up).
       final hidden = isSchool ? const {3, 10, 11} : const <int>{};
@@ -7632,7 +8520,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         } else if (kind == 'courseheader') {
           data.add(vis([row['course']?.toString() ?? '', '', '', '', '', '', '', '', '', '', '', '', '']));
         } else {
-          final lbl = kind == 'overall' ? 'OVERALL' : kind == 'grand' ? 'Grand Total' : 'Subtotal';
+          final lbl = kind == 'split'
+              ? (row['label']?.toString() ?? '')
+              : kind == 'overall' ? 'OVERALL' : kind == 'grand' ? 'Grand Total' : 'Subtotal';
           data.add(vis(['', lbl, '', '', '', n(row['college']), n(row['transport']), n(row['demand']), n(row['collection']), n(row['balance']), '', '', '']));
         }
       }
@@ -7733,14 +8623,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         // Counted before the skip below: a receipt settled ENTIRELY from an
         // advance adds nothing to the day's collection but everything to this
         // column, and it is exactly the row a cashier goes looking for.
-        if (type != 'Cancelled' && type != 'Refunded') {
+        if (type != 'Cancelled' && type != 'Bounced' && type != 'Refunded') {
           totalAdj += (r['adjusted'] as num?)?.toDouble() ?? 0;
         }
         // A cancelled receipt took no money and is listed for audit only. An
         // advance-adjusted one DOES belong in the fee-type columns and in
         // Total -- it settled those fees -- and drops out of the money columns
         // on its own, because its Net is Total less the whole adjustment.
-        if (type == 'Cancelled') continue;
+        if (type == 'Cancelled' || type == 'Bounced') continue;
         final bucket = _paymentBucket(r['paymethod']?.toString() ?? '');
         // Refunds are a SEPARATE section (below) — not collections. Tally them
         // by mode but keep them out of the collected totals.
@@ -7783,7 +8673,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // too -- it prints in the same table.
       final showFine = totalFine.abs() > 0.0001 ||
           unrecRows.any((r) => ((r['fine'] as num?)?.toDouble() ?? 0) != 0);
-      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'),
+      final headers = ['Receipt No', schoolTerm('Register No'), 'Student Name', schoolTerm('Class'), 'Type',
         ...shownFeeTypes.map(_feeHdr), if (showFine) 'Fine', 'Total', ...modeHeaders,
         'Adjusted', 'Net Amount'];
       final rows = <List<String>>[];
@@ -7795,7 +8685,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final bucket = _paymentBucket(r['paymethod']?.toString() ?? '');
         // Cancelled receipt — listed for audit with no paid amount: 'CANCELLED'
         // in the Total column, every other money cell blank.
-        final cancelled = (r['type']?.toString() ?? '') == 'Cancelled';
+        final cancelled = const {'Cancelled', 'Bounced'}.contains(r['type']?.toString() ?? '');
         final total = cancelled ? 0.0 : pdfRowTotal(r);
         final adj = cancelled ? 0.0 : pdfRowAdj(r);
         final money = cancelled ? 0.0 : pdfRowNet(r);
@@ -7804,6 +8694,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           r['stuadmno']?.toString() ?? '',
           r['stuname']?.toString() ?? '',
           r['stuclass']?.toString() ?? '',
+          r['type']?.toString() ?? 'Regular',
           ...shownFeeTypes.map((ft) => (!cancelled && (fees[ft] ?? 0) > 0) ? _formatNumber(fees[ft]!) : ''),
           if (showFine) ((!cancelled && fine > 0) ? _formatNumber(fine) : ''),
           cancelled ? 'CANCELLED' : _formatNumber(total),
@@ -7815,7 +8706,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         ]);
       }
       rows.add([
-        'TOTAL', '', '', '',
+        'TOTAL', '', '', '', '',
         ...shownFeeTypes.map((ft) => _formatNumber(ftTotals[ft] ?? 0)),
         if (showFine) (totalFine > 0 ? _formatNumber(totalFine) : ''),
         _formatNumber(totalAmt),
@@ -7840,7 +8731,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               '',
               '',
             ];
-        rows.add(['UNRECONCILED (NOT YET MATCHED TO A BANK STATEMENT)', '', '', '', ...uBlankTail()]);
+        rows.add(['UNRECONCILED (NOT YET MATCHED TO A BANK STATEMENT)', '', '', '', '', ...uBlankTail()]);
         double uTotal = 0, uFine = 0, uCash = 0, uCheque = 0, uBank = 0;
         double uAdj = 0, uNet = 0;
         for (final r in unrecRows) {
@@ -7862,6 +8753,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             r['stuadmno']?.toString() ?? '',
             r['stuname']?.toString() ?? '',
             r['stuclass']?.toString() ?? '',
+            r['type']?.toString() ?? 'Regular',
             ...shownFeeTypes.map((ft) => (fees[ft] ?? 0) > 0 ? _formatNumber(fees[ft]!) : ''),
             if (showFine) (fine > 0 ? _formatNumber(fine) : ''),
             _formatNumber(total),
@@ -7873,7 +8765,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ]);
         }
         rows.add([
-          'TOTAL UNRECONCILED', '', '', '',
+          'TOTAL UNRECONCILED', '', '', '', '',
           ...shownFeeTypes.map((_) => ''),
           if (showFine) (uFine > 0 ? _formatNumber(uFine) : ''),
           _formatNumber(uTotal),
@@ -7898,7 +8790,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               '',
               '',
             ];
-        rows.add(['REFUNDS (THIS PERIOD)', '', '', '', ...blankTail()]);
+        rows.add(['REFUNDS (THIS PERIOD)', '', '', '', '', ...blankTail()]);
         for (final r in refundList) {
           final a = (r['refund'] as num?)?.toDouble() ?? 0;
           final bucket = _paymentBucket(r['paymethod']?.toString() ?? '');
@@ -7907,6 +8799,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             r['stuadmno']?.toString() ?? '',
             r['stuname']?.toString() ?? '',
             r['stuclass']?.toString() ?? '',
+            r['type']?.toString() ?? 'Regular',
             ...shownFeeTypes.map((_) => ''),
             if (showFine) '',
             _formatNumber(a),
@@ -7918,7 +8811,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           ]);
         }
         rows.add([
-          'TOTAL REFUND', '', '', '',
+          'TOTAL REFUND', '', '', '', '',
           ...shownFeeTypes.map((_) => ''),
           if (showFine) '',
           _formatNumber(totalRefund),
@@ -7975,7 +8868,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
               cellStyle: const pw.TextStyle(fontSize: 7.5),
               cellAlignment: pw.Alignment.centerLeft,
               cellAlignments: {
-                for (int i = 4; i < headers.length - 1; i++) i: pw.Alignment.centerRight,
+                for (int i = 5; i < headers.length - 1; i++) i: pw.Alignment.centerRight,
               },
               // Give the identity columns real width so names don't wrap
               // character-by-character; numeric columns share the remainder.
@@ -7984,8 +8877,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                 1: const pw.FixedColumnWidth(54),
                 2: const pw.FlexColumnWidth(2.4),
                 3: const pw.FlexColumnWidth(1.3),
-                4: const pw.FlexColumnWidth(1.3),
-                for (int i = 5; i < headers.length; i++) i: const pw.FlexColumnWidth(1),
+                4: const pw.FlexColumnWidth(1.6), // Type
+                5: const pw.FlexColumnWidth(1.3),
+                for (int i = 6; i < headers.length; i++) i: const pw.FlexColumnWidth(1),
               },
               border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.3),
               headerHeight: 26,
@@ -8005,7 +8899,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     final bytes = excel.encode();
     if (bytes == null) return;
 
-    final result = await FilePicker.platform.saveFile(
+    final result = await pickSavePath(
       dialogTitle: 'Save Report',
       fileName: '$fileName.xlsx',
       type: FileType.custom,
@@ -8108,7 +9002,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       final byReceipt = <String, Map<String, dynamic>>{};
       final receiptOrder = <String>[];
       for (final r in rows) {
-        final cancelled = (r['type']?.toString() ?? '') == 'Cancelled';
+        final cancelled = const {'Cancelled', 'Bounced'}.contains(r['type']?.toString() ?? '');
         final st = cancelled ? 'CAN' : (r['_st']?.toString() ?? '');
         final no = r['paynumber']?.toString() ?? '';
         final key = '$no|$st';
@@ -8118,6 +9012,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             'no': no,
             'cancelled': cancelled,
             'st': st,
+            'types': <String>[],
             'fees': <String, double>{},
             'fine': 0.0,
             'total': 0.0,
@@ -8126,6 +9021,10 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             'bank': 0.0,
           };
         });
+        // Regular / Arrear / Misc / Advance... -- a merged receipt lists each once.
+        final types = m['types'] as List<String>;
+        final rowType = r['type']?.toString() ?? 'Regular';
+        if (!types.contains(rowType)) types.add(rowType);
         if (cancelled) continue; // nothing on a cancelled line but its number
 
         final fees = r['fees'] as Map<String, double>;
@@ -8158,10 +9057,26 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // printed as a bare receipt number with every figure blank.
       double adjTot = 0;
       final ftTotals = <String, double>{};
+      // Unreconciled (UR) receipts are listed but kept out of every total
+      // above; their sum prints on its own line after TOTAL.
+      double urGross = 0, urCash = 0, urBank = 0, urFine = 0, urAdj = 0;
+      final urFt = <String, double>{};
 
       for (final key in receiptOrder) {
         final m = byReceipt[key]!;
         if (m['cancelled'] as bool) continue;
+        if (m['st'] == 'UR') {
+          urGross += m['total'] as double;
+          urCash += m['cash'] as double;
+          urBank += m['bank'] as double;
+          urFine += m['fine'] as double;
+          urAdj += m['adj'] as double;
+          final mf = m['fees'] as Map<String, double>;
+          for (final ft in allFeeTypes) {
+            urFt[ft] = (urFt[ft] ?? 0) + (mf[ft] ?? 0);
+          }
+          continue;
+        }
         grossTot += m['total'] as double;
         cash += m['cash'] as double;
         bank += m['bank'] as double;
@@ -8201,7 +9116,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       // Printed unconditionally it puts a second column headed FINE next to the
       // first, usually reading 0, which reads as a duplicate rather than as a
       // different kind of money. It is shown only when it carries something.
-      final showFine = fineTot != 0;
+      final showFine = fineTot != 0 || urFine != 0;
       // Same rule for the three settlement columns. Adjusted in particular is
       // empty on most days -- it only carries money settled out of an advance
       // -- and an all-blank column with a 0 total takes width from the fee
@@ -8210,9 +9125,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       //
       // Total and Net Amt are NOT gated. They are the summary the statement
       // exists for, and a zero there is itself the answer.
-      final showCash = cash != 0;
-      final showBank = bank != 0;
-      final showAdj  = adjTot != 0;
+      final showCash = cash != 0 || urCash != 0;
+      final showBank = bank != 0 || urBank != 0;
+      final showAdj  = adjTot != 0 || urAdj != 0;
+      final hasUnrec = receiptOrder.any((k) =>
+          byReceipt[k]!['st'] == 'UR' && !(byReceipt[k]!['cancelled'] as bool));
 
       final body = <List<String>>[];
       for (final key in receiptOrder) {
@@ -8224,6 +9141,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         final rowBank = m['bank'] as double;
         body.add([
           m['no'] as String,
+          (m['types'] as List<String>).join(' / '),
           ...shownFeeTypes.map((ft) => (mf[ft] ?? 0) != 0 ? _formatNumber(mf[ft]!) : ''),
           if (showFine) amt(m['fine'] as double),
           if (showAdvance) amt(mf[advKey] ?? 0),
@@ -8238,6 +9156,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
 
       body.add([
         'TOTAL',
+        '',
         ...shownFeeTypes.map((ft) => _formatNumber(ftTotals[ft] ?? 0)),
         if (showFine) _formatNumber(fineTot),
         if (showAdvance) _formatNumber(ftTotals[advKey] ?? 0),
@@ -8248,9 +9167,25 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         _formatNumber(net),
         '',
       ]);
+      if (hasUnrec) {
+        body.add([
+          'UNRECONCILED (NOT IN TOTAL)',
+          '',
+          ...shownFeeTypes.map((ft) => amt(urFt[ft] ?? 0)),
+          if (showFine) amt(urFine),
+          if (showAdvance) amt(urFt[advKey] ?? 0),
+          _formatNumber(urGross),
+          if (showCash) amt(urCash),
+          if (showBank) amt(urBank),
+          if (showAdj) amt(urAdj),
+          _formatNumber(urCash + urBank),
+          'UR',
+        ]);
+      }
 
       final headers = <String>[
         'RECEIPT NO',
+        'TYPE',
         ...shownFeeTypes.map(_feeHdr),
         if (showFine) 'FINE',
         if (showAdvance) 'ADVANCE',
@@ -8474,6 +9409,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             cellAlignment: pw.Alignment.centerRight,
             cellAlignments: {
               0: pw.Alignment.centerLeft,
+              1: pw.Alignment.centerLeft,
               headers.length - 1: pw.Alignment.center,
             },
           ),
@@ -8651,7 +9587,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   /// through the OS print dialog (Printing.layoutPdf). Matches _saveExcel.
   Future<void> _savePdf(pw.Document pdf, String fileName) async {
     final bytes = await pdf.save();
-    final result = await FilePicker.platform.saveFile(
+    final result = await pickSavePath(
       dialogTitle: 'Save PDF',
       fileName: '$fileName.pdf',
       type: FileType.custom,
@@ -8828,16 +9764,64 @@ class _StickyTableState extends State<_StickyTable> {
     });
   }
 
+  /// [style], shrunk (to at most 75%) just enough that the longest word of
+  /// [text] fits [maxWidth], so a heading wraps between words instead of
+  /// breaking one in half.
+  double _longestWord(String text, TextStyle style) {
+    var widest = 0.0;
+    for (final word in text.split(RegExp(r'\s+'))) {
+      if (word.isEmpty) continue;
+      final tp = TextPainter(
+        text: TextSpan(text: word, style: style),
+        maxLines: 1,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      if (tp.width > widest) widest = tp.width;
+      tp.dispose();
+    }
+    return widest;
+  }
+
+  TextStyle _wordFitStyle(String text, TextStyle style, double maxWidth) {
+    if (maxWidth <= 0) return style;
+    var widest = 0.0;
+    for (final word in text.split(RegExp(r'\s+'))) {
+      if (word.isEmpty) continue;
+      final tp = TextPainter(
+        text: TextSpan(text: word, style: style),
+        maxLines: 1,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      if (tp.width > widest) widest = tp.width;
+      tp.dispose();
+    }
+    if (widest <= maxWidth) return style;
+    final scale = (maxWidth / widest * 0.95).clamp(0.75, 1.0);
+    return style.copyWith(fontSize: (style.fontSize ?? 12) * scale);
+  }
+
   @override
   Widget build(BuildContext context) {
     assert(widget.columnWidths.length == widget.headers.length);
-    final baseTotal = widget.columnWidths.fold<double>(0, (a, b) => a + b.w);
     final headFs = widget.headerFontSize ?? 12;
     final cellFs = widget.cellFontSize ?? 13;
     final gap = widget.cellGap ?? 10;
     final headerStyle = AppUI.tableHead.copyWith(fontSize: headFs.sp);
     final footerStyle = AppUI.money.copyWith(fontSize: cellFs.sp);
     final cellStyle = AppUI.cell.copyWith(fontSize: cellFs.sp);
+    // Each column is at least as wide as its heading's longest word, so a
+    // heading wraps only between words ("CONCESSIO / N" never happens).
+    final baseWidths = <double>[
+      for (var i = 0; i < widget.columnWidths.length; i++)
+        () {
+          final need = _longestWord(widget.headers[i], headerStyle) + 2 * gap.w + 8;
+          final w = widget.columnWidths[i].w;
+          return need > w ? need : w;
+        }(),
+    ];
+    final baseTotal = baseWidths.fold<double>(0, (a, b) => a + b);
 
     // BORDERED GRID, matching what the PDF already prints.
     //
@@ -8847,7 +9831,60 @@ class _StickyTableState extends State<_StickyTable> {
     // rather than with a Table widget because the columns are fixed-width and
     // the header has to stay sticky while the body scrolls.
     const gridLine = BorderSide(color: AppColors.divider);
-    Widget rowWidget(List<String> values, List<double> widths, {Color? bg, TextStyle? style}) {
+    // [fit] = a total that is wider than its column shrinks to fit rather than
+    // ending in "..." ("GRAND T..."). Used for the footer only.
+    Widget row(List<String> values, List<double> widths, TextStyle? style, {bool stretch = false, int maxLines = 1, bool fit = false}) => Row(
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: stretch ? CrossAxisAlignment.stretch : CrossAxisAlignment.center,
+          children: [
+            for (int i = 0; i < values.length; i++)
+              Container(
+                width: widths[i],
+                decoration: const BoxDecoration(border: Border(right: gridLine)),
+                alignment: stretch
+                    ? (widget.centerCols.contains(i) ? Alignment.center : widget.numericCols.contains(i) ? Alignment.centerRight : Alignment.centerLeft)
+                    : null,
+                padding: EdgeInsets.symmetric(horizontal: gap.w, vertical: 6.h),
+                child: maxLines > 1
+                    // heading: wraps at word boundaries only -- its longest word
+                    // is shrunk a little to fit the column ("CONCESSIO / N").
+                    ? Text(
+                        values[i],
+                        textAlign: widget.centerCols.contains(i)
+                            ? TextAlign.center
+                            : widget.numericCols.contains(i)
+                                ? TextAlign.right
+                                : TextAlign.left,
+                        style: _wordFitStyle(values[i], style ?? cellStyle, widths[i] - 2 * gap.w - 4), // 4 = cell borders + rounding
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: maxLines,
+                      )
+                    : fit
+                    ? FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: widget.centerCols.contains(i)
+                            ? Alignment.center
+                            : widget.numericCols.contains(i)
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                        child: Text(values[i], maxLines: 1, softWrap: false, style: style ?? cellStyle),
+                      )
+                    : Text(
+                        values[i],
+                        textAlign: widget.centerCols.contains(i)
+                            ? TextAlign.center
+                            : widget.numericCols.contains(i)
+                                ? TextAlign.right
+                                : TextAlign.left,
+                        style: style ?? cellStyle,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: maxLines,
+                      ),
+              ),
+          ],
+        );
+
+    Widget rowWidget(List<String> values, List<double> widths, {Color? bg, TextStyle? style, int maxLines = 1, bool fit = false}) {
       return Container(
         width: double.infinity,
         // The bottom rule belongs to the row; the right-hand rule belongs to
@@ -8856,28 +9893,9 @@ class _StickyTableState extends State<_StickyTable> {
         // The background goes INSIDE the decoration: Container asserts if it
         // is given both `color` and `decoration`.
         decoration: BoxDecoration(color: bg, border: const Border(bottom: gridLine)),
-        child: Row(
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            for (int i = 0; i < values.length; i++)
-              Container(
-                width: widths[i],
-                decoration: const BoxDecoration(border: Border(right: gridLine)),
-                padding: EdgeInsets.symmetric(horizontal: gap.w, vertical: 6.h),
-                child: Text(
-                  values[i],
-                  textAlign: widget.centerCols.contains(i)
-                      ? TextAlign.center
-                      : widget.numericCols.contains(i)
-                          ? TextAlign.right
-                          : TextAlign.left,
-                  style: style ?? cellStyle,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-              ),
-          ],
-        ),
+        // the heading row: every cell as tall as the tallest (a wrapped
+        // heading), so the column rules run the full height
+        child: maxLines > 1 ? IntrinsicHeight(child: row(values, widths, style, stretch: true, maxLines: maxLines)) : row(values, widths, style, fit: fit),
       );
     }
 
@@ -8889,7 +9907,7 @@ class _StickyTableState extends State<_StickyTable> {
         final hViewport = constraints.maxWidth - vBarWidth;
         final needsScroll = baseTotal > hViewport;
         final scale = needsScroll ? 1.0 : (hViewport / baseTotal);
-        final widths = [for (final c in widget.columnWidths) c.w * scale];
+        final widths = [for (final c in baseWidths) c * scale];
         final width = needsScroll ? baseTotal : hViewport;
         final scrollbarHeight = needsScroll ? 16.0 : 0.0;
         return Container(
@@ -8915,7 +9933,8 @@ class _StickyTableState extends State<_StickyTable> {
                           height: constraints.maxHeight - scrollbarHeight,
                           child: Column(
                             children: [
-                              rowWidget(widget.headers, widths, bg: AppColors.tableHeadBg, style: headerStyle),
+                              // a heading wider than its column wraps to a second line, not "CONCESSI..."
+                              rowWidget(widget.headers, widths, bg: AppColors.tableHeadBg, style: headerStyle, maxLines: 2),
                               Container(height: 1, color: AppColors.cardBorder),
                               Expanded(
                                 // Suppress the framework scrollbar; the pinned
@@ -8939,7 +9958,7 @@ class _StickyTableState extends State<_StickyTable> {
                                 ),
                               ),
                               Container(height: 1, color: AppColors.cardBorder),
-                              rowWidget(widget.footer, widths, bg: AppColors.tableHeadBg, style: footerStyle),
+                              rowWidget(widget.footer, widths, bg: AppColors.tableHeadBg, style: footerStyle, fit: true),
                             ],
                           ),
                         ),
@@ -8983,3 +10002,40 @@ class _StickyTableState extends State<_StickyTable> {
 }
 
 
+
+/// School: the extra detail behind the old Debit / Credit Student Ledger,
+/// loaded by _ReportsScreenState._loadLedgerOldExtras.
+class _LedgerOldExtras {
+  /// pay_id -> {paymethod, paychequeno, paychequedate}.
+  final Map<int, Map<String, dynamic>> pays = {};
+
+  /// '<pay_id>|<dem_id>' -> advance money riding on that receipt line:
+  /// [{amount, prev (true = last year's advance), docno, docdate}].
+  final Map<String, List<Map<String, dynamic>>> onReceipt = {};
+
+  /// dem_id -> advance applied with no receipt behind it (the old
+  /// Advfeerecon): [{amount, prev, docno, docdate}].
+  final Map<int, List<Map<String, dynamic>>> noReceipt = {};
+
+  /// Misc receipt no. / advance receipt no. -> payment mode text.
+  final Map<String, String> docModes = {};
+
+  void addAdvance(dynamic demId, dynamic payId, dynamic amount, bool prev,
+      dynamic docno, dynamic docdate) {
+    final dem = (demId as num?)?.toInt();
+    final amt = (amount as num?)?.toDouble() ?? 0;
+    if (dem == null || amt <= 0.004) return;
+    final line = {
+      'amount': amt,
+      'prev': prev,
+      'docno': docno?.toString() ?? '',
+      'docdate': docdate?.toString() ?? '',
+    };
+    final pay = (payId as num?)?.toInt();
+    if (pay == null) {
+      (noReceipt[dem] ??= []).add(line);
+    } else {
+      (onReceipt['$pay|$dem'] ??= []).add(line);
+    }
+  }
+}

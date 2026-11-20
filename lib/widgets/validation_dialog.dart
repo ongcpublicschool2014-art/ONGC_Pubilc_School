@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../utils/app_theme.dart';
 import '../utils/school_terms.dart';
 import 'app_ui.dart';
+import '../utils/save_path.dart';
 
 /// One problem found while checking a sheet row or an on-screen row.
 class RowIssue {
@@ -221,7 +223,7 @@ Future<bool> exportSheetWithErrors({
   required Map<int, List<String>> messages,
 }) async {
   final base = fileName.replaceAll(RegExp(r'\.xlsx$', caseSensitive: false), '');
-  final path = await FilePicker.platform.saveFile(
+  final path = await pickSavePath(
     dialogTitle: 'Save Sheet with Errors',
     fileName: '${base}_errors.xlsx',
     type: FileType.custom,
@@ -235,7 +237,7 @@ Future<bool> exportSheetWithErrors({
   final hdr = xl.CellStyle(
     bold: true,
     fontSize: 10,
-    backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+    backgroundColorHex: XlTheme.headerBg,
     fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
   );
   final errHdr = xl.CellStyle(

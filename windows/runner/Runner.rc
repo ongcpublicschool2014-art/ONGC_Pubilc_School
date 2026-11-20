@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.edudesk" "\0"
-            VALUE "FileDescription", "EduCore 360" "\0"
+            VALUE "FileDescription", "FIT School" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "EduCore 360" "\0"
+            VALUE "InternalName", "FIT School" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.edudesk. All rights reserved." "\0"
-            VALUE "OriginalFilename", "EduCore360.exe" "\0"
-            VALUE "ProductName", "EduCore 360" "\0"
+            VALUE "OriginalFilename", "school_admin.exe" "\0"
+            VALUE "ProductName", "FIT School" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

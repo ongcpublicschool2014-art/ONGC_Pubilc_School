@@ -11,7 +11,12 @@ import '../services/supabase_service.dart';
 /// runtime by a `config.json` — so the same build can point at a different
 /// Supabase project WITHOUT rebuilding. Searched, first valid wins:
 ///   1. config.json next to the .exe
-///   2. %APPDATA%\EduCore360\config.json   (user-writable, survives updates)
+///   2. %APPDATA%\FITSchool\config.json   (user-writable, survives updates)
+///
+/// FIT School is a separate product from the college app (EduCore360): its
+/// own compiled-in project (the school's live server), its own config.json
+/// folder, data folder (Runner.rc ProductName) and installer AppId, so one
+/// app's settings or update can never move the other.
 ///
 /// config.json format:
 ///   {
@@ -25,9 +30,9 @@ class SupabaseConfig {
   SupabaseConfig._();
 
   // Compiled-in defaults (used when no valid config.json is found).
-  static const String _defaultUrl = 'https://exasnbapvgfeooxyxjas.supabase.co';
+  static const String _defaultUrl = 'https://xjdvrrcmvyjocxynmhql.supabase.co';
   static const String _defaultAnonKey =
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV4YXNuYmFwdmdmZW9veHl4amFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3ODE5MTYsImV4cCI6MjEwNDM1NzkxNn0.A-jYInsOb8EzHd4bysnYV7Ao28QA8lQLIk9PB2NGHsY';
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqZHZycmNtdnlqb2N4eW5taHFsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NDg5MjUsImV4cCI6MjA5NTUyNDkyNX0.P1wWT1owyJztt5dHC0BpOHYtlQWXrf8MC7Iih3Nj3Bg';
 
   /// Active connection values (defaults unless overridden by [load]).
   static String url = _defaultUrl;
@@ -120,7 +125,7 @@ class SupabaseConfig {
     } catch (_) {}
     final appData = Platform.environment['APPDATA'];
     if (appData != null && appData.isNotEmpty) {
-      paths.add('$appData${sep}EduCore360${sep}config.json');
+      paths.add('$appData${sep}FITSchool${sep}config.json');
     }
     return paths;
   }

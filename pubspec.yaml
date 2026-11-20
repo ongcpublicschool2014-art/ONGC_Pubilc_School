@@ -1,7 +1,7 @@
 name: school_admin
 description: A school administrative desktop application built with Flutter.
 publish_to: 'none'
-version: 0.0.16+17
+version: 0.0.0+18
 environment:
   sdk: '>=3.1.0 <4.0.0'
 
@@ -29,6 +29,8 @@ dependencies:
   flutter_screenutil: ^5.9.3
   cryptography: ^2.7.0
   package_info_plus: ^8.0.0
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:

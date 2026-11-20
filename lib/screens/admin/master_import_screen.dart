@@ -9,16 +9,28 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../services/supabase_service.dart';
 import 'package:provider/provider.dart';
 import '../../utils/auth_provider.dart';
+import '../../utils/fee_kind.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/formatters.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/save_path.dart';
 
-void _showImportResultDialog(BuildContext context, {required int imported, required int skipped, List<String> errors = const [], VoidCallback? onDone}) {
+/// [headers] / [rows]: the file as imported, so Export Errors can write the
+/// failing rows back out with their reason (fix them and import again).
+void _showImportResultDialog(BuildContext context,
+    {required int imported,
+    required int skipped,
+    List<String> errors = const [],
+    VoidCallback? onDone,
+    String name = 'Import',
+    List<String> headers = const [],
+    List<List<dynamic>> rows = const []}) {
   showDialog(
     context: context,
     barrierDismissible: false,
@@ -53,10 +65,20 @@ void _showImportResultDialog(BuildContext context, {required int imported, requi
               ),
             ],
             SizedBox(height: 20.h),
-            ElevatedButton(
-              onPressed: () { Navigator.pop(ctx); onDone?.call(); },
-              child: const Text(AppText.close),
-            ),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              if (errors.isNotEmpty) ...[
+                OutlinedButton.icon(
+                  onPressed: () => _exportImportErrors(name, headers, rows, errors),
+                  icon: AppIcon('document-download', size: 16, color: AppColors.primary),
+                  label: const Text('Export Errors'),
+                ),
+                SizedBox(width: 10.w),
+              ],
+              ElevatedButton(
+                onPressed: () { Navigator.pop(ctx); onDone?.call(); },
+                child: const Text(AppText.close),
+              ),
+            ]),
           ],
         ),
       ),
@@ -296,7 +318,7 @@ List<List<dynamic>> _parseExcel(String path) {
 }
 
 Future<void> _exportSampleData(String sheetName, List<String> headers, List<List<String>> sampleRows) async {
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSavePath(
     dialogTitle: 'Save Sample Data',
     fileName: '${schoolTerm(sheetName).toLowerCase().replaceAll(' ', '_')}_sample.xlsx',
     type: FileType.custom,
@@ -307,7 +329,7 @@ Future<void> _exportSampleData(String sheetName, List<String> headers, List<List
   final sheet = workbook[schoolTerm(sheetName)];
   final headerStyle = xl.CellStyle(
     bold: true,
-    backgroundColorHex: xl.ExcelColor.fromHexString('#1B2A4A'),
+    backgroundColorHex: XlTheme.headerBg,
     fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
   );
   for (int i = 0; i < headers.length; i++) {
@@ -331,6 +353,71 @@ Future<void> _exportSampleData(String sheetName, List<String> headers, List<List
 /// for failed rows, plus red shading on the offending cells. Use this when
 /// validation surfaces problems so the user can fix them in Excel and
 /// re-import the corrected file.
+/// After an import: the rows that failed, as they were in the file, with an
+/// Error column -- fix them and import the sheet again. Each import names the
+/// failing row by a key before the ':' ("<name>: ...", "Receipt <no>: ...",
+/// "<class> / <fee type>: ..."); a message that names no row (e.g. the file
+/// could not be read) is listed after the rows, on its own.
+Future<void> _exportImportErrors(String name, List<String> headers, List<List<dynamic>> rows, List<String> errors) async {
+  final byRow = <int, List<String>>{};
+  final loose = <String>[];
+  for (final e in errors) {
+    final colon = e.indexOf(':');
+    var key = colon > 0 ? e.substring(0, colon).trim() : '';
+    key = key.replaceFirst(RegExp(r'^(Receipt|Row with name)\s+', caseSensitive: false), '').trim();
+    final parts = key.split(' / ').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
+    var hit = false;
+    if (parts.isNotEmpty && !key.startsWith('(')) {
+      for (var r = 0; r < rows.length; r++) {
+        final cells = rows[r].map((c) => '${c ?? ''}'.trim()).toSet();
+        if (parts.every(cells.contains)) {
+          (byRow[r] ??= []).add(e.substring(colon + 1).trim());
+          hit = true;
+        }
+      }
+    }
+    if (!hit) loose.add(e);
+  }
+  final savePath = await pickSavePath(
+    dialogTitle: 'Save Rows with Errors',
+    fileName: '${schoolTerm(name).toLowerCase().replaceAll(' ', '_')}_errors.xlsx',
+    type: FileType.custom,
+    allowedExtensions: ['xlsx'],
+  );
+  if (savePath == null) return;
+  final workbook = xl.Excel.createExcel();
+  final sheet = workbook[schoolTerm(name)];
+  final headerStyle = xl.CellStyle(bold: true, backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg);
+  final errStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString('#FCE4E4'), fontColorHex: xl.ExcelColor.fromHexString('#B91C1C'));
+  final cols = [...headers.map(schoolTerm), 'Error'];
+  for (var i = 0; i < cols.length; i++) {
+    final c = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+    c.value = xl.TextCellValue(cols[i]);
+    c.cellStyle = headerStyle;
+    sheet.setColumnWidth(i, i == cols.length - 1 ? 50 : 20);
+  }
+  var out = 1;
+  for (final r in byRow.keys.toList()..sort()) {
+    for (var c = 0; c < headers.length; c++) {
+      sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: out)).value =
+          xl.TextCellValue(c < rows[r].length ? '${rows[r][c] ?? ''}' : '');
+    }
+    final ec = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: headers.length, rowIndex: out));
+    ec.value = xl.TextCellValue(schoolTerm(byRow[r]!.join('; ')));
+    ec.cellStyle = errStyle;
+    out++;
+  }
+  for (final e in loose) {
+    final ec = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: headers.length, rowIndex: out));
+    ec.value = xl.TextCellValue(schoolTerm(e));
+    ec.cellStyle = errStyle;
+    out++;
+  }
+  workbook.delete('Sheet1');
+  final bytes = workbook.encode();
+  if (bytes != null) File(savePath).writeAsBytesSync(bytes);
+}
+
 Future<void> _exportRowsWithErrors({
   required String sheetName,
   required List<String> headers,
@@ -338,7 +425,7 @@ Future<void> _exportRowsWithErrors({
   required Map<int, Set<int>> cellErrors,
   required Map<int, String> rowErrors,
 }) async {
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSavePath(
     dialogTitle: 'Save File with Errors',
     fileName: '${schoolTerm(sheetName).toLowerCase().replaceAll(' ', '_')}_errors.xlsx',
     type: FileType.custom,
@@ -349,7 +436,7 @@ Future<void> _exportRowsWithErrors({
   final sheet = workbook[schoolTerm(sheetName)];
   final headerStyle = xl.CellStyle(
     bold: true,
-    backgroundColorHex: xl.ExcelColor.fromHexString('#1B2A4A'),
+    backgroundColorHex: XlTheme.headerBg,
     fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
   );
   final errorCellStyle = xl.CellStyle(
@@ -380,7 +467,7 @@ Future<void> _exportRowsWithErrors({
 }
 
 Future<void> _exportTemplate(String sheetName, List<String> headers) async {
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSavePath(
     dialogTitle: 'Save Template',
     fileName: '${schoolTerm(sheetName).toLowerCase().replaceAll(' ', '_')}_template.xlsx',
     type: FileType.custom,
@@ -391,7 +478,7 @@ Future<void> _exportTemplate(String sheetName, List<String> headers) async {
   final sheet = workbook[schoolTerm(sheetName)];
   final headerStyle = xl.CellStyle(
     bold: true,
-    backgroundColorHex: xl.ExcelColor.fromHexString('#1B2A4A'),
+    backgroundColorHex: XlTheme.headerBg,
     fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
   );
   for (int i = 0; i < headers.length; i++) {
@@ -453,14 +540,17 @@ Widget _gridHeaderCell(String text, {double? width, int flex = 1, bool center = 
   final child = Container(
     padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 12.h),
     alignment: right ? Alignment.centerRight : center ? Alignment.center : Alignment.centerLeft,
+    decoration: const BoxDecoration(
+      border: Border(right: BorderSide(color: AppColors.divider)),
+    ),
     child: Text(schoolTerm(text).toUpperCase(), style: AppUI.tableHead),
   );
   return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
 }
 
-Widget _gridHeaderDivider() {
-  return Container(width: 1, height: 36.h, color: AppColors.divider);
-}
+/// Fixed last column that holds a row's error icon, so rows with and without
+/// errors keep the same column widths.
+const double _gridIconW = 32;
 
 Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = false, bool right = false}) {
   final child = Container(
@@ -508,7 +598,7 @@ Widget _buildImportCard({
   // the import grid keeps the file's own header names.
   final displayHeaders = showExisting ? existingHeaders.map(schoolTerm).toList() : headers;
   final displayRows = showExisting ? existingRows : rows;
-  final bool hasCellErrors = !showExisting && cellErrors.isNotEmpty;
+  final bool hasCellErrors = !showExisting && (cellErrors.isNotEmpty || rowErrors.isNotEmpty);
   // Sits inside the screen's white AppCard, so no second border here.
   return Container(
     padding: EdgeInsets.all(AppUI.cardPad),
@@ -605,10 +695,9 @@ Widget _buildImportCard({
                   child: Row(
                     children: [
                       _gridHeaderCell('S.No', width: 60.w, center: true),
-                      ...displayHeaders.asMap().entries.expand((e) => [
-                        _gridHeaderDivider(),
+                      for (final e in displayHeaders.asMap().entries)
                         _gridHeaderCell(e.value, right: rightAlignCols.contains(e.key)),
-                      ]),
+                      const SizedBox(width: _gridIconW),
                     ],
                   ),
                 ),
@@ -675,14 +764,15 @@ Widget _buildImportCard({
                                             ),
                                           );
                                         }),
-                                        if (hasRowError)
-                                          Padding(
-                                            padding: EdgeInsets.only(right: 8.w),
-                                            child: Tooltip(
-                                              message: schoolTerm(rowErrors[i] ?? ''),
-                                              child: AppIcon.linear('info-circle', color: AppColors.error, size: 16),
-                                            ),
-                                          ),
+                                        SizedBox(
+                                          width: _gridIconW,
+                                          child: hasRowError
+                                              ? Tooltip(
+                                                  message: schoolTerm(rowErrors[i] ?? ''),
+                                                  child: AppIcon.linear('info-circle', color: AppColors.error, size: 16),
+                                                )
+                                              : null,
+                                        ),
                                       ],
                                     ),
                                   );
@@ -838,6 +928,7 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     // Blank ID / Order cells are generated: next ID after the highest in the
     // table or the file, next Order after the highest for this institution.
     var nextId = 0, nextOrd = 0;
@@ -872,7 +963,7 @@ class _CourseTabState extends State<_CourseTab> with AutomaticKeepAliveClientMix
       }
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Courses', headers: _headers, rows: srcRows, onDone: _loadExisting);
   }
 
   @override
@@ -1096,6 +1187,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     // Blank ID is the next after the highest in the table or the file; blank
     // Order is the next within the row's course.
     var nextId = 0;
@@ -1143,7 +1235,7 @@ class _ClassTabState extends State<_ClassTab> with AutomaticKeepAliveClientMixin
       }
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Classes', headers: _headers, rows: srcRows, onDone: _loadExisting);
   }
 
   @override
@@ -1280,6 +1372,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     try {
@@ -1293,7 +1386,7 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Fee Groups', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -1329,7 +1422,10 @@ class _FeeGroupTabState extends State<_FeeGroupTab> with AutomaticKeepAliveClien
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 2. FEE TYPE TAB
-// Columns: Fee Name *, Short Name *, Fee Group *, Optional, Category
+// Columns: Fee Type ID *, Fee Type Name *, Fee Short *, Fee Group ID *,
+// Fine Applicable, FeeType Order, Reg/Opt. Columns are matched by heading, so
+// the school's own sheet (extra "Type" column, any order) imports as it is.
+// The file carries the fee group ID; the grid shows the group's name.
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class _FeeTypeTab extends StatefulWidget {
@@ -1349,14 +1445,61 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
   Map<int, Set<int>> _cellErrors = {};
   // Year is NOT imported - it's auto-set to the institution's active year by
   // process_master_import.
-  static const _headers = ['Fee ID *', 'Fee Name *', 'Short Name *', 'Fee Group *', 'Fine Applicable *', 'FeeType Order', 'Type'];
+  // The school's own sheet layout (user, 2026-11-11). Fee Group holds the
+  // fee group ID (the grid shows its name); Type = SCH (school) / HOS (hostel)
+  // -> feetype.feecat; Reg/Opt -> feetype.type.
+  static const _headers = ['Fee Type ID *', 'Fee Type Name *', 'Fee Short *', 'Fee Group *', 'Fine Applicable', 'FeeType Order', 'Type', 'Reg/Opt'];
+
+  /// Puts the file's columns into [_headers] order by their headings. A file
+  /// whose headings aren't recognised is read by position, as before.
+  static List<List<dynamic>> _toTemplateOrder(List<List<dynamic>> parsed) {
+    String norm(dynamic v) => (v?.toString() ?? '').toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final head = parsed.first.map(norm).toList();
+    int find(List<String> names) {
+      for (final n in names) {
+        final i = head.indexOf(n);
+        if (i >= 0) return i;
+      }
+      return -1;
+    }
+    final idx = [
+      find(['feetypeid', 'feeid', 'id']),
+      find(['feetypename', 'feename', 'feedesc', 'name']),
+      find(['feeshort', 'shortname', 'feeshortname', 'short']),
+      find(['feegroupid', 'feegroup', 'fgid']),
+      find(['fineapplicable', 'fine']),
+      find(['feetypeorder', 'feeorder', 'order', 'ordid']),
+      find(['type']),
+      find(['regopt', 'regoropt', 'regularoptional']),
+    ];
+    // Older template: no Reg/Opt column and "Type" held REG / OPT.
+    if (idx[7] < 0 && idx[6] >= 0) {
+      final t = idx[6];
+      if (parsed.skip(1).every((r) {
+        final v = t < r.length ? norm(r[t]) : '';
+        return v.isEmpty || v == 'reg' || v == 'opt' || v == 'col';
+      })) {
+        idx[7] = t;
+        idx[6] = -1;
+      }
+    }
+    if (idx.sublist(1, 4).any((i) => i < 0)) return parsed.sublist(1);
+    return [
+      for (final r in parsed.skip(1))
+        [for (final i in idx) (i >= 0 && i < r.length) ? r[i] : ''],
+    ];
+  }
   List<List<dynamic>> _existingRows = [];
   bool _isLoadingExisting = false;
   // Lowercased fee-group names for the current institution - used by _validate
   // to flag rows whose Fee Group doesn't exist (otherwise the server import
   // silently skips them).
   Set<String> _fgNames = {};
-  Set<int> _fgIdSet = {}; // valid fee group IDs — the import also accepts fg_id in the Fee Group column
+  Set<int> _fgIdSet = {}; // valid fee group IDs (the Fee Group ID column)
+  Map<int, String> _fgNameById = {}; // shown in the grid instead of the ID
+
+  /// Fee Group ID cell as an int ("1" or Excel's "1.0"), else null.
+  static int? _fgIdOf(String raw) => int.tryParse(raw.trim().replaceAll(RegExp(r'\.0+$'), ''));
 
   @override
   bool get wantKeepAlive => true;
@@ -1375,7 +1518,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
     try {
       final feeGroups = await SupabaseService.getFeeGroups(insId);
       if (feeGroups.isEmpty) {
-        if (mounted) setState(() { _fgNames = {}; _isLoadingExisting = false; });
+        if (mounted) setState(() { _fgNames = {}; _fgIdSet = {}; _fgNameById = {}; _existingRows = []; _isLoadingExisting = false; });
         return;
       }
       final fgIds = feeGroups.map((fg) => fg['fg_id'] as int).toList();
@@ -1384,20 +1527,24 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
           .map((fg) => (fg['fgdesc']?.toString() ?? '').trim().toLowerCase())
           .where((s) => s.isNotEmpty)
           .toSet();
-      final types = await SupabaseService.fromSchema('feetype').select('*').inFilter('fg_id', fgIds).eq('activestatus', 1).order('fee_id', ascending: true);
+      final types = List<Map<String, dynamic>>.from(await SupabaseService.fromSchema('feetype').select('*').inFilter('fg_id', fgIds).eq('activestatus', 1).order('fee_id', ascending: true) as List)
+        ..sort((a, b) => ((a['ordid'] as num?) ?? 9999).compareTo((b['ordid'] as num?) ?? 9999));
       if (mounted) setState(() {
-        const fineLabels = {'1': 'Yes', '0': 'No'};
-        _existingRows = (types as List).map((t) {
+        _existingRows = types.map((t) {
           return [
+            t['fee_id'] ?? '',
             t['feedesc'] ?? '',
             t['feeshort'] ?? '',
             fgNameMap[t['fg_id']] ?? '',
-            fineLabels['${t['feefineapplicable'] ?? 0}'] ?? 'No',
+            '${t['feefineapplicable'] ?? 0}',
+            t['ordid'] ?? '',
+            t['feecat'] ?? 'SCH',
             t['type'] ?? '',
           ];
         }).toList();
         _fgNames = fgNameSet;
         _fgIdSet = fgIds.toSet();
+        _fgNameById = fgNameMap;
         _isLoadingExisting = false;
       });
     } catch (e) {
@@ -1427,12 +1574,21 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       }
       return;
     }
-    setState(() { _fileName = result.files.single.name; _rows = parsed.sublist(1); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
+    setState(() { _fileName = result.files.single.name; _rows = _toTemplateOrder(parsed); _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
   }
 
   void _validate() {
     final rowErrs = <int, String>{};
     final labels = _headers.map((h) => h.replaceAll(' *', '').replaceAll('*', '')).toList();
+    final existingIds = {for (final r in _existingRows) int.tryParse('${r[0]}')}..remove(null);
+    final seenIds = <int>{};
+    // A fee type belongs to one fee group: the same name or short name may not
+    // come in again, from the file or from what is already saved.
+    final usedNames = {for (final r in _existingRows) feeTypeKey(r[1]): '${r[1]}'.trim()};
+    final usedShorts = {
+      for (final r in _existingRows)
+        if (feeTypeKey(r[2]).isNotEmpty) feeTypeKey(r[2]): '${r[1]}'.trim(),
+    };
     for (int i = 0; i < _rows.length; i++) {
       final missing = <String>[];
       for (int j = 0; j < labels.length; j++) {
@@ -1444,16 +1600,55 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
         rowErrs[i] = 'Missing: ${missing.join(', ')}';
         continue;
       }
-      // Fee Group must already exist for this institution. The column accepts
-      // either the fee group ID (e.g. 1) or the group name — matching the
-      // server-side resolution in process_master_import.
+      // Fee Group ID must be a fee group of this school (Fee Group tab).
+      // Older files with the group's name are still accepted, as on the server.
       final fgRaw = _rows[i].length > 3 ? _rows[i][3]?.toString().trim() ?? '' : '';
-      final asId = int.tryParse(fgRaw);
+      final asId = _fgIdOf(fgRaw);
       final validById = asId != null && _fgIdSet.contains(asId);
-      final validByName = _fgNames.contains(fgRaw.toLowerCase());
-      final haveMaster = _fgIdSet.isNotEmpty || _fgNames.isNotEmpty;
-      if (fgRaw.isNotEmpty && haveMaster && !validById && !validByName) {
-        rowErrs[i] = 'Fee Group "$fgRaw" not found. Import the fee group first.';
+      final validByName = asId == null && _fgNames.contains(fgRaw.toLowerCase());
+      if (!validById && !validByName) {
+        rowErrs[i] = _fgIdSet.isEmpty
+            ? 'Fee Group ID "$fgRaw" not found. Import the fee groups first (Fee Group tab).'
+            : 'Fee Group ID "$fgRaw" not found. Use an ID from the Fee Group tab.';
+        continue;
+      }
+      final regOpt = _rows[i].length > 7 ? _rows[i][7]?.toString().trim().toUpperCase() ?? '' : '';
+      if (regOpt.isNotEmpty && !const {'REG', 'OPT', 'COL'}.contains(regOpt)) {
+        rowErrs[i] = 'Reg/Opt must be REG, OPT or blank (blank = REG), not "$regOpt"';
+        continue;
+      }
+      final cat = _rows[i].length > 6 ? _rows[i][6]?.toString().trim().toUpperCase() ?? '' : '';
+      if (cat.isNotEmpty && !const {'SCH', 'HOS'}.contains(cat)) {
+        rowErrs[i] = 'Type must be SCH, HOS or blank (blank = SCH), not "$cat"';
+        continue;
+      }
+      // Fine Applicable: 0 / 1, Yes / No, or blank (= No).
+      final fine = _rows[i].length > 4 ? (_rows[i][4]?.toString().trim().toLowerCase() ?? '').replaceAll(RegExp(r'\.0+$'), '') : '';
+      if (!const {'', '0', '1', 'yes', 'no', 'y', 'n', 'true', 'false'}.contains(fine)) {
+        rowErrs[i] = 'Fine Applicable must be 1 (Yes), 0 (No) or blank, not "${_rows[i][4]}"';
+        continue;
+      }
+      final feeName = _rows[i].length > 1 ? _rows[i][1]?.toString().trim() ?? '' : '';
+      final feeShort = _rows[i].length > 2 ? _rows[i][2]?.toString().trim() ?? '' : '';
+      final nameClash = usedNames[feeTypeKey(feeName)];
+      if (nameClash != null) {
+        rowErrs[i] = '"$feeName" is already a fee type ($nameClash). A fee type can be in only one fee group.';
+        continue;
+      }
+      final shortClash = feeTypeKey(feeShort).isEmpty ? null : usedShorts[feeTypeKey(feeShort)];
+      if (shortClash != null) {
+        rowErrs[i] = 'Short name "$feeShort" is already used by $shortClash.';
+        continue;
+      }
+      usedNames[feeTypeKey(feeName)] = feeName;
+      if (feeTypeKey(feeShort).isNotEmpty) usedShorts[feeTypeKey(feeShort)] = feeName;
+      // The server rejects an ID that is already there; say so before Save.
+      final idRaw = _rows[i].isNotEmpty ? _rows[i][0]?.toString().trim() ?? '' : '';
+      final id = _fgIdOf(idRaw);
+      if (id != null && existingIds.contains(id)) {
+        rowErrs[i] = 'Fee Type ID $id already exists. Leave it out of the file or use a new ID.';
+      } else if (id != null && !seenIds.add(id)) {
+        rowErrs[i] = 'Fee Type ID $id is in the file twice.';
       }
     }
     setState(() { _rowErrors = rowErrs; _cellErrors = _deriveCellErrors(rowErrs, _headers); _isValidated = rowErrs.isEmpty; });
@@ -1469,23 +1664,26 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     try {
-      const fineMap = {'yes': '1', 'y': '1', 'true': '1', '1': '1', 'no': '0', 'n': '0', 'false': '0', '0': '0', '': '0'};
+      const fineMap = {'yes': '1', 'y': '1', 'true': '1', '1': '1', '1.0': '1', 'no': '0', 'n': '0', 'false': '0', '0': '0', '0.0': '0', '': '0'};
       final filled = await _fillBlankIds('feetype', 'fee_id', _rows);
       final mappedRows = filled.map((row) {
         final mapped = List<dynamic>.from(row);
-        while (mapped.length < 7) {
+        while (mapped.length < 8) {
           mapped.add('');
         }
         // Fine Applicable is col 5 (index 4) after Fee ID, Name, Short, Group.
-        // col 6 = FeeType Order (positional alignment only), col 7 = Type.
         final fine = mapped[4].toString().trim().toLowerCase();
         mapped[4] = fineMap[fine] ?? mapped[4];
+        // Server columns: col7 = Reg/Opt, col8 = Type (SCH / HOS).
+        final type = mapped.removeAt(6);
+        mapped.add(type);
         return mapped;
       }).toList();
-      final result = await _stagingImport(insId: insId, impType: 'FEETYPE', rows: mappedRows, colCount: 7);
+      final result = await _stagingImport(insId: insId, impType: 'FEETYPE', rows: mappedRows, colCount: 8);
       _imported = result['imported'] ?? 0;
       _skipped = result['skipped'] ?? 0;
       if (_skipped > 0) _errors = await _getImportErrors(insId, 'FEETYPE');
@@ -1494,7 +1692,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Fee Types', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -1504,15 +1702,21 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
     return _buildImportCard(
       title: 'Import Fee Types',
       headers: _headers,
-      rows: _rows.map((r) => List.generate(_headers.length, (j) => j < r.length ? r[j] : '')).toList(),
+      // Fee Group ID column shows the group's name (the file keeps the ID).
+      rows: _rows.map((r) => List.generate(_headers.length, (j) {
+        final v = j < r.length ? r[j] : '';
+        if (j != 3) return v;
+        final id = _fgIdOf(v?.toString() ?? '');
+        return (id != null && _fgNameById.containsKey(id)) ? _fgNameById[id] : v;
+      })).toList(),
       onBrowse: _browse,
       onSave: _rows.isNotEmpty && _isValidated ? _save : null,
       onTemplate: () => _exportTemplate('Fee Type', _headers),
       onSampleDownload: () => _exportSampleData('Fee Type', _headers, [
-        ['1', 'SCHOOL FEES', 'SCH', 'SCHOOL FEES', 'Yes', '0', isSchool ? 'REG' : 'COL'],
-        ['2', 'VAN FEES', 'VAN', 'VAN FEES', 'No', '0', isSchool ? 'OPT' : 'COL'],
-        ['3', 'TUITION FEES', 'TUI', 'SCHOOL FEES', 'Yes', '0', isSchool ? 'REG' : 'COL'],
-        ['4', 'BOOK FEES', 'BK', 'SCHOOL FEES', 'No', '0', isSchool ? 'OPT' : 'COL'],
+        ['29', 'ANNUAL FEES', 'ANUAL FEE', '1', '0', '1', 'SCH', isSchool ? 'REG' : 'COL'],
+        ['4', 'TEXT BOOK FEES', 'TEXT', '1', '0', '4', 'SCH', isSchool ? 'REG' : 'COL'],
+        ['1', 'ADMISSION FEES', 'ADMN', '1', '0', '11', 'SCH', isSchool ? 'OPT' : 'COL'],
+        ['2', 'TUITION FEES', 'TUITION', '1', '1', '14', 'SCH', isSchool ? 'REG' : 'COL'],
       ]),
       saving: _saving, fileName: _fileName, imported: _imported, skipped: _skipped, errors: _errors, showResult: false,
       onDismissResult: () {},
@@ -1520,7 +1724,7 @@ class _FeeTypeTabState extends State<_FeeTypeTab> with AutomaticKeepAliveClientM
       onClose: _close,
       isValidated: _isValidated,
       existingRows: _existingRows,
-      existingHeaders: const ['Fee Name', 'Short Name', 'Fee Group', 'Fine Applicable', 'Type'],
+      existingHeaders: const ['Fee Type ID', 'Fee Type Name', 'Fee Short', 'Fee Group', 'Fine Applicable', 'FeeType Order', 'Type', 'Reg/Opt'],
       isLoadingExisting: _isLoadingExisting,
       rowErrors: _rowErrors,
       cellErrors: _cellErrors,
@@ -1626,6 +1830,7 @@ class _ConcessionTabState extends State<_ConcessionTab> with AutomaticKeepAliveC
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     try {
@@ -1639,7 +1844,7 @@ class _ConcessionTabState extends State<_ConcessionTab> with AutomaticKeepAliveC
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Concessions', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -1700,7 +1905,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
   static const _collegeHeaders = ['Class *', 'Semester *', 'Feetype *', 'AdmissionType *', 'Class Fee Amount *', 'Due Date *', 'App. To All', 'Class Id', 'Semester Id', 'Fee Id', 'Admission Type Id', 'Class Fee Id'];
   /// School format: no admission type; a line can instead be limited to
   /// New/Old students, Boys/Girls and Dayscholars/Hostlers (blank = both).
-  static const _schoolHeaders = ['Section *', 'Term *', 'Fee Type *', 'Amount *', 'New/Old', 'Boy/Girl', 'Dayscholar/Hostler', 'Due Date *', 'Term Id', 'Fee Id', 'Section Id'];
+  static const _schoolHeaders = ['Section *', 'Term *', 'Fee Type *', 'Amount *', 'New/Old', 'Boy/Girl', 'Dayscholar/Hostler', 'Due Date', 'Term Id', 'Fee Id', 'Section Id'];
   static List<String> get _headers => isSchool ? _schoolHeaders : _collegeHeaders;
 
   /// School flag cells -> 1 / 2 / 3 (3 = both; blank is both). null = not
@@ -2008,7 +2213,8 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
 
     final rowErrs = <int, String>{};
     final cellErrs = <int, Set<int>>{};
-    const required = {0: 'Section', 1: 'Term', 2: 'Fee Type', 3: 'Amount', 7: 'Due Date'};
+    // Due Date is optional (blank = no due date).
+    const required = {0: 'Section', 1: 'Term', 2: 'Fee Type', 3: 'Amount'};
     for (int i = 0; i < _rows.length; i++) {
       // Work on a growable copy so ids / exact names can be written back.
       final row = List<dynamic>.from(_rows[i]);
@@ -2133,6 +2339,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; _genStatus = 'Saving...'; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     int generated = 0;
@@ -2258,7 +2465,7 @@ class _ClassFeeDemandTabState extends State<_ClassFeeDemandTab> with AutomaticKe
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Class Fee Demand', headers: _headers, rows: srcRows, onDone: () {
         _loadExisting();
         if (generated > 0 && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -2464,6 +2671,7 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     final errs = <String>[];
@@ -2476,7 +2684,7 @@ class _AdmissionTypeTabState extends State<_AdmissionTypeTab> with AutomaticKeep
     _errors = errs;
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Admission Types', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -2595,6 +2803,7 @@ class _CommunityTabState extends State<_CommunityTab> with AutomaticKeepAliveCli
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     final errs = <String>[];
@@ -2607,7 +2816,7 @@ class _CommunityTabState extends State<_CommunityTab> with AutomaticKeepAliveCli
     _errors = errs;
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Communities', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -2729,6 +2938,7 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
   Future<void> _save() async {
     if (_rows.isEmpty) return;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     final errs = <String>[];
@@ -2741,7 +2951,7 @@ class _QuotaTabState extends State<_QuotaTab> with AutomaticKeepAliveClientMixin
     _errors = errs;
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
     if (mounted) {
-      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+      _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Quotas', headers: _headers, rows: srcRows, onDone: _loadExisting);
     }
   }
 
@@ -2895,6 +3105,7 @@ class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClien
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     final filled = await _fillBlankIds('semester', 'sem_id', _rows);
     for (final row in filled) {
       if (row.length < 2 || row[1].toString().trim().isEmpty) { _skipped++; continue; }
@@ -2920,7 +3131,7 @@ class _SemesterTabState extends State<_SemesterTab> with AutomaticKeepAliveClien
       }
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: _loadExisting);
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Semesters', headers: _headers, rows: srcRows, onDone: _loadExisting);
   }
 
   @override
@@ -3101,6 +3312,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     try {
       final years = await SupabaseService.getYears(insId);
       final yr = years.isNotEmpty ? years.first : null;
@@ -3190,7 +3402,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
       _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {});
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Fee Collections', headers: _headers, rows: srcRows, onDone: () {});
   }
 
   /// Misc-collection import — group rows by Receipt No, insert a misc_collection
@@ -3200,6 +3412,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final insId = auth.insId ?? 0;
     setState(() { _saving = true; _errors = []; _imported = 0; _skipped = 0; });
+    final srcRows = List<List<dynamic>>.from(_rows); // for Export Errors
     try {
       final years = await SupabaseService.getYears(insId);
       final yr = years.isNotEmpty ? years.first : null;
@@ -3326,7 +3539,7 @@ class _FeeCollectionImportTabState extends State<_FeeCollectionImportTab> with A
       _errors = ['Could not import the file. ${_friendlyError(e.toString())}'];
     }
     setState(() { _saving = false; _rows = []; _fileName = null; _isValidated = false; _rowErrors = {}; _cellErrors = {}; });
-    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, onDone: () {});
+    if (mounted) _showImportResultDialog(context, imported: _imported, skipped: _skipped, errors: _errors, name: 'Misc Collections', headers: _headers, rows: srcRows, onDone: () {});
   }
 
   void _setMode(String m) {

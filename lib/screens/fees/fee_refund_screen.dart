@@ -12,7 +12,9 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/receipt_info.dart';
 import '../../utils/app_text.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Fee Refund — raise a refund against a fee-collection receipt. Look up a
 /// student, pick one of their receipts, then enter a Refund Amount (and an
@@ -77,6 +79,9 @@ class _RefundRow {
 
 class _FeeRefundScreenState extends State<FeeRefundScreen> {
   final _searchCtrl = TextEditingController();
+  /// The search box's own controller (Autocomplete makes it) -- Clear and the
+  /// student chip's x empty it (user, 2026-11-14: "clear option not clearing").
+  TextEditingController? _searchBox;
   final _bankRefCtrl = TextEditingController();
   final _accountCodeCtrl = TextEditingController();
   final _refundReasonCtrl = TextEditingController();
@@ -98,6 +103,17 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
   /// advance receipt live in different tables with independent ids, so a bare
   /// int would let pay_id 412 and adv_id 412 select each other.
   String? _selectedKey;
+  // Receipt type / series / Seq. No. on each row (ReceiptInfo).
+  List<(String, String)> _series = [];
+  Map<int, String> _feeKinds = {};
+  /// Receipt-type filter once a student is picked (null = all types) --
+  /// user, 2026-11-14: "after selecting student filter option for receipt type".
+  String? _rType;
+  List<String> get _rTypes =>
+      {for (final r in _receipts) ReceiptInfo.typeText(r, _feeKinds)}.toList()..sort();
+  List<Map<String, dynamic>> get _shownReceipts => _rType == null
+      ? _receipts
+      : _receipts.where((r) => ReceiptInfo.typeText(r, _feeKinds) == _rType).toList();
   int? _selectedPayId;
   List<_RefundRow> _rows = [];
 
@@ -132,6 +148,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     _loadCoursesClasses();
     _loadBanks();
     _loadDocNo();
+    ReceiptInfo.loadSeries(_insId).then((v) { if (mounted) setState(() => _series = v); });
   }
 
   @override
@@ -260,8 +277,36 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     }
   }
 
-  void _pick(Map<String, dynamic> s) {
-    _load(s);
+  /// A receipt-number match opens its student with that receipt picked.
+  Future<void> _pick(Map<String, dynamic> s) async {
+    final key = s['_rkey']?.toString();
+    final no = s['_rno']?.toString() ?? '';
+    // The student's own Standard / Section fill the two filters, and that
+    // section's students list behind the chip (user, 2026-11-14).
+    final std = s['courname']?.toString().trim();
+    final sec = s['stuclass']?.toString().trim();
+    if (std != null && std.isNotEmpty && (std != _selectedCourse || sec != _selectedClass)) {
+      setState(() {
+        _selectedCourse = _courseNames.contains(std) ? std : null;
+        _selectedClass = sec != null && _classNamesFor(_selectedCourse).contains(sec) ? sec : null;
+      });
+      _loadFromFilter();
+    }
+    await _load(Map<String, dynamic>.from(s)..remove('_rkey')..remove('_rno'));
+    if (!mounted || key == null) return;
+    if (_receipts.any((r) => _receiptKey(r) == key)) {
+      _onReceiptSelected(key);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Receipt $no has nothing left to refund.'), backgroundColor: AppColors.warning));
+    }
+  }
+
+  /// "Fee Receipt · Regular  ·  COLLEGE FEES series · Seq. No. 2"
+  String _receiptMeta(Map<String, dynamic> r) {
+    final t = ReceiptInfo.typeText(r, _feeKinds);
+    final s = ReceiptInfo.seriesText('${r['paynumber'] ?? ''}', _series);
+    return s.isEmpty ? t : '$t  ·  $s';
   }
 
   Future<void> _load(Map<String, dynamic> student) async {
@@ -270,6 +315,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       _loading = true;
       _student = student;
       _receipts = [];
+      _rType = null;
       _selectedKey = null;
       _selectedPayId = null;
       _clearRows();
@@ -333,9 +379,13 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         }
       }
 
+      // Regular / Arrear of each fee receipt, for its type line.
+      final kinds = await ReceiptInfo.feeKinds(
+          receipts.map((r) => (r['pay_id'] as num?)?.toInt()).whereType<int>());
       if (!mounted) return;
       setState(() {
         _receipts = receipts;
+        _feeKinds = kinds;
         _loading = false;
       });
     } catch (e) {
@@ -698,6 +748,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
   }
 
   Future<void> _newRecord() async {
+    _searchBox?.clear();
     setState(() {
       _searchCtrl.clear();
       _bankRefCtrl.clear();
@@ -708,6 +759,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       _selectedCourse = null;
       _selectedClass = null;
       _receipts = [];
+      _rType = null;
       _selectedKey = null;
       _selectedPayId = null;
       _clearRows();
@@ -765,6 +817,15 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
 
   TextStyle _fieldTextStyle() => AppUI.fieldText(context);
 
+  TextStyle _hintTextStyle() => AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.ink3);
+
+  /// One line of dropdown text that shrinks to fit instead of wrapping onto
+  /// a clipped second line.
+  Widget _fitLine(String text, TextStyle style) => Align(
+        alignment: Alignment.centerLeft,
+        child: AppFitText(text, style: style),
+      );
+
   // ── layout ────────────────────────────────────────────────────────────────
   // Master-detail: student search + Course/Class filter and the student's
   // receipts on the left; the picked receipt's refund form + fee lines on the
@@ -782,8 +843,10 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           listSubtitle: _student == null
               ? 'Search or filter, then pick a student'
               : 'Pick the receipt to refund against',
-          search: _studentSearch(),
-          filters: [_courseClassFilters()],
+          // Standard / Section first, the search box under them (user,
+          // 2026-11-14: "select standard and section and search box reorder").
+          search: _courseClassFilters(),
+          filters: [_studentSearch()],
           list: _listBody(),
           footer: _listFooter(),
           detail: picked ? _detailPane() : null,
@@ -808,9 +871,11 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
 
   /// Back to the student list (keeps the Course/Class filter).
   void _clearStudent() {
+    _searchBox?.clear();
     setState(() {
       _student = null;
       _receipts = [];
+      _rType = null;
       _selectedKey = null;
       _selectedPayId = null;
       _clearRows();
@@ -843,7 +908,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
   // ── list pane ─────────────────────────────────────────────────────────────
   Widget _courseClassFilters() => Row(children: [
         Expanded(
-          child: DropdownButtonFormField<String>(
+          child: AppDropdownField<String>(
             initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
             isExpanded: true,
             dropdownColor: Colors.white,
@@ -851,7 +916,10 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             elevation: 6,
             style: _fieldTextStyle(),
             decoration: _fieldDec(schoolTerm('Select course')),
+            // One line that shrinks to fit, not "Select" + a clipped 2nd line.
+            hint: _fitLine(schoolTerm('Select course'), _hintTextStyle()),
             items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            selectedItemBuilder: (_) => [for (final s in _courseNames) _fitLine(s, _fieldTextStyle())],
             onChanged: (v) => setState(() {
               _selectedCourse = v;
               if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) _selectedClass = null;
@@ -861,7 +929,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         ),
         SizedBox(width: 10.w),
         Expanded(
-          child: DropdownButtonFormField<String>(
+          child: AppDropdownField<String>(
             initialValue: _classNamesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
             isExpanded: true,
             dropdownColor: Colors.white,
@@ -869,7 +937,9 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
             elevation: 6,
             style: _fieldTextStyle(),
             decoration: _fieldDec(schoolTerm('Select class')),
+            hint: _fitLine(schoolTerm('Select class'), _hintTextStyle()),
             items: _classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
+            selectedItemBuilder: (_) => [for (final s in _classNamesFor(_selectedCourse)) _fitLine(s, _fieldTextStyle())],
             onChanged: (v) => setState(() {
               _selectedClass = v;
               _loadFromFilter();
@@ -883,27 +953,33 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
   // student by reg no or name when none is.
   Widget _studentSearch() => LayoutBuilder(
         builder: (context, box) => Autocomplete<Map<String, dynamic>>(
-          displayStringForOption: (s) => '${s['stuname']} • ${s['stuadmno']}',
+          displayStringForOption: (s) => s['_rno'] != null
+              ? '${s['_rno']} • ${s['stuname']}'
+              : '${s['stuname']} • ${s['stuadmno']}',
           optionsBuilder: (v) async {
             final q = v.text.trim();
-            if (_filteredStudents.isNotEmpty) {
-              if (q.isEmpty) return _filteredStudents;
-              final t = q.toLowerCase();
-              return _filteredStudents.where((s) =>
-                  (s['stuname']?.toString().toLowerCase() ?? '').contains(t) ||
-                  (s['stuadmno']?.toString().toLowerCase() ?? '').contains(t));
-            }
+            // A receipt number (3+ characters with a digit) finds the student
+            // it was issued to; picking it opens that receipt.
+            final byNo = await ReceiptInfo.findByReceiptNo(_insId, q, misc: false);
+            if (q.isEmpty) return _filteredStudents.isNotEmpty ? _filteredStudents : byNo;
+            // The chosen section's matches first, then every other student --
+            // a section picked earlier must not hide the rest of the school.
+            final t = q.toLowerCase();
+            final local = _filteredStudents.where((s) =>
+                (s['stuname']?.toString().toLowerCase() ?? '').contains(t) ||
+                (s['stuadmno']?.toString().toLowerCase() ?? '').contains(t)).toList();
             // Two characters before hitting the database: one letter would
             // pull half the college back on every keystroke.
-            if (q.length < 2) return const Iterable<Map<String, dynamic>>.empty();
-            return _lookupStudents(q);
+            final remote = q.length < 2 ? const <Map<String, dynamic>>[] : await _lookupStudents(q);
+            final seen = {for (final s in local) '${s['stu_id']}'};
+            return [...byNo, ...local, ...remote.where((s) => seen.add('${s['stu_id']}'))];
           },
           onSelected: _pick,
           fieldViewBuilder: (context, controller, focusNode, onSubmitted) => TextField(
-            controller: controller,
+            controller: _searchBox = controller,
             focusNode: focusNode,
             style: _fieldTextStyle(),
-            decoration: _fieldDec(schoolTerm('Search by register no. or name'),
+            decoration: _fieldDec(schoolTerm('Search by register no., name or receipt no.'),
                 prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight)),
           ),
           optionsViewBuilder: (context, onSelected, options) => Align(
@@ -921,10 +997,10 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
                     final s = options.elementAt(i);
                     return ListTile(
                       dense: true,
-                      title: Text(s['stuname']?.toString() ?? '',
+                      title: Text(s['_rno'] != null ? 'Receipt ${s['_rno']}' : (s['stuname']?.toString() ?? ''),
                           style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600)),
                       subtitle: Text(
-                          [s['stuadmno'], s['stuclass']]
+                          [if (s['_rno'] != null) s['stuname'], s['stuadmno'], s['stuclass']]
                               .where((e) => (e?.toString().trim().isNotEmpty ?? false))
                               .join(' • '),
                           style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
@@ -946,7 +1022,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         return AppUI.empty(
           icon: 'people',
           title: 'No student selected',
-          why: schoolTerm('Search by register no. or name above, or select a course and class to list its students.'),
+          why: schoolTerm('Search by register no., name or receipt no. above, or select a course and class to list its students.'),
         );
       }
       return ListView.separated(
@@ -966,6 +1042,25 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Padding(padding: EdgeInsets.all(12.w), child: _studentChip()),
+      if (!_loading && _receipts.isNotEmpty)
+        Padding(
+          padding: EdgeInsets.fromLTRB(12.w, 0, 12.w, 12.h),
+          child: AppDropdownField<String?>(
+            key: ValueKey('rtype-${_student?['stu_id']}-${_rTypes.join('|')}'),
+            initialValue: _rTypes.contains(_rType) ? _rType : null,
+            isExpanded: true,
+            dropdownColor: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            elevation: 6,
+            style: AppUI.fieldText(context, filled: _rType != null),
+            decoration: AppUI.field(context, 'All receipt types', filled: _rType != null),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('All receipt types', overflow: TextOverflow.ellipsis)),
+              for (final t in _rTypes) DropdownMenuItem<String?>(value: t, child: Text(t, overflow: TextOverflow.ellipsis)),
+            ],
+            onChanged: (v) => setState(() => _rType = v),
+          ),
+        ),
       const Divider(height: 1, color: AppColors.divider),
       Expanded(child: _receiptList()),
     ]);
@@ -991,10 +1086,10 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
     }
     return ListView.separated(
       padding: EdgeInsets.zero,
-      itemCount: _receipts.length,
+      itemCount: _shownReceipts.length,
       separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) {
-        final r = _receipts[i];
+        final r = _shownReceipts[i];
         final key = _receiptKey(r);
         final isAdv = r['adv_id'] != null;
         // An advance shows what is REFUNDABLE, not what it was taken for: the
@@ -1006,7 +1101,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         final date = _dmy(r['paydate']);
         final method = r['paymethod']?.toString() ?? '';
         final chip = isAdv
-            ? AppUI.chip(r['advtype']?.toString() == 'A' ? 'Advance (Admission)' : 'Advance', AppStatus.info)
+            ? AppUI.chip('Advance', AppStatus.info)
             : (r['paystatus']?.toString() == 'R'
                 ? AppUI.chip('Partly Refunded', AppStatus.warning)
                 : AppUI.chip('Collected', AppStatus.success));
@@ -1015,6 +1110,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           onTap: () => _onReceiptSelected(key),
           title: r['paynumber']?.toString() ?? '—',
           sub: method.isEmpty ? date : '$date  ·  $method',
+          meta: _receiptMeta(r),
           amount: '₹${amt.toStringAsFixed(2)}',
           chip: chip,
         );
@@ -1023,7 +1119,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
   }
 
   /// A dense list row: hover, selected = primaryLight + accent text.
-  Widget _tile({required bool selected, required VoidCallback onTap, required String title, required String sub, String? amount, Widget? chip}) => Material(
+  Widget _tile({required bool selected, required VoidCallback onTap, required String title, required String sub, String? meta, String? amount, Widget? chip}) => Material(
         color: selected ? AppColors.primaryLight : Colors.white,
         child: InkWell(
           onTap: onTap,
@@ -1036,6 +1132,11 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
                   Text(title, style: AppUI.label.copyWith(color: selected ? AppColors.primary : AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
                   SizedBox(height: 2.h),
                   Text(sub, style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  if (meta != null && meta.isNotEmpty) ...[
+                    SizedBox(height: 2.h),
+                    Text(meta, style: AppUI.muted.copyWith(fontSize: 12.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
                 ]),
               ),
               if (amount != null || chip != null) ...[
@@ -1051,7 +1152,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       );
 
   Widget _listFooter() {
-    final n = _student == null ? _filteredStudents.length : _receipts.length;
+    final n = _student == null ? _filteredStudents.length : _shownReceipts.length;
     return Text(AppUI.showing(n == 0 ? 0 : 1, n, n), style: AppUI.muted);
   }
 
@@ -1093,7 +1194,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
       return AppUI.empty(
         icon: 'receipt-2',
         title: 'Select a student',
-        why: schoolTerm('Search for a student by register no. or name, or select a course and class on the left, then choose the receipt to refund.'),
+        why: schoolTerm('Search by register no., name or receipt no., or select a course and class on the left, then choose the receipt to refund.'),
       );
     }
     if (!_loading && _receipts.isEmpty) {
@@ -1129,14 +1230,20 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
         child: AppUI.cardHeader(
           icon: 'receipt-2',
           title: 'Receipt ${r['paynumber'] ?? '—'}',
-          subtitle: '${_student?['stuname'] ?? ''}  •  $sub',
+          // + the receipt's series; its type is the highlighted badge on the
+          // right (user, 2026-11-14)
+          subtitle: [
+            '${_student?['stuname'] ?? ''}',
+            sub,
+            ReceiptInfo.seriesText('${r['paynumber'] ?? ''}', _series),
+          ].where((x) => x.trim().isNotEmpty).join('  •  '),
           trailing: [
-            if (isAdv)
-              AppUI.chip(r['advtype']?.toString() == 'A' ? 'Advance (Admission)' : 'Advance', AppStatus.info)
-            else if (r['paystatus']?.toString() == 'R')
-              AppUI.chip('Partly Refunded', AppStatus.warning)
-            else
-              AppUI.chip('Collected', AppStatus.success),
+            AppUI.chip(ReceiptInfo.typeText(r, _feeKinds), AppStatus.info),
+            // an advance has no collected / refunded status of its own here
+            if (!isAdv)
+              r['paystatus']?.toString() == 'R'
+                  ? AppUI.chip('Partly Refunded', AppStatus.warning)
+                  : AppUI.chip('Collected', AppStatus.success),
           ],
         ),
       ),
@@ -1283,7 +1390,7 @@ class _FeeRefundScreenState extends State<FeeRefundScreen> {
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(
               flex: 2,
-              child: _labeled('Bank Name', DropdownButtonFormField<int>(
+              child: _labeled('Bank Name', AppDropdownField<int>(
                 initialValue: _selectedBanId,
                 isExpanded: true,
                 dropdownColor: Colors.white,

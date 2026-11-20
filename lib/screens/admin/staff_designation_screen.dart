@@ -8,6 +8,7 @@ import '../../services/supabase_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 class StaffDesignationScreen extends StatefulWidget {
   const StaffDesignationScreen({super.key});
 
@@ -159,7 +160,7 @@ class _StaffDesignationScreenState extends State<StaffDesignationScreen> {
                       validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
                     ),
                     SizedBox(height: 16.h),
-                    DropdownButtonFormField<int?>(
+                    AppDropdownField<int?>(
                       value: _selectedReportTo,
                       icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                       dropdownColor: Colors.white,

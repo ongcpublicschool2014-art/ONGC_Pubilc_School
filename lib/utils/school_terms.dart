@@ -12,6 +12,65 @@ import '../services/supabase_service.dart';
 /// serves both.
 bool get isSchool => SupabaseService.isSchoolLayout;
 
+// ── gender wording ───────────────────────────────────────────────────────────
+// Stored as a code (M / F / T or O). Shown as Boy / Girl on the school database
+// (user, 2026-10-30: "male to boy female to girl"), Male / Female on a college.
+// The TC certificate keeps Male / Female (tc_fields.dart): it is an official
+// document.
+
+/// "Boy" (school) / "Male" (college).
+String get kBoyLabel => isSchool ? 'Boy' : 'Male';
+
+/// "Girl" (school) / "Female" (college).
+String get kGirlLabel => isSchool ? 'Girl' : 'Female';
+
+/// Gender as shown for a stored code (or an old word): M -> Boy, F -> Girl,
+/// T / O -> Other; anything else is shown as it is ('' stays '').
+String genderLabel(Object? code) {
+  final g = '${code ?? ''}'.trim();
+  switch (g.toUpperCase()) {
+    case 'M':
+    case 'MALE':
+    case 'BOY':
+      return kBoyLabel;
+    case 'F':
+    case 'FEMALE':
+    case 'GIRL':
+      return kGirlLabel;
+    case 'T':
+    case 'O':
+    case 'OTHER':
+      return 'Other';
+    default:
+      return g;
+  }
+}
+
+/// [genderLabel] by another name, for code that has its own `genderLabel`
+/// (a model getter or a local variable) hiding this one.
+String genderLabelOf(Object? code) => genderLabel(code);
+
+/// The stored code for a shown gender (either wording): Boy/Male -> M,
+/// Girl/Female -> F, Other -> [other]; null when blank or unknown.
+String? genderCode(String? label, {String other = 'T'}) {
+  switch ((label ?? '').trim().toUpperCase()) {
+    case 'M':
+    case 'MALE':
+    case 'BOY':
+      return 'M';
+    case 'F':
+    case 'FEMALE':
+    case 'GIRL':
+      return 'F';
+    case 'T':
+    case 'O':
+    case 'OTHER':
+      return other;
+    default:
+      return null;
+  }
+}
+
 const Map<String, String> _schoolWords = {
   'Course': 'Standard', 'Courses': 'Standards',
   'COURSE': 'STANDARD', 'COURSES': 'STANDARDS',
@@ -56,6 +115,8 @@ String schoolTerm(String text) {
   // the long menu / tab name does not fit the sidebar or a card header
   t = t.replaceAll(RegExp(r'Advance Fee Receipt No\.?'), 'Advance Receipt No.');
   t = t.replaceAll('Advance Fee Definition', 'Advance Fee Demand');
+  // A school imports only OPTIONAL fees there (user, 2026-11-17).
+  t = t.replaceAll('Fee Demand Import', 'Optional Fee Import');
   return t.replaceAllMapped(_wordRe, (m) => _schoolWords[m.group(0)!] ?? m.group(0)!);
 }
 
@@ -117,8 +178,16 @@ const String kEmisRuleMsg = 'EMIS No. / APAAR ID must be exactly 12 digits';
 const Set<String> kSchoolHiddenSubItems = {'Admission Type', 'Quota'};
 
 /// Sidebar menu items a school does not use (Advance Fee Collection takes
-/// the place of Advance Collection there).
-const Set<String> kSchoolHiddenNavItems = {'Advance Collection'};
+/// the place of Advance Collection there; Advance Reconciliation Report
+/// replaces the Advance Register).
+const Set<String> kSchoolHiddenNavItems = {
+  'Advance Collection',
+  // replaced on a school by the old-format reports
+  'Advance Register', // -> Advance Reconciliation Report
+  'Pending Payment', 'Pending Details', // -> Pending Fee Report
+  // Fee Demand Import was hidden here on 2026-11-13 and is back in Fees for a
+  // school too (user, 2026-11-17).
+};
 
 /// Sidebar sub-items that only a school has.
-const Set<String> kCollegeHiddenSubItems = {'Class Matching', 'Advance Fee Definition', 'Advance Fee Collection', 'Advance Fee Receipt No', 'Year End Process', 'Consolidated Summary', 'Receiptwise Report', 'Division Summary', 'Fee Matrix', 'Pending Fee Report', 'Advance Reconciliation Report', 'TC Certificate', 'TC Approval', 'TC Print', 'TC Format'};
+const Set<String> kCollegeHiddenSubItems = {'Arrear Receipt No', 'Misc Receipt No', 'Concession Approval', 'Class Matching', 'Advance Fee Definition', 'Advance Fee Collection', 'Advance Fee Receipt No', 'Year End Process', 'Consolidated Summary', 'Receiptwise Report', 'Division Summary', 'Fee Matrix', 'Pending Fee Report', 'Advance Reconciliation Report', 'TC Certificate', 'TC Approval', 'TC Print', 'TC Format', 'Receipt Format', 'Allot Section', 'Transport Setup', 'Routes & Stops', 'Vehicles', 'Transport Staff', 'Trip Schedules', 'Duty Roster', 'Student Enrollment', 'Vehicle Allotment', 'Stage Fees'};

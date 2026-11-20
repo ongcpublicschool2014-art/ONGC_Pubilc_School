@@ -8,6 +8,8 @@ import '../../utils/tc_fields.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
+import '../../widgets/app_dropdown_field.dart';
+import 'tc_certificate_screen.dart';
 
 /// TC -> TC Approval (old frmTcApproval / frmApprovalCancel) and
 /// TC -> TC Print (old frmTcPrinting): both list the saved certificates.
@@ -40,6 +42,7 @@ class _TcListScreenState extends State<_TcListScreen> {
   late String _filter = widget.mode == TcListMode.approval ? 'PENDING' : 'NOT_PRINTED';
   String _copy = 'AUTO';
   bool _hasFormat = true;
+  bool _pdfFormat = false; // PDF format: Print goes straight to the printer
 
   bool get _approval => widget.mode == TcListMode.approval;
 
@@ -68,8 +71,12 @@ class _TcListScreenState extends State<_TcListScreen> {
       final r = await Future.wait<dynamic>([TcService.list(), TcService.format()]);
       if (!mounted) return;
       setState(() {
-        _items = [for (final i in r[0] as List<Map<String, dynamic>>) if (i['cert'] != null) i];
+        _items = [
+          for (final i in r[0] as List<Map<String, dynamic>>)
+            if (i['cert'] != null) i
+        ];
         _hasFormat = r[1] != null;
+        _pdfFormat = TcService.isPdf(r[1] as Map<String, dynamic>?);
         _picked.removeWhere((id) => !_items.any((i) => _id(i) == id));
         _loading = false;
       });
@@ -121,7 +128,7 @@ class _TcListScreenState extends State<_TcListScreen> {
     }
   }
 
-  Future<void> _print() async {
+  Future<void> _print({bool savePdf = false}) async {
     final certs = [
       for (final i in _visible)
         if (_picked.contains(_id(i))) {..._cert(i).cast<String, dynamic>(), 'stuadmno': i['stuadmno'], 'stuname': i['stuname']}
@@ -132,10 +139,34 @@ class _TcListScreenState extends State<_TcListScreen> {
     }
     setState(() => _busy = true);
     try {
-      final path = await TcService.printTc(certs, _copy);
-      if (path == null) return;
-      await TcService.markPrinted([for (final c in certs) (c['tcc_id'] as num).toInt()]);
-      _snack('${certs.length} TC(s) saved to $path and opened for printing.', AppColors.success);
+      final res = await TcService.printTc(certs, _copy, savePdf: savePdf);
+      if (res.where == null) return;
+      // Only what reached the printer counts as printed. The first print is
+      // when the TC is ISSUED (the student is struck off), and every later one
+      // is a DUPLICATE -- so a file that was only saved is asked about.
+      if (res.printed.isNotEmpty) await TcService.markPrinted(res.printed);
+      var savedDone = 0;
+      if (res.saved.isNotEmpty && mounted) {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Did It Print?'),
+            content: Text('${res.saved.length} TC(s) were saved to ${res.where} and opened. '
+                'Mark them printed only once they are on paper: the first print issues the TC '
+                '(the student is struck off) and later prints say DUPLICATE.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not Yet')),
+              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes, Printed')),
+            ],
+          ),
+        );
+        if (ok == true) {
+          await TcService.markPrinted(res.saved);
+          savedDone = res.saved.length;
+        }
+      }
+      final n = res.printed.length + savedDone;
+      _snack(n == 0 ? 'Not marked as printed.' : '$n TC(s) marked as printed.', n == 0 ? AppColors.warning : AppColors.success);
       _picked.clear();
       await _load();
     } catch (e) {
@@ -143,6 +174,25 @@ class _TcListScreenState extends State<_TcListScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Correct a certificate before approving it, without leaving TC Approval.
+  Future<void> _edit(Map<String, dynamic> i) async {
+    final size = MediaQuery.of(context).size;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(24),
+        backgroundColor: Colors.transparent,
+        child: SizedBox(
+          width: size.width * 0.8,
+          height: size.height * 0.9,
+          child: TcCertificateScreen(stuId: (i['stu_id'] as num?)?.toInt()),
+        ),
+      ),
+    );
+    if (mounted) _load(); // pick up what was changed
   }
 
   void _preview(Map<String, dynamic> i) {
@@ -175,9 +225,8 @@ class _TcListScreenState extends State<_TcListScreen> {
   Widget build(BuildContext context) {
     if (_loading && _items.isEmpty) return const Center(child: CircularProgressIndicator());
     final rows = _visible;
-    final filters = _approval
-        ? const [('PENDING', 'Awaiting approval'), ('APPROVED', 'Approved'), ('ALL', 'All')]
-        : const [('NOT_PRINTED', 'Not printed'), ('PRINTED', 'Printed'), ('ALL', 'All approved')];
+    final filters =
+        _approval ? const [('PENDING', 'Awaiting approval'), ('APPROVED', 'Approved'), ('ALL', 'All')] : const [('NOT_PRINTED', 'Not printed'), ('PRINTED', 'Printed'), ('ALL', 'All approved')];
     final allTicked = rows.isNotEmpty && rows.every((i) => _picked.contains(_id(i)));
     return Container(
       padding: EdgeInsets.all(AppUI.cardPad),
@@ -192,42 +241,73 @@ class _TcListScreenState extends State<_TcListScreen> {
           trailing: [IconButton(tooltip: 'Refresh', onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh))],
         ),
         SizedBox(height: 14.h),
-        Row(children: [
-          SizedBox(width: 320.w, child: AppSearchField(controller: _search, hintText: 'Search by name, admission no. or TC no.', onChanged: (_) => setState(() {}))),
-          SizedBox(width: 12.w),
-          Wrap(spacing: 8.w, children: [
-            for (final f in filters) ChoiceChip(label: Text(f.$2), selected: _filter == f.$1, onSelected: (_) => setState(() => _filter = f.$1)),
-          ]),
-          const Spacer(),
-          if (!_approval) ...[
-            SizedBox(
-              width: 300.w,
-              child: DropdownButtonFormField<String>(
-                initialValue: _copy,
-                isExpanded: true,
-                decoration: AppUI.field(context, 'Copy', label: 'Copy Type', leadingIcon: 'document-text', filled: true),
-                style: AppUI.fieldText(context, filled: true),
-                items: const [
-                  DropdownMenuItem(value: 'AUTO', child: Text('Automatic (Original first, then Duplicate)')),
-                  DropdownMenuItem(value: 'ORIGINAL', child: Text('Original')),
-                  DropdownMenuItem(value: 'DUPLICATE', child: Text('Duplicate')),
-                ],
-                onChanged: (v) => setState(() => _copy = v ?? 'AUTO'),
+        // One row on a wide window; on a small one the actions move to a
+        // second row so the search box and Copy Type keep a usable width.
+        LayoutBuilder(builder: (context, box) {
+          final left = <Widget>[
+            Flexible(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 320.w),
+                child: AppSearchField(controller: _search, hintText: 'Search by name, admission no. or TC no.', onChanged: (_) => setState(() {})),
               ),
             ),
-            SizedBox(width: 10.w),
-          ],
-          if (_approval) ...[
-            OutlinedButton.icon(onPressed: _busy ? null : () => _approve(false), icon: const Icon(Icons.undo, size: 16), label: const Text('Cancel Approval')),
-            SizedBox(width: 10.w),
-            ElevatedButton.icon(onPressed: _busy ? null : () => _approve(true), icon: const Icon(Icons.verified, size: 16), label: Text('Approve (${_picked.length})')),
-          ] else
-            ElevatedButton.icon(
-              onPressed: _busy || !_hasFormat ? null : _print,
-              icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.print, size: 16),
-              label: Text('Print (${_picked.length})'),
-            ),
-        ]),
+            SizedBox(width: 12.w),
+            Wrap(spacing: 8.w, children: [
+              for (final f in filters) ChoiceChip(label: Text(f.$2), selected: _filter == f.$1, onSelected: (_) => setState(() => _filter = f.$1)),
+            ]),
+          ];
+          final right = <Widget>[
+            if (!_approval) ...[
+              SizedBox(
+                width: 300.w,
+                child: AppDropdownField<String>(
+                  initialValue: _copy,
+                  isExpanded: true,
+                  decoration: AppUI.field(context, 'Copy', label: 'Copy Type', leadingIcon: 'document-text', filled: true),
+                  style: AppUI.fieldText(context, filled: true),
+                  items: const [
+                    DropdownMenuItem(value: 'AUTO', child: Text('Automatic (Original first, then Duplicate)')),
+                    DropdownMenuItem(value: 'ORIGINAL', child: Text('Original')),
+                    DropdownMenuItem(value: 'DUPLICATE', child: Text('Duplicate')),
+                  ],
+                  // The shown choice stays on one line (shorter wording for
+                  // Automatic; the open menu keeps the full text) and shrinks
+                  // to fit rather than wrapping into a clipped second line.
+                  selectedItemBuilder: (_) => const ['Auto (Original, then Duplicate)', 'Original', 'Duplicate'].map((t) => AppFitText(t)).toList(),
+                  onChanged: (v) => setState(() => _copy = v ?? 'AUTO'),
+                ),
+              ),
+              SizedBox(width: 10.w),
+            ],
+            if (_approval) ...[
+              OutlinedButton.icon(onPressed: _busy ? null : () => _approve(false), icon: const Icon(Icons.undo, size: 16), label: const Text('Cancel Approval')),
+              SizedBox(width: 10.w),
+              ElevatedButton.icon(onPressed: _busy ? null : () => _approve(true), icon: const Icon(Icons.verified, size: 16), label: Text('Approve (${_picked.length})')),
+            ] else ...[
+              if (_pdfFormat) ...[
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _print(savePdf: true),
+                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                  label: const Text('Save PDF'),
+                ),
+                SizedBox(width: 10.w),
+              ],
+              ElevatedButton.icon(
+                onPressed: _busy || !_hasFormat ? null : _print,
+                icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.print, size: 16),
+                label: Text('Print (${_picked.length})'),
+              ),
+            ],
+          ];
+          if (box.maxWidth >= 1150) {
+            return Row(children: [...left, const Spacer(), SizedBox(width: 12.w), ...right]);
+          }
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: left),
+            SizedBox(height: 10.h),
+            Row(children: [const Spacer(), ...right]),
+          ]);
+        }),
         if (!_approval && !_hasFormat)
           Container(
             margin: EdgeInsets.only(top: 10.h),
@@ -249,9 +329,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                     width: 40,
                     child: Checkbox(
                       value: allTicked,
-                      onChanged: rows.isEmpty
-                          ? null
-                          : (v) => setState(() => v == true ? _picked.addAll(rows.map(_id)) : _picked.removeAll(rows.map(_id))),
+                      onChanged: rows.isEmpty ? null : (v) => setState(() => v == true ? _picked.addAll(rows.map(_id)) : _picked.removeAll(rows.map(_id))),
                     ),
                   ),
                   AppUI.th('Student', flex: 4),
@@ -259,7 +337,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                   AppUI.th('TC No.', flex: 2),
                   AppUI.th(_approval ? 'Saved by' : 'Approved by', flex: 3),
                   AppUI.th(_approval ? 'Status' : 'Printed', flex: 2),
-                  const SizedBox(width: 48),
+                  SizedBox(width: _approval ? 96 : 48),
                 ]),
               ),
               Expanded(
@@ -302,9 +380,7 @@ class _TcListScreenState extends State<_TcListScreen> {
                                 Expanded(
                                   flex: 3,
                                   child: Text(
-                                    _approval
-                                        ? '${c['updatedby'] ?? c['createdby'] ?? ''} · ${tcDate(c['updatedat'] ?? c['createdat'])}'
-                                        : '${c['approvedby'] ?? ''} · ${tcDate(c['approveddate'])}',
+                                    _approval ? '${c['updatedby'] ?? c['createdby'] ?? ''} · ${tcDate(c['updatedat'] ?? c['createdat'])}' : '${c['approvedby'] ?? ''} · ${tcDate(c['approveddate'])}',
                                     style: AppUI.muted,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -314,14 +390,23 @@ class _TcListScreenState extends State<_TcListScreen> {
                                   child: Align(
                                     alignment: Alignment.centerLeft,
                                     child: _approval
-                                        ? (_approved(i)
-                                            ? AppUI.chip('Approved ${tcDate(c['approveddate'])}', AppStatus.success)
-                                            : AppUI.chip('Awaiting approval', AppStatus.warning))
+                                        ? (_approved(i) ? AppUI.chip('Approved ${tcDate(c['approveddate'])}', AppStatus.success) : AppUI.chip('Awaiting approval', AppStatus.warning))
                                         : (_prints(i) == 0
                                             ? AppUI.chip('Not printed', AppStatus.neutral)
                                             : AppUI.chip('Printed ${_prints(i)} time(s) · ${tcDate(c['lastprintedat'])}', AppStatus.info)),
                                   ),
                                 ),
+                                // Before approval a certificate can still be corrected here.
+                                if (_approval)
+                                  SizedBox(
+                                    width: 48,
+                                    child: _approved(i)
+                                        ? const SizedBox.shrink()
+                                        : IconButton(
+                                            tooltip: 'Edit certificate',
+                                            onPressed: _busy ? null : () => _edit(i),
+                                            icon: const Icon(Icons.edit_outlined, size: 18)),
+                                  ),
                                 SizedBox(
                                   width: 48,
                                   child: IconButton(tooltip: 'View details', onPressed: () => _preview(i), icon: const Icon(Icons.visibility_outlined, size: 18)),

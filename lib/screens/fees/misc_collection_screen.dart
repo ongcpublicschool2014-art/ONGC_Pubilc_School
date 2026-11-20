@@ -14,13 +14,20 @@ import '../../services/paytm_service.dart';
 import '../../widgets/paytm_checkout_dialog.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/missing_sequence_dialog.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import '../../widgets/empty_state.dart';
 import '../../services/pending_collection_sweep.dart';
 import '../../utils/school_terms.dart';
 import '../../utils/app_text.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../services/online_payment_service.dart';
+import '../../utils/payment_gateways.dart';
+import '../../widgets/online_collect.dart';
+import '../../utils/save_path.dart';
 
 /// Miscellaneous Fee Collection — a standalone counter collection (BONAFIDE
 /// CERTIFICATE, APPLICATION, …) that does NOT reduce any demand. It is stored in
@@ -130,9 +137,30 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
   bool _loading = true;
   bool _saving = false;
 
+
+  // The school's gateway (Setup > Payment Gateways). When there is one, the
+  // "Online" mode collects through it and the SERVER saves the collection once
+  // the gateway confirms the money. The old "Paytm" mode is not offered.
+  OnlineGateway? _onlineGateway;
+
+  Future<void> _loadOnlineGateway() async {
+    OnlineGateway? g;
+    try {
+      g = await OnlinePaymentService.gatewayFor();
+    } catch (_) {
+      g = const OnlineGateway(0, '', 'Online', ''); // could not tell: the server decides
+    }
+    if (mounted) setState(() => _onlineGateway = g);
+  }
+
+  String get _onlineLabel => _onlineGateway == null || _onlineGateway!.provider.isEmpty
+      ? 'Online'
+      : 'Online (${pgProvider(_onlineGateway!.provider)?.name ?? _onlineGateway!.name})';
+
   @override
   void initState() {
     super.initState();
+    _loadOnlineGateway();
     // Recover anything Paytm confirmed after a counter walked away.
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _sweepPendingCollections());
@@ -226,12 +254,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
             .order('fg_id', ascending: true),
       ]);
       final info = await SupabaseService.getInstitutionInfo(insId);
-      // Which groups this counter may collect under (Setup -> Utilities ->
-      // Misc Collection). Empty = no restriction.
+      // Receipt letterhead per fee group (Setup -> Utilities). Every group
+      // that owns a fee type is offered: the Utilities setting that limited
+      // this counter to chosen groups was removed (user, 2026-11-02).
       final settings = await SupabaseService.getInstitutionSettings(insId);
-      final allowedFgs = SupabaseService.miscFeeGroups(settings);
+      // School: this counter has its own series per fee group (MISCFEENO).
       final seqRows = await SupabaseService.fromSchema('sequence')
-          .select('fg_id')
+          .select('fg_id, actname, division')
           .eq('ins_id', insId)
           .eq('activestatus', 1);
       if (!mounted) return;
@@ -252,13 +281,14 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           ..clear()
           ..addAll([
             for (final r in (seqRows as List))
-              if (r['fg_id'] is int) r['fg_id'] as int,
+              if (isSchool)
+                if (r['actname'] == 'MISCFEENO') int.tryParse('${r['division'] ?? ''}'.replaceFirst('FG:', '')) ?? -1 else -1
+              else if (r['fg_id'] is int)
+                r['fg_id'] as int,
           ]);
         _feeGroups = [
           for (final g in List<Map<String, dynamic>>.from(results[3] as List))
-            if (typed.contains(g['fg_id']) &&
-                (allowedFgs.isEmpty || allowedFgs.contains(g['fg_id'])))
-              g,
+            if (typed.contains(g['fg_id'])) g,
         ];
         _fgId ??= _feeGroups.isEmpty ? null : _feeGroups.first['fg_id'] as int?;
         _insName = info.name;
@@ -373,6 +403,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
       case 'QR/UPI':
         return 'upi';
       case 'Paytm':
+      case 'Online':
         return 'Online Transfer';
       case 'Cheque':
         return 'cheque';
@@ -533,8 +564,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
       _snack('Select a payment mode', AppColors.warning);
       return;
     }
+    if (!await _ensureReceiptSequence()) return;
     // Paytm takes the money BEFORE the receipt exists. The other non-cash modes
     // only record a reference the cashier types in, so they keep the dialog.
+    if (_paymode == 'Online') {
+      await _collectOnline();
+      return;
+    }
     if (_paymode == 'Paytm') {
       final amount = _total;
       if (amount <= 0) {
@@ -557,6 +593,32 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
     await _save();
   }
 
+
+  /// The receipt number comes from the fee group's own sequence: if there is
+  /// none, say where to create it before any money is taken. Read fresh, so a
+  /// sequence created a moment ago counts.
+  Future<bool> _ensureReceiptSequence() async {
+    final fg = _namedLines.isEmpty ? _fgId : (_namedLines.first.fgId ?? _fgId);
+    final insId = context.read<AuthProvider>().insId;
+    if (fg == null || insId == null) return true;
+    try {
+      var query = SupabaseService.fromSchema('sequence').select('seq_id').eq('ins_id', insId).eq('activestatus', 1);
+      query = isSchool ? query.eq('actname', 'MISCFEENO').eq('division', 'FG:$fg') : query.eq('fg_id', fg);
+      final rows = await query.limit(1);
+      if ((rows as List).isNotEmpty) {
+        if (mounted) setState(() => _fgWithSequence.add(fg));
+        return true;
+      }
+    } catch (e) {
+      debugPrint('misc collection: sequence check failed: $e');
+      return true; // could not tell: the server still refuses
+    }
+    if (!mounted) return false;
+    setState(() => _fgWithSequence.remove(fg));
+    final g = _feeGroups.firstWhere((x) => x['fg_id'] == fg, orElse: () => const <String, dynamic>{});
+    await showMissingSequenceDialog(context, group: '${g['fgdesc'] ?? 'This fee group'}', misc: isSchool);
+    return false;
+  }
 
   /// Recover any misc/advance Paytm collection a counter never finished.
   ///
@@ -581,6 +643,42 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
       }
     } catch (e) {
       debugPrint('sweepPendingCollections: $e');
+    }
+  }
+
+  /// Online through the school's gateway: the server saves the misc receipt
+  /// once the gateway confirms the money (also if this window is closed).
+  Future<void> _collectOnline() async {
+    final amount = _total;
+    if (amount <= 0) {
+      _snack('Enter an amount before paying', AppColors.warning);
+      return;
+    }
+    final validLines = _lines
+        .where((l) => l.feeType.trim().isNotEmpty && (double.tryParse(l.amount.text.trim()) ?? 0) > 0)
+        .toList();
+    if (validLines.isEmpty) {
+      _snack('Add at least one fee with an amount', AppColors.warning);
+      return;
+    }
+    final header = _intentHeader(amount)
+      ..['paymode'] = 'Online Transfer'
+      ..['bankname'] = (pgProvider(_onlineGateway?.provider ?? '')?.name ?? 'ONLINE').toUpperCase();
+    setState(() => _saving = true);
+    final r = await collectOnline(
+      context,
+      kind: 'MISC',
+      stuId: _selection == 'S' ? int.tryParse('${_student?['stu_id'] ?? ''}') : null,
+      header: header,
+      lines: _intentLines(),
+      payerName: _nameCtrl.text.trim(),
+      merchantName: context.read<AuthProvider>().insName ?? '',
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (r?.status == 'C') {
+      _savedReconStatus = 'P';
+      _showSuccessDialog(r!.receiptNumbers, amount, validLines);
     }
   }
 
@@ -1183,7 +1281,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                         try {
                           final pdf = await buildReceiptPdf(data);
                           final bytes = await pdf.save();
-                          final res = await FilePicker.platform.saveFile(
+                          final res = await pickSavePath(
                             dialogTitle: 'Save Receipt PDF',
                             fileName: 'Receipt_${data.receiptNo.replaceAll('/', '_')}.pdf',
                             type: FileType.custom,
@@ -1205,7 +1303,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                       onPressed: () async {
                         try {
                           await Printing.layoutPdf(
-                            format: a5PageFormat,
+                            format: await receiptPaper(),
                             onLayout: (fmt) async =>
                                 (await buildReceiptPdf(data, pageFormat: fmt)).save(),
                             name: 'Receipt_${data.receiptNo.replaceAll('/', '_')}',
@@ -1234,7 +1332,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                       decoration: BoxDecoration(boxShadow: [
                         BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 2)),
                       ]),
-                      child: ReceiptWidget(data: data),
+                      child: ReceiptPreview(data: data),
                     ),
                   ),
                 ),
@@ -1459,6 +1557,11 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
       : AppUI.field(context, hint).copyWith(fillColor: AppColors.surface);
 
   TextStyle get _txt => AppUI.fieldText(context);
+
+  /// A dropdown's placeholder, passed as its own `hint:`. Left to the
+  /// decoration, it is laid on the empty button's baseline and sits low in
+  /// the box; as the button's hint it is centred like a text field's.
+  Widget _ddHint(String hint) => AppFitText(hint, style: AppUI.field(context, hint).hintStyle);
 
   Widget _labeled(String label, Widget child, {String? icon}) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1713,20 +1816,20 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
   Widget _partyRow() {
     if (_selection == 'S') {
       final fields = <Widget>[
-        SizedBox(width: 200.w, child: _labeled(schoolTerm('Course'), DropdownButtonFormField<String>(
+        SizedBox(width: 200.w, child: _labeled(schoolTerm('Course'), AppDropdownField<String>(
           // FormField.initialValue is read once, in initState -- a rebuild with
           // a new value is ignored. Keying on the value forces a fresh field so
           // a course set from the picked student actually shows.
           key: ValueKey('misc-course-${_selectedCourse ?? ''}'),
           initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
-          isExpanded: true, style: _txt, decoration: _dec(schoolTerm('Select course')),
+          isExpanded: true, style: _txt, decoration: _dec(schoolTerm('Select course')), hint: _ddHint(schoolTerm('Select course')),
           items: _courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
           onChanged: (v) => setState(() { _selectedCourse = v; _selectedClass = null; _student = null; _courseClassFromStudent = false; }),
         ))),
-        SizedBox(width: 180.w, child: _labeled(schoolTerm('Class'), DropdownButtonFormField<String>(
+        SizedBox(width: 180.w, child: _labeled(schoolTerm('Class'), AppDropdownField<String>(
           key: ValueKey('misc-class-${_selectedCourse ?? ''}-${_selectedClass ?? ''}'),
           initialValue: _classesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
-          isExpanded: true, style: _txt, decoration: _dec(schoolTerm('Select class')),
+          isExpanded: true, style: _txt, decoration: _dec(schoolTerm('Select class')), hint: _ddHint(schoolTerm('Select class')),
           items: _classesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))).toList(),
           onChanged: (v) => setState(() { _selectedClass = v; _student = null; _courseClassFromStudent = false; }),
         ))),
@@ -1932,15 +2035,15 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
         if (seqMissing)
           Tooltip(
             message:
-                'No receipt sequence for ${chosen['fgdesc']}. Create one in '
-                'Setup → Sequence Master → Receipt Sequence. Until then a '
+                'No ${isSchool ? 'miscellaneous ' : ''}receipt sequence for ${chosen['fgdesc']}. Create one in '
+                'Setup → Sequence Master → ${isSchool ? 'Miscellaneous ' : ''}Receipt No. Until then a '
                 'collection into this group is refused — it has no receipt '
                 'number of its own.',
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.warning_amber_rounded,
                   size: 15.sp, color: AppColors.error),
               SizedBox(width: 5.w),
-              Text('No receipt sequence',
+              Text('No ${isSchool ? 'miscellaneous ' : ''}receipt sequence · Create in Sequence Master',
                   style: TextStyle(
                       fontSize: 11.sp,
                       fontWeight: FontWeight.w800,
@@ -1952,7 +2055,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
           Tooltip(
             message:
                 'No bank account is mapped to ${chosen['fgdesc']}. Map one in '
-                'Setup → Bank Accounts, then Fee Master → Fee Group. Until then '
+                'Setup → Fee Master → Fee Group. Until then '
                 'fees in this group cannot be collected.',
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.warning_amber_rounded,
@@ -2210,7 +2313,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
         ),
         SizedBox(width: 12.w),
         Container(
-          width: 190.w,
+          width: 220.w,
           height: AppUI.controlHeight(context),
           padding: EdgeInsets.symmetric(horizontal: 12.w),
           alignment: Alignment.center,
@@ -2225,13 +2328,12 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
               value: _paymode,
               isExpanded: true,
               isDense: false,
-              hint: Text('Select payment mode',
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 13.sp,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
-                      letterSpacing: 0.3)),
+              // One line that shrinks to fit rather than "Select payment mo…".
+              hint: AppFitText('Select payment mode', style: TextStyle(
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                        letterSpacing: 0.3)),
               icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
@@ -2241,12 +2343,13 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                   fontWeight: FontWeight.w700,
                   color: AppColors.accent,
                   letterSpacing: 0.3),
-              items: const [
-                DropdownMenuItem(value: 'Cash', child: Text('Cash')),
-                DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
-                DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
-                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
-                DropdownMenuItem(value: 'DD', child: Text('DD')),
+              items: [
+                const DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                const DropdownMenuItem(value: 'QR/UPI', child: Text('QR/UPI')),
+                if (_onlineGateway != null)
+                  DropdownMenuItem(value: 'Online', child: Text(_onlineLabel, overflow: TextOverflow.ellipsis)),
+                const DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
+                const DropdownMenuItem(value: 'DD', child: Text('DD')),
               ],
               onChanged: (v) => setState(() => _paymode = v),
             ),
@@ -2260,7 +2363,7 @@ class _MiscCollectionScreenState extends State<MiscCollectionScreen> {
                     width: 15,
                     height: 15,
                     child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textLight))
-                : Icon(_paymode == 'Paytm' ? Icons.open_in_new : Icons.send, size: 16.sp),
+                : Icon(_paymode == 'Paytm' || _paymode == 'Online' ? Icons.open_in_new : Icons.send, size: 16.sp),
             label: Text(_saving
                 ? 'Saving…'
                 : (_paymode == 'Cash' ? 'Save Receipt' : 'Proceed to Pay')),

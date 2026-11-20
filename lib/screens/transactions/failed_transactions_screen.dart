@@ -20,10 +20,12 @@ import '../../models/payment_model.dart';
 import '../../utils/formatters.dart';
 import '../../models/student_model.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../utils/friendly_error.dart';
 import '../../services/pending_collection_sweep.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/save_path.dart';
 
 class FailedTransactionsScreen extends StatefulWidget {
   const FailedTransactionsScreen({super.key});
@@ -1133,7 +1135,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
                           ),
                         ],
                       ),
-                      child: ReceiptWidget(data: receiptData),
+                      child: ReceiptPreview(data: receiptData),
                     ),
                   ),
                 ),
@@ -1473,7 +1475,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       final bytes = await pdf.save();
       final fileName = 'Receipt_${(t.paynumber ?? '${t.payId}').replaceAll('/', '_')}.pdf';
 
-      final result = await FilePicker.platform.saveFile(
+      final result = await pickSavePath(
         dialogTitle: 'Save Receipt',
         fileName: fileName,
         type: FileType.custom,
@@ -1504,7 +1506,7 @@ class _FailedTransactionsScreenState extends State<FailedTransactionsScreen>
       await Printing.layoutPdf(
         // Rebuild at the paper the printer actually reports so the receipt
         // lands centred and unclipped; A5 is only the starting suggestion.
-        format: a5PageFormat,
+        format: await receiptPaper(),
         onLayout: (PdfPageFormat format) async =>
             (await _buildReceiptPdf(t, format)).save(),
         name: 'Receipt_${(t.paynumber ?? '${t.payId}').replaceAll('/', '_')}',

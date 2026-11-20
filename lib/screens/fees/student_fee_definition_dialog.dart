@@ -24,12 +24,15 @@ class StudentFeeDefinitionDialog extends StatefulWidget {
   final String stuAdmno;
   final String stuName;
   final String admName;
+  /// TC issued: the student has left, so the fees can be seen but not changed.
+  final bool readOnly;
   const StudentFeeDefinitionDialog({
     super.key,
     required this.insId,
     required this.stuAdmno,
     required this.stuName,
     required this.admName,
+    this.readOnly = false,
   });
 
   @override
@@ -423,6 +426,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
       });
 
   Future<void> _save() async {
+    if (widget.readOnly) return;
     // Say so rather than closing on a no-op. An available fee arrives pre-filled
     // with its template amount but un-opted, so it is easy to read the dialog as
     // "500 is set, save it" and get a silent close that wrote nothing.
@@ -763,7 +767,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                             value: r.opted,
                             activeColor: AppColors.accent,
                             visualDensity: VisualDensity.compact,
-                            onChanged: (v) => setState(() {
+                            onChanged: widget.readOnly ? null : (v) => setState(() {
                               _error = null;
                               _info = null;
                               r.opted = v ?? false;
@@ -782,6 +786,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                     // that is now the one gesture that does both.
                     child: TextField(
                       controller: r.amountCtrl,
+                      readOnly: widget.readOnly,
                       textAlign: TextAlign.right,
                       // Select-all on tap so a typed value REPLACES the old one
                       // instead of being inserted at the caret.
@@ -890,6 +895,13 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
           Text('Fees to be Received: ', style: AppUI.muted),
           Text('₹ ${formatIndianNumber(_toReceive)}', style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
           const Spacer(),
+          if (widget.readOnly) ...[
+            Icon(Icons.lock_outline, size: 16.sp, color: AppColors.error),
+            SizedBox(width: 6.w),
+            Text('TC issued: view only', style: TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w700, color: AppColors.error)),
+            SizedBox(width: 14.w),
+            OutlinedButton(onPressed: _close, child: const Text('Close')),
+          ] else ...[
           OutlinedButton(onPressed: _close, child: const Text('Cancel')),
           SizedBox(width: 10.w),
           ElevatedButton.icon(
@@ -899,6 +911,7 @@ class _StudentFeeDefinitionDialogState extends State<StudentFeeDefinitionDialog>
                 : const Icon(Icons.save, size: 16),
             label: const Text('Save'),
           ),
+          ],
         ],
       ),
         ],

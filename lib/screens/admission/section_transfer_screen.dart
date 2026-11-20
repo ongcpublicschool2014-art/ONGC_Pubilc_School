@@ -8,6 +8,7 @@ import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Section Transfer — move active students between sections (within or across
 /// class groups). Pick source standard + section, choose a target section per
@@ -154,19 +155,6 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
     return set.toList()..sort();
   }
 
-  /// Map class name → owning course (courname). Used on Save so a cross-course
-  /// transfer updates both stuclass and courname.
-  Map<String, String> get _sectionToStandard {
-    final m = <String, String>{};
-    final byCour = {for (final s in _standardList) s['cour_id']: s['courname']?.toString().trim() ?? ''};
-    for (final c in _sectionList) {
-      final name = c['claname']?.toString().trim() ?? '';
-      if (name.isEmpty) continue;
-      m[name] = byCour[c['cour_id']] ?? '';
-    }
-    return m;
-  }
-
   /// Active students for the chosen source standard. Section is an optional
   /// secondary filter — if left blank, every student under that standard is
   /// listed regardless of their current section.
@@ -216,7 +204,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
               Text(schoolTerm('Apply one target class to all ${_rows.length} student(s).'),
                   style: AppUI.muted),
               SizedBox(height: 14.h),
-              DropdownButtonFormField<String>(
+              AppDropdownField<String>(
                 initialValue: picked,
                 isExpanded: true,
                 style: AppUI.fieldText(ctx, filled: picked != null),
@@ -256,20 +244,18 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
     setState(() => _saving = true);
     int done = 0;
     final failures = <String>[];
-    final secToStd = _sectionToStandard;
     for (final r in toTransfer) {
       final stuId = r['stu_id'] as int;
       final target = _rowTarget[stuId]!;
-      final targetStd = secToStd[target] ?? (r['courname']?.toString() ?? '');
       try {
-        await SupabaseService.updateStudent(stuId, {
-          'stuclass': target,
-          if (targetStd.isNotEmpty) 'courname': targetStd,
+        // One server call moves every copy of the section together: the
+        // student (name AND cla_id -- promotion and bus lists go by cla_id),
+        // the fee demands, the parent link and the admission.
+        await SupabaseService.client.rpc('transfer_student_section', params: {
+          'p_token': SupabaseService.sessionToken,
+          'p_stu_id': stuId,
+          'p_section': target,
         });
-        // Cascade the class change to every fee demand row for this
-        // student — otherwise reports still show the old class.
-        await SupabaseService.updateDemandClass(stuId, target,
-            courname: targetStd.isNotEmpty ? targetStd : null);
         done++;
       } catch (e) {
         failures.add('${r['stuadmno']} ${r['stuname']}: ${friendlyError(e)}');
@@ -372,7 +358,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   }
 
   Widget _standardDropdown() {
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: _srcStandard,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -391,7 +377,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
 
   Widget _sectionDropdown() {
     final options = _sourceClassNamesFor(_srcStandard);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: options.contains(_srcSection) ? _srcSection : null,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -408,7 +394,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   }
 
   Widget _orderDropdown() {
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: _orderBy,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -471,7 +457,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
   Widget _row(Map<String, dynamic> r, List<String> options) {
     final stuId = r['stu_id'] as int;
     final gender = (r['stugender'] ?? '').toString();
-    final genderLabel = gender == 'M' ? 'Male' : gender == 'F' ? 'Female' : gender == 'T' ? 'Other' : (gender.isEmpty ? '—' : gender);
+    final genderLabel = gender.isEmpty ? '—' : genderLabelOf(gender);
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 6.h),
       child: Row(
@@ -483,7 +469,7 @@ class _SectionTransferScreenState extends State<SectionTransferScreen> {
           Expanded(
             child: Padding(
               padding: EdgeInsets.only(right: 8.w),
-              child: DropdownButtonFormField<String>(
+              child: AppDropdownField<String>(
                 initialValue: options.contains(_rowTarget[stuId]) ? _rowTarget[stuId] : null,
                 isExpanded: true,
                 isDense: true,

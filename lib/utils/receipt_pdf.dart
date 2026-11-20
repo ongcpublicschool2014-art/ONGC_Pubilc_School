@@ -4,6 +4,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../services/receipt_format_service.dart';
 import '../widgets/receipt_widget.dart';
 import 'school_terms.dart';
 
@@ -11,6 +12,10 @@ import 'school_terms.dart';
 /// call site passes it as `format:`; otherwise the print dialog defaults to
 /// the printer's loaded paper (usually A4) and the printer's right-edge
 /// unprintable margin clips the amount column.
+/// The paper to start the print dialog on: the school's receipt format's
+/// size when one is in use, else A5.
+Future<PdfPageFormat> receiptPaper() async => await ReceiptFormatService.paper() ?? a5PageFormat;
+
 const PdfPageFormat a5PageFormat =
     PdfPageFormat(148 * PdfPageFormat.mm, 210 * PdfPageFormat.mm);
 
@@ -32,6 +37,11 @@ const double kReceiptWidth = 310;
 /// prints anchored in a corner. Defaults to A5 for previews and downloads.
 Future<pw.Document> buildReceiptPdf(ReceiptData data,
     {PdfPageFormat? pageFormat}) async {
+  // The school's own receipt format (Setup > Receipt Format), when one is in
+  // use: printed at its own paper size, values where the school placed them.
+  final own = await ReceiptFormatService.build(data);
+  if (own != null) return own;
+
   final reg = await PdfGoogleFonts.interRegular();
   final med = await PdfGoogleFonts.interMedium();
   final semi = await PdfGoogleFonts.interSemiBold();

@@ -14,6 +14,7 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Advance Adjustment on a SCHOOL ("Advance Reconcile"): the advance fees a
 /// student paid LAST year (Advance Fee Collection) are settled against THIS
@@ -472,7 +473,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
   }
 
   Widget _filterDrop(String hint, int? value, List<(int, String)> items, ValueChanged<int?> onChanged) {
-    return DropdownButtonFormField<int>(
+    return AppDropdownField<int>(
       key: ValueKey('$hint-$value-${items.length}'),
       initialValue: items.any((e) => e.$1 == value) ? value : null,
       isExpanded: true,
@@ -605,7 +606,9 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
                       SizedBox(height: 12.h),
                     ],
                     Expanded(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    SizedBox(width: _compact ? 390.w : 450.w, child: _receiptList()),
+                    // Same scaled width in a small window too, so the receipt and
+                    // admission numbers show in full (were "AF25/00…" "ADM000…" at 390).
+                    SizedBox(width: 460.w, child: _receiptList()),
                     SizedBox(width: AppUI.gap),
                     Expanded(child: _detail()),
                   ])),
@@ -615,81 +618,101 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
   }
 
   // ── header: title, Standard, Section, search, Refresh, Clear ────────────
-  Widget _header() => Row(children: [
-        AppUI.iconTile('empty-wallet-change'),
-        SizedBox(width: 12.w),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text('Advance Adjustment', style: AppUI.cardTitle),
-            SizedBox(height: 2.h),
-            Text(_prevYear.isEmpty ? 'Reconcile last year\'s advance fees' : 'Reconcile $_prevYear advance fees against $_curYear fees',
-                overflow: TextOverflow.ellipsis, style: AppUI.muted),
-          ]),
-        ),
-        SizedBox(
-          width: _compact ? 150.w : 180.w,
-          child: _filterDrop(schoolTerm('All courses'), _fCour, [for (final c in _courseList) (_id(c['cour_id'])!, '${c['courname']}')],
-              (v) => setState(() {
-                    _fCour = v;
-                    _fCla = null;
-                  })),
-        ),
-        SizedBox(width: 10.w),
-        SizedBox(
-          width: _compact ? 150.w : 180.w,
-          child: _filterDrop(
-              schoolTerm('All classes'),
-              _fCla,
-              [
-                for (final c in _classes)
-                  if (_fCour == null || _id(c['cour_id']) == _fCour) (_id(c['cla_id'])!, '${c['claname']}'),
-              ],
-              (v) => setState(() => _fCla = v)),
-        ),
-        SizedBox(width: 10.w),
-        SizedBox(
-          width: _compact ? 220.w : 280.w,
-          child: TextField(
-            controller: _searchCtrl,
-            onChanged: (_) => setState(() {}),
-            style: AppUI.fieldText(context, filled: _searchCtrl.text.isNotEmpty),
-            decoration: AppUI.field(context, 'Search by receipt no., admission no. or name', filled: _searchCtrl.text.isNotEmpty, leadingIcon: 'search-normal-1'),
-          ),
-        ),
-        SizedBox(width: 10.w),
-        Tooltip(
-          message: 'Year End Process: bring $_prevYear advance receipts into $_curYear (run again to pick up new advances, refunds and cancellations)',
-          child: OutlinedButton.icon(
-            onPressed: _busy || !_prevFound ? null : _carryForward,
-            icon: const Icon(Icons.move_down_rounded, size: 18),
-            label: Text(_pendingCarry > 0 ? 'Carry Forward ($_pendingCarry)' : 'Carry Forward'),
-            style: _outlineBtn(),
-          ),
-        ),
-        SizedBox(width: 10.w),
-        ElevatedButton.icon(
-          onPressed: _busy ? null : _load,
-          icon: const Icon(Icons.refresh, size: 17),
-          label: const Text('Refresh'),
-          style: _solidBtn(),
-        ),
-        SizedBox(width: 10.w),
-        OutlinedButton.icon(
-          onPressed: _busy
-              ? null
-              : () {
-                  _searchCtrl.clear();
-                  setState(() {
-                    _fCour = null;
-                    _fCla = null;
-                  });
-                  _clearSelection();
-                },
-          icon: const Icon(Icons.close, size: 17),
-          label: const Text('Clear'),
+  // In a small window the title, filters and buttons do not fit one row (the
+  // subtitle and "All standards" were cut), so the filters + search drop to a
+  // second row there.
+  Widget _header() {
+    final title = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text('Advance Reconcile', style: AppUI.cardTitle),
+      SizedBox(height: 2.h),
+      Text(_prevYear.isEmpty ? 'Reconcile last year\'s advance fees' : 'Reconcile $_prevYear advance fees against $_curYear fees',
+          maxLines: 2, overflow: TextOverflow.ellipsis, style: AppUI.muted),
+    ]);
+    final courseDrop = _filterDrop(schoolTerm('All courses'), _fCour, [for (final c in _courseList) (_id(c['cour_id'])!, '${c['courname']}')],
+        (v) => setState(() {
+              _fCour = v;
+              _fCla = null;
+            }));
+    final classDrop = _filterDrop(
+        schoolTerm('All classes'),
+        _fCla,
+        [
+          for (final c in _classes)
+            if (_fCour == null || _id(c['cour_id']) == _fCour) (_id(c['cla_id'])!, '${c['claname']}'),
+        ],
+        (v) => setState(() => _fCla = v));
+    final search = TextField(
+      controller: _searchCtrl,
+      onChanged: (_) => setState(() {}),
+      style: AppUI.fieldText(context, filled: _searchCtrl.text.isNotEmpty),
+      decoration: AppUI.field(context, 'Search by receipt no., admission no. or name', filled: _searchCtrl.text.isNotEmpty, leadingIcon: 'search-normal-1'),
+    );
+    final buttons = <Widget>[
+      Tooltip(
+        message: 'Year End Process: bring $_prevYear advance receipts into $_curYear (run again to pick up new advances, refunds and cancellations)',
+        child: OutlinedButton.icon(
+          onPressed: _busy || !_prevFound ? null : _carryForward,
+          icon: const Icon(Icons.move_down_rounded, size: 18),
+          label: Text(_pendingCarry > 0 ? 'Carry Forward ($_pendingCarry)' : 'Carry Forward'),
           style: _outlineBtn(),
         ),
+      ),
+      SizedBox(width: 10.w),
+      ElevatedButton.icon(
+        onPressed: _busy ? null : _load,
+        icon: const Icon(Icons.refresh, size: 17),
+        label: const Text('Refresh'),
+        style: _solidBtn(),
+      ),
+      SizedBox(width: 10.w),
+      OutlinedButton.icon(
+        onPressed: _busy
+            ? null
+            : () {
+                _searchCtrl.clear();
+                setState(() {
+                  _fCour = null;
+                  _fCla = null;
+                });
+                _clearSelection();
+              },
+        icon: const Icon(Icons.close, size: 17),
+        label: const Text('Clear'),
+        style: _outlineBtn(),
+      ),
+    ];
+    if (_compact) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          AppUI.iconTile('empty-wallet-change'),
+          SizedBox(width: 12.w),
+          Expanded(child: title),
+          SizedBox(width: 10.w),
+          ...buttons,
+        ]),
+        SizedBox(height: 12.h),
+        Row(children: [
+          Expanded(flex: 2, child: courseDrop),
+          SizedBox(width: 10.w),
+          Expanded(flex: 2, child: classDrop),
+          SizedBox(width: 10.w),
+          Expanded(flex: 3, child: search),
+        ]),
       ]);
+    }
+    return Row(children: [
+      AppUI.iconTile('empty-wallet-change'),
+      SizedBox(width: 12.w),
+      Expanded(child: title),
+      SizedBox(width: 180.w, child: courseDrop),
+      SizedBox(width: 10.w),
+      SizedBox(width: 180.w, child: classDrop),
+      SizedBox(width: 10.w),
+      SizedBox(width: 280.w, child: search),
+      SizedBox(width: 10.w),
+      ...buttons,
+    ]);
+  }
 
   Widget _noPrevYear() => Container(
         decoration: _cardDec,
@@ -702,6 +725,9 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
       );
 
   // ── left: last year's advance receipts ───────────────────────────────────
+  /// Space between the receipt list's columns (header and rows alike).
+  double get _colGap => 12.w;
+
   Widget _receiptList() {
     final rows = _visibleReceipts;
     Widget head(String t, int flex, {TextAlign align = TextAlign.left}) => AppUI.th(t, flex: flex, align: align);
@@ -719,11 +745,15 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
         ),
         Container(
           color: AppColors.tableHeadBg,
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          // Right edge matches the rows, which leave room for the scrollbar.
+          padding: EdgeInsets.fromLTRB(16.w, 12.h, 28.w, 12.h),
           child: Row(children: [
             head('Receipt No.', 4),
+            SizedBox(width: _colGap),
             head(AppText.admissionNo, 4),
+            SizedBox(width: _colGap),
             head('Student Name', 5),
+            SizedBox(width: _colGap),
             head('Balance', 4, align: TextAlign.right),
           ]),
         ),
@@ -755,18 +785,23 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
                             bottom: const BorderSide(color: AppColors.divider),
                           ),
                         ),
-                        padding: EdgeInsets.fromLTRB(13.w, 13.h, 16.w, 13.h),
+                        // 28 on the right keeps the balance clear of the scrollbar.
+                        padding: EdgeInsets.fromLTRB(13.w, 13.h, 28.w, 13.h),
                         child: Row(children: [
                           Expanded(
                             flex: 4,
                             child: Text('${r['advno']}',
+                                maxLines: 1,
+                                softWrap: false,
                                 overflow: TextOverflow.ellipsis,
                                 style: AppUI.cell.copyWith(fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? AppColors.primary : AppColors.textPrimary)),
                           ),
+                          SizedBox(width: _colGap),
                           Expanded(
                             flex: 4,
                             child: Text('${r['stuadmno']}', overflow: TextOverflow.ellipsis, style: AppUI.cell),
                           ),
+                          SizedBox(width: _colGap),
                           Expanded(
                             flex: 5,
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -775,6 +810,7 @@ class _AdvanceReconcileScreenState extends State<AdvanceReconcileScreen> {
                               Text('${r['stuclass'] ?? ''}', overflow: TextOverflow.ellipsis, style: AppUI.muted),
                             ]),
                           ),
+                          SizedBox(width: _colGap),
                           Expanded(
                             flex: 4,
                             child: FittedBox(

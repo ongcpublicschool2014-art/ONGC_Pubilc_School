@@ -1,6 +1,8 @@
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -17,6 +19,8 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// RECEIPTWISE REPORT -- the old product's "Daily Fee Collection"
 /// (PsFees: Receiptwise Report), one row per receipt taken in the date range:
@@ -32,6 +36,15 @@ import '../../widgets/classic_h_scrollbar.dart';
 /// shows. Cancelled receipts are listed at nil with the remark 'Cancelled'
 /// (they leave a hole in the receipt series an auditor asks about); receipts
 /// still waiting on the bank can be included on request.
+///
+/// The old report dialog's filters, applied over the loaded receipts so a
+/// change needs no reload (only the dates and Fee Collected By go to the
+/// server): Collection Type (Fee = the regular part of a fee receipt, Arrear
+/// = its arrear part, Advance, Miscellaneous -- a fine goes with the part it
+/// was charged on), Receipt Prefix, Payment Mode and Bank (the deposited-in
+/// account; it narrows non-cash receipts only), Arrear Year, Gender, Day
+/// Scholar / Hosteller and With T.C. Students. The old "Excel" tick is the
+/// Export Excel button.
 ///
 /// Server side: public.rpt_receiptwise (school_rpt_receiptwise.sql).
 class ReceiptwiseReportScreen extends StatefulWidget {
@@ -52,7 +65,11 @@ class _Rec {
   DateTime? get date => DateTime.tryParse(s('date'));
   String get status => s('status');
   bool get cancelled => status == 'CANCELLED';
+  /// A cancelled receipt whose cheque / DD bounced (bounce_cheque_receipt).
+  bool get bounced => cancelled && s('remarks') == 'Bounced';
   bool get pending => status == 'PENDING';
+  /// A refund voucher: money paid back, its amounts negative.
+  bool get refund => status == 'REFUND';
   double amt(String k) => _n(m[k]);
   double get total => amt('regular') + amt('advance') + amt('arrear') + amt('misc') + amt('fine');
 
@@ -62,6 +79,28 @@ class _Rec {
     if (v.isEmpty || v != v.toLowerCase()) return v;
     return v.split(' ').map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
   }
+
+  // ── what the filters look at ──
+  String get modeKey => s('mode').toUpperCase();
+  bool get isCash => modeKey == 'CASH';
+  String get bank => s('deposited');
+  bool get isStudent => m['stu'] == true; // a misc receipt can be for an outsider
+  String get gender => s('gender').toUpperCase();
+  bool get hostel => m['hostel'] == true;
+  bool get tc => m['tc'] == true;
+
+  /// The receipt number without its running number: 'CF26/' of 'CF26/00002'.
+  String get prefix => s('recno').replaceFirst(RegExp(r'\d+$'), '');
+
+  /// FEE (the regular part) / ARREAR / ADV / MISC -- also for a cancelled
+  /// receipt, whose amounts are nil.
+  Set<String> get types => {for (final t in (m['types'] as List? ?? const [])) '$t'};
+
+  /// The arrear part by arrear year: (year, amount without fine, fine).
+  List<(String, double, double)> get arrYears => [
+        for (final y in (m['arr_years'] as List? ?? const []))
+          if (y is Map) ('${y['year'] ?? ''}'.trim(), _n(y['amount']), _n(y['fine'])),
+      ];
 }
 
 /// A line of the listing: a receipt (with its serial number) or a date's TOTAL.
@@ -98,9 +137,25 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
     ('fine', 'FINE'),
   ];
 
+  /// Collection types: key, picker label, export label.
+  static const _typeNames = [
+    ('FEE', 'Fee Collection', 'FEE'),
+    ('ADV', 'Advance Collection', 'ADVANCE'),
+    ('ARREAR', 'Arrear Collection', 'ARREAR'),
+    ('MISC', 'Miscellaneous Collection', 'MISCELLANEOUS'),
+  ];
+
   late DateTime _from, _to;
   String? _user; // null = all users
-  bool _bank = false, _arrYear = false, _showCancelled = true, _withPending = false;
+  bool _bank = false, _arrYear = false, _remarks = true, _showCancelled = true, _withPending = false;
+
+  // the old dialog's filters -- applied over the loaded rows, no reload
+  Set<String> _types = {for (final t in _typeNames) t.$1};
+  Set<String> _prefixOff = {}; // the UNticked prefixes, so a new one shows ticked
+  Set<String>? _modes, _banks, _years; // null = All
+  String? _gender; // null = All, 'M' / 'F'
+  bool? _hosteller; // null = All, false = Day Scholar, true = Hosteller
+  bool _withTc = true;
 
   String _insName = '', _insAddress = '', _insCity = '';
   bool _loading = true, _running = false, _exporting = false;
@@ -185,11 +240,97 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
       ..showSnackBar(SnackBar(content: Text(m), backgroundColor: c));
   }
 
+  // ── filter choices: what is in the loaded range ─────────────────────────
+  static String _prefixLabel(String p) => p.isEmpty ? 'No Prefix' : p;
+  static String _bankLabel(String b) => b.isEmpty ? 'Not Recorded' : b;
+  static String _yearLabel(String y) => y.isEmpty ? 'Not Given' : y;
+
+  List<String> get _prefixList => {for (final r in _all) r.prefix}.toList()..sort();
+  List<String> get _bankList => {for (final r in _all) if (!r.isCash) r.bank}.toList()..sort();
+  List<String> get _yearList => {for (final r in _all) for (final y in r.arrYears) y.$1}.toList()..sort();
+
+  /// Payment modes by key (upper case), each with the spelling to show.
+  Map<String, String> get _modeLabels {
+    final out = <String, String>{};
+    for (final r in _all) {
+      final raw = r.s('mode');
+      if (raw.isEmpty) {
+        out.putIfAbsent('', () => 'Not Recorded');
+      } else if (raw != raw.toLowerCase()) {
+        out[r.modeKey] = raw;
+      } else {
+        out.putIfAbsent(r.modeKey, () => r.mode);
+      }
+    }
+    return out;
+  }
+
+  /// Bank applies when a non-cash mode is in play.
+  bool get _bankOn => _modes == null ? _all.any((r) => !r.isCash) : _modes!.any((k) => k != 'CASH');
+
+  void _clearFilters() => setState(() {
+        _types = {for (final t in _typeNames) t.$1};
+        _prefixOff = {};
+        _modes = _banks = _years = null;
+        _gender = null;
+        _hosteller = null;
+        _withTc = true;
+      });
+
   // ── what is shown ────────────────────────────────────────────────────────
-  List<_Rec> get _rows => [
-        for (final r in _all)
-          if ((_showCancelled || !r.cancelled) && (_withPending || !r.pending)) r,
-      ];
+  List<_Rec> get _rows {
+    final out = <_Rec>[];
+    final bankOn = _bankOn && _banks != null;
+    for (final r in _all) {
+      if (!_showCancelled && r.cancelled) continue;
+      if (!_withPending && r.pending) continue;
+      if (!_withTc && r.tc) continue;
+      // gender / day scholar-hosteller ask about a student: an outsider's
+      // miscellaneous receipt has neither
+      if (_gender != null && (!r.isStudent || r.gender != _gender)) continue;
+      if (_hosteller != null && (!r.isStudent || r.hostel != _hosteller)) continue;
+      if (_prefixOff.contains(r.prefix)) continue;
+      if (_modes != null && !_modes!.contains(r.modeKey)) continue;
+      if (bankOn && !r.isCash && !_banks!.contains(r.bank)) continue;
+      final e = _narrow(r);
+      if (e != null) out.add(e);
+    }
+    return out;
+  }
+
+  /// [r] with only the ticked collection types (and arrear years) in its
+  /// amounts; null when nothing of it is left.
+  _Rec? _narrow(_Rec r) {
+    final fee = _types.contains('FEE'), adv = _types.contains('ADV');
+    final arr = _types.contains('ARREAR'), misc = _types.contains('MISC');
+    final years = [for (final y in r.arrYears) if (_years == null || _years!.contains(y.$1)) y];
+    if (r.cancelled) {
+      // nil amounts: keep it when it was a receipt of a ticked type
+      final t = r.types;
+      final keep = (fee && t.contains('FEE')) ||
+          (arr && t.contains('ARREAR') && (_years == null || years.isNotEmpty)) ||
+          (adv && t.contains('ADV')) ||
+          (misc && t.contains('MISC'));
+      return keep ? r : null;
+    }
+    final regular = fee ? r.amt('regular') : 0.0;
+    final fineReg = fee ? r.amt('fine_reg') : 0.0;
+    final arrear = !arr ? 0.0 : (_years == null ? r.amt('arrear') : years.fold(0.0, (t, y) => t + y.$2));
+    final fineArr = !arr ? 0.0 : (_years == null ? r.amt('fine_arr') : years.fold(0.0, (t, y) => t + y.$3));
+    final e = _Rec({
+      ...r.m,
+      'regular': regular,
+      'advance': adv ? r.amt('advance') : 0.0,
+      'arrear': arrear,
+      'misc': misc ? r.amt('misc') : 0.0,
+      'fine': fineReg + fineArr,
+      'arryear': !arr || arrear + fineArr < 0.005
+          ? ''
+          : (_years == null ? r.s('arryear') : years.map((y) => y.$1).where((y) => y.isNotEmpty).join(', ')),
+    });
+    // a refund row is negative: drop only what is nil
+    return e.total.abs() < 0.005 ? null : e;
+  }
 
   /// Receipts and, after each date, that date's TOTAL line.
   List<_Line> _lines(List<_Rec> rows) {
@@ -229,10 +370,28 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
         for (final (k, h) in _amountCols)
           if (_sum(rows, k).abs() >= 0.005) _Col(h, 120, (r) => _m(r.amt(k)), amountKey: k),
         _Col('TOTAL', 130, (r) => _m(r.total), amountKey: 'total'),
-        _Col('REMARKS', 150, (r) => r.s('remarks')),
+        if (_remarks) _Col('REMARKS', 150, (r) => r.s('remarks')),
       ];
 
   String get _collectedBy => 'FEE COLLECTED BY : ${_user == null ? 'ALL USERS' : _user!.toUpperCase()}';
+
+  /// The filters not at their default, for the export's title block:
+  /// "COLLECTION TYPE : FEE, ARREAR · PAYMENT MODE : CASH · GENDER : FEMALE".
+  String get _filterLine {
+    String list(Iterable<String> xs) => (xs.toList()..sort()).join(', ').toUpperCase();
+    final labels = _modeLabels;
+    return [
+      if (_types.length < _typeNames.length)
+        'COLLECTION TYPE : ${[for (final t in _typeNames) if (_types.contains(t.$1)) t.$3].join(', ')}',
+      if (_prefixOff.isNotEmpty) 'RECEIPT PREFIX : ${list(_prefixList.where((p) => !_prefixOff.contains(p)).map(_prefixLabel))}',
+      if (_modes != null) 'PAYMENT MODE : ${list(_modes!.map((k) => labels[k] ?? k))}',
+      if (_bankOn && _banks != null) 'BANK : ${list(_banks!.map(_bankLabel))}',
+      if (_years != null) 'ARREAR YEAR : ${list(_years!.map(_yearLabel))}',
+      if (_gender != null) 'GENDER : ${(_gender == 'F' ? kGirlLabel : kBoyLabel).toUpperCase()}',
+      if (_hosteller != null) 'STUDENT : ${(_hosteller! ? AppText.hosteller : AppText.dayScholar).toUpperCase()}',
+      if (!_withTc) 'WITHOUT T.C. STUDENTS',
+    ].join(' · ');
+  }
   String get _title => 'RECEIPTWISE REPORT FROM ${formatDmy(_from)} TO ${formatDmy(_to)}';
   String get _fileStem {
     String f(DateTime d) => formatDmy(d);
@@ -255,7 +414,7 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
         insAddress: _insAddress,
         insCity: _insCity,
         title: _title,
-        subtitle: _collectedBy,
+        subtitle: [_collectedBy, if (_filterLine.isNotEmpty) _filterLine].join('\n'),
         headers: [AppText.serialNo.toUpperCase(), ...cols.map((c) => c.head)],
         rows: [
           for (final l in _lines(rows))
@@ -281,7 +440,7 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
     if (rows.isEmpty) return _snack('Nothing to export yet.', AppColors.warning);
     setState(() => _exporting = true);
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Receiptwise Report',
         fileName: '$_fileStem.xlsx',
         type: FileType.custom,
@@ -293,7 +452,7 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
       final sheet = book['Receiptwise Report'];
       book.delete('Sheet1');
       final bold = xl.CellStyle(bold: true, fontSize: 11);
-      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: xl.ExcelColor.fromHexString('#F2F4F7'));
+      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg);
       void put(int c, int r, String v, [xl.CellStyle? st, bool number = false]) {
         final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
         final n = number ? double.tryParse(v.replaceAll(',', '')) : null;
@@ -302,17 +461,20 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
       }
 
       // title block, as the old report: name / address / city / title, then
-      // who collected and, above the optional columns, what switched them on
+      // who collected, the filters in use (if any) and, above the optional
+      // columns, what switched them on
       put(1, 0, _insName.toUpperCase(), bold);
       if (_insAddress.isNotEmpty) put(1, 1, _insAddress.toUpperCase());
       if (_insCity.isNotEmpty) put(1, 2, _insCity.toUpperCase());
       put(1, 3, _title, bold);
       put(1, 6, _collectedBy, bold);
+      final filters = _filterLine;
+      if (filters.isNotEmpty) put(1, 7, filters, bold);
+      final h = filters.isEmpty ? 8 : 9;
       for (var c = 0; c < cols.length; c++) {
-        if (cols[c].head == 'DRAWEE BANK') put(c + 1, 7, 'With Bank Detail');
-        if (cols[c].head == 'ARREAR YEAR') put(c + 1, 7, 'Arrear Year');
+        if (cols[c].head == 'DRAWEE BANK') put(c + 1, h - 1, 'With Bank Detail');
+        if (cols[c].head == 'ARREAR YEAR') put(c + 1, h - 1, 'Arrear Year');
       }
-      const h = 8;
       put(0, h, AppText.serialNo.toUpperCase(), hdr);
       sheet.setColumnWidth(0, 8);
       for (var c = 0; c < cols.length; c++) {
@@ -392,7 +554,7 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           AppUI.fieldLabel('Fee Collected By'),
-          DropdownButtonFormField<String?>(
+          AppDropdownField<String?>(
             key: ValueKey('user-$_user-${_users.length}'),
             initialValue: _user,
             isExpanded: true,
@@ -431,6 +593,202 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
         ),
       );
 
+  /// A field-looking button that opens a tick list; [onTap] null = disabled.
+  Widget _picker(String label, String icon, String value, bool filled, VoidCallback? onTap) {
+    final off = onTap == null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AppUI.fieldLabel(label),
+        InkWell(
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          onTap: onTap,
+          child: InputDecorator(
+            decoration: AppUI.field(
+              context,
+              '',
+              filled: filled && !off,
+              leadingIcon: icon,
+              suffix: Icon(Icons.arrow_drop_down, color: off ? AppColors.textLight : AppColors.ink3, size: 22),
+            ).copyWith(enabled: !off),
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppUI.fieldText(context, filled: filled).copyWith(color: off ? AppColors.textLight : null),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// "All" / "Cash, UPI" / "3 selected".
+  static String _summary(Set<String>? sel, String Function(String) label, {String all = 'All'}) {
+    if (sel == null) return all;
+    if (sel.length <= 2) return (sel.map(label).toList()..sort()).join(', ');
+    return '${sel.length} selected';
+  }
+
+  /// Tick many of [items] (key, label); null = cancelled. Apply needs at least
+  /// one tick.
+  Future<Set<String>?> _pickMany(String title, List<(String, String)> items, Set<String> current) {
+    final draft = Set<String>.from(current);
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          scrollable: true,
+          title: Row(children: [
+            Expanded(child: Text(title, style: AppUI.cardTitle)),
+            TextButton(onPressed: () => setLocal(() => draft.addAll(items.map((i) => i.$1))), child: const Text('Select All')),
+            TextButton(onPressed: () => setLocal(draft.clear), child: const Text('Unselect All')),
+          ]),
+          content: SizedBox(
+            width: 380.w,
+            child: items.isEmpty
+                ? Text('There is nothing to choose in this date range.', style: AppUI.muted)
+                : Column(mainAxisSize: MainAxisSize.min, children: [
+                    for (final i in items)
+                      CheckboxListTile(
+                        value: draft.contains(i.$1),
+                        onChanged: (v) => setLocal(() => v == true ? draft.add(i.$1) : draft.remove(i.$1)),
+                        dense: true,
+                        activeColor: AppColors.primary,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(i.$2, style: AppUI.body),
+                      ),
+                  ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text(AppText.cancel)),
+            ElevatedButton(
+              style: AppUI.primary(ctx),
+              onPressed: draft.isEmpty ? null : () => Navigator.of(ctx).pop(draft),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// All / Selected: ticking every choice means All again (null).
+  Future<void> _pickAllOrSome(String title, List<(String, String)> items, Set<String>? current, ValueChanged<Set<String>?> set) async {
+    final keys = items.map((i) => i.$1).toSet();
+    final picked = await _pickMany(title, items, current ?? keys);
+    if (picked == null || !mounted) return;
+    setState(() => set(keys.every(picked.contains) ? null : picked));
+  }
+
+  Widget _drop<T>(String label, String icon, T? value, List<(T?, String)> items, ValueChanged<T?> onChanged) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AppUI.fieldLabel(label),
+          AppDropdownField<T?>(
+            key: ValueKey('$label-$value'),
+            initialValue: value,
+            isExpanded: true,
+            dropdownColor: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            style: AppUI.fieldText(context, filled: value != null),
+            decoration: AppUI.field(context, '', filled: value != null, leadingIcon: icon),
+            items: [for (final i in items) DropdownMenuItem<T?>(value: i.$1, child: Text(i.$2, overflow: TextOverflow.ellipsis))],
+            onChanged: (v) => setState(() => onChanged(v)),
+          ),
+        ],
+      );
+
+  Widget _filterRows() {
+    final prefixes = _prefixList;
+    final modeLabels = _modeLabels;
+    final modeKeys = modeLabels.keys.toList()..sort((a, b) => modeLabels[a]!.compareTo(modeLabels[b]!));
+    final banks = _bankList;
+    final years = _yearList;
+    final bankOn = _bankOn;
+    final onPrefixes = prefixes.where((p) => !_prefixOff.contains(p)).toSet();
+    String typeText() {
+      if (_types.length == _typeNames.length) return 'All Types';
+      return [for (final t in _typeNames) if (_types.contains(t.$1)) t.$2.replaceFirst(' Collection', '')].join(', ');
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        Expanded(
+          flex: 3,
+          child: _picker('Collection Type', 'category', typeText(), _types.length < _typeNames.length, () async {
+            final picked = await _pickMany('Collection Type', [for (final t in _typeNames) (t.$1, t.$2)], _types);
+            if (picked != null && mounted) setState(() => _types = picked);
+          }),
+        ),
+        SizedBox(width: 10.w),
+        Expanded(
+          flex: 2,
+          child: _picker(
+            'Receipt Prefix',
+            'hashtag',
+            _prefixOff.isEmpty ? 'All' : _summary(onPrefixes, _prefixLabel),
+            _prefixOff.isNotEmpty,
+            () async {
+              final picked = await _pickMany('Receipt Prefix', [for (final p in prefixes) (p, _prefixLabel(p))], onPrefixes);
+              if (picked != null && mounted) setState(() => _prefixOff = prefixes.where((p) => !picked.contains(p)).toSet());
+            },
+          ),
+        ),
+        SizedBox(width: 10.w),
+        Expanded(
+          flex: 2,
+          child: _picker(
+            AppText.paymentMode,
+            'card',
+            _summary(_modes, (k) => modeLabels[k] ?? k),
+            _modes != null,
+            () => _pickAllOrSome(AppText.paymentMode, [for (final k in modeKeys) (k, modeLabels[k]!)], _modes, (v) => _modes = v),
+          ),
+        ),
+        SizedBox(width: 10.w),
+        Expanded(
+          flex: 2,
+          child: _picker(
+            'Bank',
+            'bank',
+            bankOn ? _summary(_banks, _bankLabel) : 'Cash only',
+            _banks != null,
+            bankOn ? () => _pickAllOrSome('Deposited In Bank', [for (final b in banks) (b, _bankLabel(b))], _banks, (v) => _banks = v) : null,
+          ),
+        ),
+        SizedBox(width: 10.w),
+        Expanded(
+          flex: 2,
+          child: _picker(
+            'Arrear Year',
+            'calendar-2',
+            _summary(_years, _yearLabel),
+            _years != null,
+            () => _pickAllOrSome('Arrear Year', [for (final y in years) (y, _yearLabel(y))], _years, (v) => _years = v),
+          ),
+        ),
+        SizedBox(width: 10.w),
+        OutlinedButton.icon(
+          onPressed: _filterLine.isEmpty ? null : _clearFilters,
+          icon: const Icon(Icons.filter_alt_off_outlined, size: 16),
+          label: const Text(AppText.clearFilters),
+        ),
+      ]),
+      SizedBox(height: 8.h),
+      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+        _toggle('With T.C. Students', _withTc, (v) => setState(() => _withTc = v)),
+        _toggle('With Bank Detail', _bank, (v) => setState(() => _bank = v)),
+        _toggle('Arrear Year Column', _arrYear, (v) => setState(() => _arrYear = v)),
+        _toggle('Remarks Column', _remarks, (v) => setState(() => _remarks = v)),
+        _toggle('Show Cancelled Receipts', _showCancelled, (v) => setState(() => _showCancelled = v)),
+        _toggle('Include Receipts Not Yet Reconciled', _withPending, (v) => setState(() => _withPending = v)),
+      ]),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -444,12 +802,16 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
     }
     final rows = _rows;
     final cols = _columns(rows);
-    final cancelled = rows.where((r) => r.cancelled).length;
+    final bounced = rows.where((r) => r.bounced).length;
+    final cancelled = rows.where((r) => r.cancelled).length - bounced;
     final pending = rows.where((r) => r.pending).length;
+    final refunds = rows.where((r) => r.refund).toList();
+    final refunded = -refunds.fold(0.0, (t, r) => t + r.total);
     final other = [
       if (_sum(rows, 'advance') > 0) 'Advance ₹${formatIndianNumber(_sum(rows, 'advance'))}',
       if (_sum(rows, 'misc') > 0) 'Miscellaneous ₹${formatIndianNumber(_sum(rows, 'misc'))}',
       if (_sum(rows, 'fine') > 0) 'Fine ₹${formatIndianNumber(_sum(rows, 'fine'))}',
+      if (refunded > 0.005) 'after refunds ₹${formatIndianNumber(refunded)}',
     ];
 
     return Container(
@@ -500,19 +862,30 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
           SizedBox(width: 10.w),
           Expanded(flex: 3, child: _userField()),
           SizedBox(width: 10.w),
+          Expanded(
+            flex: 2,
+            child: _drop<String>('Gender', 'profile-2user', _gender, [(null, 'All'), ('M', kBoyLabel), ('F', kGirlLabel)], (v) => _gender = v),
+          ),
+          SizedBox(width: 10.w),
+          Expanded(
+            flex: 2,
+            child: _drop<bool>(
+              'Student',
+              'house-2',
+              _hosteller,
+              const [(null, 'All'), (false, AppText.dayScholar), (true, AppText.hosteller)],
+              (v) => _hosteller = v,
+            ),
+          ),
+          SizedBox(width: 10.w),
           OutlinedButton.icon(
             onPressed: _running ? null : _run,
             icon: _running ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh, size: 16),
             label: const Text('Refresh'),
           ),
         ]),
-        SizedBox(height: 8.h),
-        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-          _toggle('With Bank Detail', _bank, (v) => setState(() => _bank = v)),
-          _toggle('Arrear Year', _arrYear, (v) => setState(() => _arrYear = v)),
-          _toggle('Show Cancelled Receipts', _showCancelled, (v) => setState(() => _showCancelled = v)),
-          _toggle('Include Receipts Not Yet Reconciled', _withPending, (v) => setState(() => _withPending = v)),
-        ]),
+        SizedBox(height: 10.h),
+        _filterRows(),
         SizedBox(height: 12.h),
         // KPI tiles
         Row(children: [
@@ -520,9 +893,11 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
             child: AppUI.kpi(
               icon: 'receipt-2',
               label: 'Receipts',
-              value: '${rows.length}',
+              value: '${rows.length - refunds.length}',
               sub: [
+                if (refunds.isNotEmpty) '${refunds.length} refund${refunds.length == 1 ? '' : 's'}',
                 if (cancelled > 0) '$cancelled cancelled',
+                if (bounced > 0) '$bounced bounced',
                 if (pending > 0) '$pending not yet reconciled',
               ].join(' · '),
             ),
@@ -546,7 +921,10 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
         Expanded(child: _table(rows, cols)),
         SizedBox(height: 10.h),
         Text(
-          rows.isEmpty ? '' : '${AppUI.showing(1, rows.length, rows.length)} receipts · ${_collectedBy.toLowerCase().replaceFirst('fee collected by : ', 'collected by ')}',
+          rows.isEmpty
+              ? ''
+              : '${AppUI.showing(1, rows.length, rows.length)} receipts · ${_collectedBy.toLowerCase().replaceFirst('fee collected by : ', 'collected by ')}'
+                  '${_filterLine.isEmpty ? '' : ' · filtered'}',
           style: AppUI.muted,
         ),
       ]),
@@ -555,6 +933,18 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
 
   Widget _table(List<_Rec> rows, List<_Col> cols) {
     if (_running && rows.isEmpty) return const Center(child: CircularProgressIndicator());
+    if (rows.isEmpty && _all.isNotEmpty && _filterLine.isNotEmpty) {
+      return AppUI.empty(
+        title: 'Nothing to show',
+        why: 'No receipts between ${formatDmy(_from)} and ${formatDmy(_to)} match the filters.',
+        icon: 'filter',
+        action: OutlinedButton.icon(
+          onPressed: _clearFilters,
+          icon: const Icon(Icons.filter_alt_off_outlined, size: 16),
+          label: const Text(AppText.clearFilters),
+        ),
+      );
+    }
     if (rows.isEmpty) {
       return AppUI.empty(
         title: 'Nothing to show',
@@ -565,9 +955,34 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
       );
     }
     final lines = _lines(rows);
-    final widths = [64.0, for (final c in cols) c.width];
-    final total = widths.fold(0.0, (a, b) => a + b) + 32;
     final totalStyle = AppUI.money.copyWith(fontWeight: FontWeight.w800);
+    // Each column is at least as wide as its longest value (its grand total
+    // for an amount), so a date, receipt no. or total is never cut to "...".
+    double measure(String t, TextStyle st) {
+      final tp = TextPainter(
+        text: TextSpan(text: t, style: DefaultTextStyle.of(context).style.merge(st)),
+        maxLines: 1,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final w = tp.width + 2 * 8.w + 6;
+      tp.dispose();
+      return w;
+    }
+
+    double colWidth(_Col c) {
+      if (c.isAmount) return math.max(c.width, measure(formatIndianNumber(_sum(rows, c.amountKey!)), totalStyle));
+      if (c.head == 'ADMISSION NO.' || c.head == 'REMARKS') return c.width;
+      var longest = '';
+      for (final r in rows) {
+        final t = c.text(r);
+        if (t.length > longest.length) longest = t;
+      }
+      return math.min(320.0, math.max(c.width, measure(longest, AppUI.cell)));
+    }
+
+    final widths = [64.0, for (final c in cols) colWidth(c)];
+    final total = widths.fold(0.0, (a, b) => a + b) + 32;
     Widget cell(String t, double width, {bool right = false, TextStyle? style}) => SizedBox(
           width: width,
           child: Padding(
@@ -601,9 +1016,10 @@ class _ReceiptwiseReportScreenState extends State<ReceiptwiseReportScreen> {
       return cell(c.text(r), width, right: c.isAmount, style: c.isAmount ? AppUI.money : dim);
     }
 
+    // GRAND TOTAL spans the S. No. and first column, so the label fits.
     Widget totalsRow(String label, Iterable<_Rec> rs, {bool grand = false}) => Row(children: [
-          cell(grand ? label : '', widths[0], style: totalStyle),
-          for (var i = 0; i < cols.length; i++)
+          if (grand) cell(label, widths[0] + widths[1], style: totalStyle) else cell('', widths[0], style: totalStyle),
+          for (var i = grand ? 1 : 0; i < cols.length; i++)
             cell(
               i == 0 && !grand ? label : (cols[i].isAmount ? formatIndianNumber(_sum(rs, cols[i].amountKey!)) : ''),
               widths[i + 1],

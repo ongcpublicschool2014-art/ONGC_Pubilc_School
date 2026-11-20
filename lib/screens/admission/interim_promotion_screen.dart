@@ -14,6 +14,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/form_section_panel.dart';
 import '../../widgets/student_avatar.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Interim Promotion — mid-year move of a single student to another class.
 /// Pick the student by cascading Class Group → Current Class → Name (or by
@@ -559,15 +560,23 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
       );
       final map = res is Map ? res : const {};
       final newCount = (map['new_demands'] as num?)?.toInt() ?? 0;
-      final applied = (map['applied'] as num?)?.toDouble() ?? 0;
-      final leftover = (map['leftover_credit'] as num?)?.toDouble() ?? 0;
+      // Already-paid money is applied HERE, on the Adjust Fees page: Auto-match
+      // takes it off the new fees' amounts (the old product's rule), so the
+      // server never sees it as credit and its "leftover" is the whole paid
+      // amount. Report what this screen applied, and as unused only the paid
+      // money that matched no new fee (it was telling the cashier to refund
+      // money that had in fact been used).
+      final paidUsed = _oldPaidUsed;
+      final concession = (map['applied'] as num?)?.toDouble() ?? 0;
+      final unused = (_studentPaid - paidUsed).clamp(0, double.infinity);
       if (!mounted) return;
       setState(() => _saving = false);
       _snack(
         'Transferred ${student['stuname']} to $target. $newCount new fee '
-        '${newCount == 1 ? 'demand' : 'demands'} raised, '
-        '₹${applied.toStringAsFixed(0)} credit applied'
-        '${leftover > 0.5 ? '. ₹${leftover.toStringAsFixed(0)} unused credit is to be refunded separately' : ''}.',
+        '${newCount == 1 ? 'demand' : 'demands'} raised; '
+        '₹${paidUsed.toStringAsFixed(0)} already paid adjusted against the new fees'
+        '${concession > 0.5 ? ', ₹${concession.toStringAsFixed(0)} concession' : ''}'
+        '${unused > 0.5 ? '. ₹${unused.toStringAsFixed(0)} already paid matched no new fee: refund it separately' : ''}.',
         AppColors.success,
       );
       _newRecord();
@@ -891,7 +900,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
 
   Widget _classGroupDropdown() {
     final has = _courseNames.contains(_classGroup);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
         initialValue: has ? _classGroup : null,
         isExpanded: true,
         dropdownColor: Colors.white,
@@ -920,7 +929,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
   Widget _currentClassDropdown() {
     final options = _classNamesForCourse(_classGroup);
     final has = options.contains(_currentClass);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: has ? _currentClass : null,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -953,7 +962,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
     final value = (_student != null && _studentsInClass.any((s) => s['stu_id'] == _student!['stu_id']))
         ? _student!['stu_id'] as int
         : null;
-    return DropdownButtonFormField<int>(
+    return AppDropdownField<int>(
       initialValue: value,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -1128,7 +1137,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
 
   Widget _transferCourseDropdown() {
     final has = _courseNames.contains(_transferredCourse);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: has ? _transferredCourse : null,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -1173,7 +1182,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
   Widget _transferAdmTypeDropdown() {
     final options = _admTypeNames;
     final has = options.contains(_transferredAdmName);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: has ? _transferredAdmName : null,
       isExpanded: true,
       dropdownColor: Colors.white,
@@ -1202,7 +1211,7 @@ class _InterimPromotionScreenState extends State<InterimPromotionScreen> {
   Widget _transferClassDropdown() {
     final options = _classNamesForCourse(_transferredCourse);
     final has = options.contains(_transferredClass);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: has ? _transferredClass : null,
       isExpanded: true,
       dropdownColor: Colors.white,

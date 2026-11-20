@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../config/supabase_config.dart';
+
 /// Result of a maintenance-flag check. All fields except [active] are optional
 /// and drive the maintenance screen — an empty field is simply not rendered.
 class MaintenanceStatus {
@@ -44,9 +46,12 @@ class MaintenanceStatus {
 /// `false` (or delete the file).
 class MaintenanceService {
   /// Public Supabase Storage object. Bucket `app-updates`, file
-  /// `maintenance.json`. Same bucket as the auto-update `latest.json`.
-  static const String manifestUrl =
-      'https://exasnbapvgfeooxyxjas.supabase.co/storage/v1/object/public/app-updates/maintenance.json';
+  /// `maintenance.json` on the project this app is CONNECTED TO -- each
+  /// school's own project, so maintenance on one school never stops another
+  /// (user, 2026-11-13). Same bucket as `latest-windows.json`; the parent app
+  /// of that school reads the same file.
+  static String get manifestUrl =>
+      '${SupabaseConfig.url.replaceAll(RegExp(r'/+$'), '')}/storage/v1/object/public/app-updates/maintenance.json';
 
   static Future<MaintenanceStatus> check() async {
     try {

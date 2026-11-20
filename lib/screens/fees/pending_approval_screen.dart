@@ -14,6 +14,8 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
+import '../../utils/save_path.dart';
 
 /// Full page listing every payment awaiting reconciliation (recon_status = 'P').
 /// Each row can download its receipt — which is printed "* Subject to
@@ -504,7 +506,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                     decoration: BoxDecoration(boxShadow: [
                       BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 2)),
                     ]),
-                    child: ReceiptWidget(data: data),
+                    child: ReceiptPreview(data: data),
                   ),
                 ),
               ),
@@ -524,7 +526,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       final bytes = await pdf.save();
       final receiptNo = p['paynumber']?.toString() ?? '$payId';
       final fileName = 'Receipt_${receiptNo.replaceAll('/', '_')}.pdf';
-      final result = await FilePicker.platform.saveFile(
+      final result = await pickSavePath(
         dialogTitle: 'Save Receipt', fileName: fileName, type: FileType.custom, allowedExtensions: ['pdf']);
       if (result != null) {
         await File(result).writeAsBytes(bytes);
@@ -543,7 +545,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     try {
       final data = await _receiptFor(p);
       await Printing.layoutPdf(
-        format: a5PageFormat,
+        format: await receiptPaper(),
         onLayout: (fmt) async => (await buildReceiptPdf(data, pageFormat: fmt)).save(),
         name: 'Receipt_${(p['paynumber']?.toString() ?? '$payId').replaceAll('/', '_')}',
       );

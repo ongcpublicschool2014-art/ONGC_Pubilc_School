@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -11,9 +12,12 @@ import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/import_errors_export.dart';
 import '../../utils/app_text.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// Fee Demand Import — a wide sheet in and out: one row per student, one
 /// column per fee type.
@@ -140,7 +144,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
             .eq('ins_id', insId)
             .eq('activestatus', 1)),
         SupabaseService.fetchAll(() => SupabaseService.fromSchema('feetype')
-            .select('fee_id, feedesc, feeshort, payseq')
+            .select('fee_id, feedesc, feeshort, payseq, type')
             .eq('activestatus', 1)),
       ]);
       int ord(Map<String, dynamic> m, String k, [int missing = 9999]) =>
@@ -186,6 +190,21 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
     await _loadMasters();
     if (mounted && _pickedClasses.isNotEmpty) _loadExportLists();
   }
+
+  // ─── School: optional fees only ───────────────────────────────────────────
+  //
+  // A school raises its regular fees from Section Fee Demand; this screen
+  // (shown there as "Optional Fee Import") is for the OPTIONAL fees
+  // (feetype.type 'OPT') that only some students take -- the ones the
+  // section's Section Fee Demand already defines for the term (user,
+  // 2026-11-17).
+
+  static bool _isOptional(Map<String, dynamic> f) =>
+      (f['type']?.toString() ?? '').trim().toUpperCase() == 'OPT';
+
+  /// The fee types the picker offers: optional ones on a school, else all.
+  List<Map<String, dynamic>> get _offeredFees =>
+      isSchool ? _feeTypes.where(_isOptional).toList() : _feeTypes;
 
   // ─── Text helpers ─────────────────────────────────────────────────────────
 
@@ -413,7 +432,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
     final names = _templateFeeNames;
     _pickedFees
       ..clear()
-      ..addAll(_feeTypes
+      ..addAll(_offeredFees
           .where((f) => names.contains(_upper(f['feedesc'])))
           .map((f) => (f['fee_id'] as num).toInt()));
   }
@@ -445,9 +464,9 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
     setState(() => _exporting = true);
     try {
       String safe(String s) => s.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
-      final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save Fee Demand Import Sheet',
-        fileName: 'Fee_Demand_Import_${safe(cls)}_${safe(sem)}.xlsx',
+      final path = await pickSavePath(
+        dialogTitle: schoolTerm('Save Fee Demand Import Sheet'),
+        fileName: '${isSchool ? 'Optional_Fee_Import' : 'Fee_Demand_Import'}_${safe(cls)}_${safe(sem)}.xlsx',
         type: FileType.custom,
         allowedExtensions: ['xlsx'],
       );
@@ -459,14 +478,14 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
       final fixedHdr = xl.CellStyle(
         bold: true,
         fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       // Fee columns in a different colour: those are the cells to fill in.
       final feeHdr = xl.CellStyle(
         bold: true,
         fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#1E40AF'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final headers = <String>[
@@ -599,6 +618,10 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
         warnings.add('Column "$raw" matches more than one fee type in Fee Master, so it is ignored.');
         continue;
       }
+      if (isSchool && !_isOptional(cands.first)) {
+        warnings.add('Column "$raw" is a regular fee, so it is ignored. Regular fees come from Section Fee Demand.');
+        continue;
+      }
       if (feeCols.values.any((v) => v['fee_id'] == cands.first['fee_id'])) {
         warnings.add('Column "$raw" repeats a fee type already in the sheet, so it is ignored.');
         continue;
@@ -610,7 +633,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
       if (nameCol < 0) 'There is no "name" column.',
       if (semCol < 0) 'There is no "sem" column.',
       if (dueCol < 0) 'There is no "duedate" column.',
-      if (feeCols.isEmpty) 'No column is a fee type from Fee Master.',
+      if (feeCols.isEmpty) isSchool ? 'No column is an optional fee type from Fee Master.' : 'No column is a fee type from Fee Master.',
     ];
     if (blocking.isNotEmpty) {
       return _SheetCheck(
@@ -698,7 +721,9 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
         final text = at(e.key);
         final feeType = e.value['feedesc'].toString().trim();
         final amt = _amount(text);
-        if (text.isEmpty) {
+        // School: an optional fee is left blank for the students who do not
+        // take it, so blank means no fee there.
+        if (text.isEmpty && !isSchool) {
           amountIssues.add(() =>
               flag(e.key, 'Amount blank', '$feeType amount is blank (enter 0 if there is no fee)'));
         } else if (amt == null || amt < 0) {
@@ -751,6 +776,10 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
             final feeType = e.value['feedesc'].toString().trim();
             final term = sem['semname'].toString().trim();
             final key = '$stuId|${_upper(term)}|${_upper(feeType)}';
+            if (isSchool && cfIds['${_upper(stuClass)}|${_upper(term)}|${_upper(feeType)}'] == null) {
+              flag(e.key, 'Not in Section Fee Demand', '$feeType is not set for $stuClass · $term in Section Fee Demand');
+              continue;
+            }
             final dup = firstRow[key];
             if (dup != null) {
               flag(e.key, 'Duplicate fee', '$feeType for $term is already in row $dup');
@@ -835,7 +864,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
   Future<void> _exportWithErrors(_SheetCheck c) async {
     try {
       final base = c.fileName.replaceAll(RegExp(r'\.xlsx$', caseSensitive: false), '');
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Sheet with Errors',
         fileName: '${base}_errors.xlsx',
         type: FileType.custom,
@@ -849,7 +878,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
       final hdr = xl.CellStyle(
         bold: true,
         fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       final errHdr = xl.CellStyle(
@@ -1334,6 +1363,13 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
         (s) => s);
     // Only the semesters Class Fee Demand has fees for in the loaded classes.
     final semOptions = _classTerms.map((s) => s['semname'].toString()).toList();
+    final semHint = _pickedClasses.isEmpty
+        ? schoolTerm('Class first')
+        : semOptions.isEmpty
+            ? (_pickedClasses.length > 1
+                ? schoolTerm('No shared semester')
+                : schoolTerm('No class fees'))
+            : schoolTerm('Select semester');
     final canExport = !busy &&
         !_loadingLists &&
         _pickedClasses.isNotEmpty &&
@@ -1351,8 +1387,10 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
             Expanded(
               child: AppUI.cardHeader(
                 icon: 'document-upload',
-                title: 'Fee Demand Import',
-                subtitle: schoolTerm('Export a class, fill in the fee amounts, then import and validate for approval'),
+                title: schoolTerm('Fee Demand Import'),
+                subtitle: isSchool
+                    ? 'Export a section, fill in the optional fees for the students who take them, then import and validate for approval'
+                    : 'Export a class, fill in the fee amounts, then import and validate for approval',
               ),
             ),
             IconButton(
@@ -1369,7 +1407,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
             padding: EdgeInsets.all(AppUI.cardPad),
             decoration: AppUI.card(),
             child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              _field(schoolTerm('Course'), flex: 4, DropdownButtonFormField<String>(
+              _field(schoolTerm('Course'), flex: 4, AppDropdownField<String>(
                 key: ValueKey('fdicourse-${_course ?? ''}'),
                 initialValue: _course,
                 isExpanded: true,
@@ -1395,7 +1433,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
               SizedBox(width: 10.w),
               _field(schoolTerm('Class'), flex: 4, _classesField(busy, classOptions)),
               SizedBox(width: 10.w),
-              _field(schoolTerm('Semester'), flex: 3, DropdownButtonFormField<String>(
+              _field(schoolTerm('Semester'), flex: 3, AppDropdownField<String>(
                 key: ValueKey('fdisem-${_semName ?? ''}-$_listsKey'),
                 // Guarded: a value that is not among the items asserts.
                 initialValue: semOptions.contains(_semName) ? _semName : null,
@@ -1403,17 +1441,14 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                 isDense: true,
                 icon: _arrow(),
                 style: _fieldText(),
-                decoration: _dec(_pickedClasses.isEmpty
-                    ? schoolTerm('Select class first')
-                    : semOptions.isEmpty
-                        ? (_pickedClasses.length > 1
-                            ? schoolTerm('No shared semester')
-                            : schoolTerm('No class fees'))
-                        : schoolTerm('Select semester')),
+                decoration: _dec(semHint),
+                // One line that shrinks to fit, not "Select" + a clipped 2nd line.
+                hint: _fitLine(semHint, _fieldText().copyWith(fontWeight: FontWeight.w500, color: AppColors.ink3)),
                 items: semOptions
                     .map((n) => DropdownMenuItem(
                         value: n, child: Text(n, overflow: TextOverflow.ellipsis)))
                     .toList(),
+                selectedItemBuilder: (_) => [for (final n in semOptions) _fitLine(n, _fieldText())],
                 onChanged: busy || semOptions.isEmpty
                     ? null
                     : (v) => setState(() {
@@ -1497,7 +1532,9 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                         // same as "pick one" -- say which classes disagree, or
                         // it reads as a broken dropdown.
                         semOptions.isNotEmpty
-                            ? schoolTerm('Choose a semester to tick its class fees.')
+                            ? (isSchool
+                                ? 'Choose a term, then the optional fees to put in the sheet.'
+                                : schoolTerm('Choose a semester to tick its class fees.'))
                             : _pickedClasses.length > 1
                                 ? schoolTerm('These $_classLabel share no semester in Class Fee Demand, so they cannot go in one sheet. '
                                     'A sheet carries one semester for every row. Untick classes until they share one.')
@@ -1540,12 +1577,17 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
               Icon(Icons.info_outline, size: 15.sp, color: AppColors.warning),
               SizedBox(width: 7.w),
               Expanded(
-                child: Text(schoolTerm(
-                  'Only ticked students and fee types go into the sheet. Import checks the sheet first and saves '
-                  'nothing until you choose to send: fix problems with Export with Errors, or send the valid rows. '
-                  'Register No., Name, Due Date (DD-MM-YYYY) and every fee amount are required; enter 0 where there is no fee. '
-                  'Demands are Regular and wait in Fee '
-                  'Demand Approval; importing a corrected sheet again updates them instead of duplicating.'),
+                child: Text(isSchool
+                    ? 'Only ticked students and optional fees go into the sheet. Fill in the amount for the students who '
+                        'take a fee and leave the rest blank. Import checks the sheet first and saves nothing until you '
+                        'choose to send: fix problems with Export with Errors, or send the valid rows. Admission No., Name, '
+                        'Term and Due Date (DD-MM-YYYY) are required. The fees wait in Fee Demand Approval; importing a '
+                        'corrected sheet again updates them instead of duplicating.'
+                    : 'Only ticked students and fee types go into the sheet. Import checks the sheet first and saves '
+                        'nothing until you choose to send: fix problems with Export with Errors, or send the valid rows. '
+                        'Register No., Name, Due Date (DD-MM-YYYY) and every fee amount are required; enter 0 where there is no fee. '
+                        'Demands are Regular and wait in Fee '
+                        'Demand Approval; importing a corrected sheet again updates them instead of duplicating.',
                   style: AppUI.muted.copyWith(color: AppColors.textSecondary, height: 1.35),
                 ),
               ),
@@ -1910,8 +1952,8 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
             // sheet. Fee Master order is preserved (_feeTypes is already sorted
             // by payseq, then name).
             final tpl = _templateFeeNames;
-            final classFees =
-                _feeTypes.where((f) => tpl.contains(_upper(f['feedesc']))).toList();
+            // School: only the OPTIONAL ones of those.
+            final classFees = _offeredFees.where((f) => tpl.contains(_upper(f['feedesc']))).toList();
             final shown = classFees
                 .where((f) =>
                     q.isEmpty ||
@@ -1936,7 +1978,7 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                       padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
                       child: Row(children: [
                         Expanded(
-                          child: Text(schoolTerm('Class Fees · ${_pickedFees.length} selected'),
+                          child: Text(isSchool ? 'Optional Fees · ${_pickedFees.length} selected' : 'Class Fees · ${_pickedFees.length} selected',
                               style: AppUI.label),
                         ),
                         TextButton(
@@ -1965,7 +2007,13 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                           ? Padding(
                               padding: const EdgeInsets.all(16),
                               child: Text(
-                                  _semName == null
+                                  isSchool
+                                      ? (_semName == null
+                                          ? 'Choose a term to see its optional fees.'
+                                          : classFees.isEmpty
+                                              ? 'Section Fee Demand has no optional fee for $_classLabel · $_semName. Add it there first.'
+                                              : 'No optional fee matches the search.')
+                                      : _semName == null
                                       ? schoolTerm('Choose a semester to see its class fees.')
                                       : classFees.isEmpty
                                           ? schoolTerm('Class Fee Demand has no fees for $_classLabel · $_semName.')
@@ -2105,13 +2153,20 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
                   ),
                 ],
                 SizedBox(height: 16.h),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: ElevatedButton(
+                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  if (!ok) ...[
+                    OutlinedButton.icon(
+                      onPressed: () => exportImportErrors('Fee Demand Import', _errors),
+                      icon: const Icon(Icons.download_rounded, size: 16),
+                      label: const Text('Export Errors'),
+                    ),
+                    SizedBox(width: 10.w),
+                  ],
+                  ElevatedButton(
                     onPressed: () => Navigator.pop(ctx),
                     child: const Text(AppText.close),
                   ),
-                ),
+                ]),
               ],
             ),
           ),
@@ -2155,6 +2210,13 @@ class _FeeDemandImportScreenState extends State<FeeDemandImportScreen> {
   Icon _arrow() => Icon(Icons.keyboard_arrow_down_rounded, size: 20.sp, color: AppColors.textSecondary);
 
   TextStyle _fieldText() => AppUI.fieldText(context);
+
+  /// One line of dropdown text that shrinks to fit instead of wrapping onto
+  /// a clipped second line.
+  Widget _fitLine(String text, TextStyle style) => Align(
+        alignment: Alignment.centerLeft,
+        child: AppFitText(text, style: style),
+      );
 
   /// One decoration for every toolbar field. The icon constraints matter: left
   /// at their 48px default, a search or arrow icon makes that field taller than

@@ -17,8 +17,17 @@ class TcField {
 class TcSource {
   final Map<String, dynamic> student, admission, tc;
   final String schoolName, schoolAddress, yearLabel;
+  /// From the institution record (Super Admin -> institution details).
+  final String schoolPhone, schoolEmail, affiliationNo;
+  /// What the student still owes (null: not known -- "All Fees Paid" is left
+  /// for the clerk rather than printed as Yes).
+  final double? pendingFees;
+  /// Month the school's academic year starts (April here; was assumed June).
+  final int yearStartMonth;
   TcSource({required this.student, required this.admission, required this.tc,
-      required this.schoolName, required this.schoolAddress, required this.yearLabel});
+      required this.schoolName, required this.schoolAddress, required this.yearLabel,
+      this.schoolPhone = '', this.schoolEmail = '', this.affiliationNo = '',
+      this.pendingFees, this.yearStartMonth = 4});
 
   String a(String k) => '${admission[k] ?? student[k] ?? ''}'.trim();
   String st(String k) => '${student[k] ?? admission[k] ?? ''}'.trim();
@@ -29,11 +38,12 @@ String tcDate(dynamic v) {
   return d == null ? '' : '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
 }
 
-/// Academic year a date falls in (June start), e.g. 2019-2020.
-String _yearOf(dynamic v) {
+/// Academic year a date falls in, e.g. 2019-2020, for a year starting in
+/// [startMonth] (an April admission used to print the previous year).
+String _yearOf(dynamic v, int startMonth) {
   final d = DateTime.tryParse('${v ?? ''}');
   if (d == null) return '';
-  final y = d.month >= 6 ? d.year : d.year - 1;
+  final y = d.month >= startMonth ? d.year : d.year - 1;
   return '$y-${y + 1}';
 }
 
@@ -49,6 +59,13 @@ final List<TcField> kTcFields = [
   TcField('School Name', 'School', auto: (s) => s.schoolName),
   TcField('School Address', 'School', auto: (s) => s.schoolAddress),
   TcField('Academic Year', 'School', auto: (s) => s.yearLabel),
+  TcField('Affiliation No', 'School', auto: (s) => s.affiliationNo, hint: 'From the institution record, else carried over from the last certificate'),
+  TcField('School Code', 'School', hint: 'Carried over from the last certificate'),
+  TcField('UDISE Code', 'School', hint: 'Carried over from the last certificate'),
+  TcField('School Phone', 'School', auto: (s) => s.schoolPhone),
+  TcField('School Email', 'School', auto: (s) => s.schoolEmail),
+  TcField('School Website', 'School', hint: 'Carried over from the last certificate'),
+  TcField('School Category', 'School', hint: 'Govt. / Minority / Independent -- carried over from the last certificate'),
   TcField('Educational District', 'School', hint: 'Carried over from the last certificate'),
   TcField('Revenue District', 'School', hint: 'Carried over from the last certificate'),
   // the TC
@@ -60,10 +77,12 @@ final List<TcField> kTcFields = [
   TcField('Date Struck Off', 'Transfer Certificate', auto: (s) => tcDate(s.tc['effectfrom'] ?? s.tc['tcdate'])),
   TcField('Reason for Leaving', 'Transfer Certificate', auto: (s) => '${s.tc['remarks'] ?? ''}'.trim().isNotEmpty ? '${s.tc['remarks']}' : '${s.tc['statustype'] ?? ''}'),
   TcField('Book No', 'Transfer Certificate'),
+  TcField('Cert Sl No', 'Transfer Certificate', hint: 'Serial number printed on the TC book page'),
   // student
   TcField('Student Name', 'Student', auto: (s) => s.st('stuname')),
   TcField('Student Name (Block Letters)', 'Student', auto: (s) => s.st('stuname').toUpperCase()),
   TcField('Student Name (Tamil)', 'Student'),
+  TcField('Student PEN', 'Student', hint: 'Permanent Education Number'),
   TcField('Admission No', 'Student', auto: (s) => s.st('stuadmno').isNotEmpty ? s.st('stuadmno') : s.a('admno')),
   TcField('Gender', 'Student', auto: (s) => _gender(s.st('stugender'))),
   TcField('DOB', 'Student', auto: (s) => tcDate(s.student['studob'] ?? s.admission['studob'])),
@@ -76,17 +95,22 @@ final List<TcField> kTcFields = [
     return d == null ? '' : '${tcDate(d.toIso8601String())} (${InWords.date(d)})';
   }),
   TcField('DOB as per Birth Certificate', 'Student', auto: (s) => tcDate(s.student['studob'] ?? s.admission['studob'])),
+  TcField('Proof of DOB', 'Student', hint: 'e.g. Birth Certificate'),
   TcField('Nationality', 'Student', auto: (s) => s.a('nationality')),
   TcField('Religion', 'Student', auto: (s) => s.a('religion')),
   TcField('Nationality and Religion', 'Student', auto: (s) => _join([s.a('nationality'), s.a('religion')], ' - ')),
+  TcField('Nationality, Religion and Caste', 'Student', auto: (s) {
+    final nr = _join([s.a('nationality'), s.a('religion')], '-');
+    return s.a('caste').isEmpty ? nr : '$nr & ${s.a('caste')}';
+  }),
   TcField('Community', 'Student', auto: (s) => s.a('community')),
   TcField('Caste', 'Student', auto: (s) => s.a('caste')),
   TcField('Community Category', 'Student', hint: 'SC / ST / BC / MBC / DNC / OC'),
   TcField('Community Certificate Note', 'Student', auto: (_) => 'Refer the Community Certificate issued by Revenue Authorities'),
   TcField('Aadhar No', 'Student', auto: (s) => s.a('aadharno')),
   TcField('EMIS No', 'Student', auto: (s) => s.a('emisno')),
-  TcField('Identification Mark 1', 'Student'),
-  TcField('Identification Mark 2', 'Student'),
+  TcField('Identification Mark 1', 'Student', auto: (s) => s.a('idmark1')),
+  TcField('Identification Mark 2', 'Student', auto: (s) => s.a('idmark2')),
   // parents
   TcField('Father Name', 'Parents', auto: (s) => s.a('fathername')),
   TcField('Mother Name', 'Parents', auto: (s) => s.a('mothername')),
@@ -99,18 +123,26 @@ final List<TcField> kTcFields = [
     final d = DateTime.tryParse('${s.admission['admdate'] ?? s.student['stuadmdate'] ?? ''}');
     return d == null ? '' : InWords.date(d);
   }),
+  TcField('Admission Year in Words', 'Admission & studies', auto: (s) {
+    final d = DateTime.tryParse('${s.admission['admdate'] ?? s.student['stuadmdate'] ?? ''}');
+    return d == null ? '' : InWords.number(d.year);
+  }),
   TcField('Admission Class', 'Admission & studies', auto: (s) => '${s.admission['courname'] ?? ''}'),
   TcField('Admission Standard in Words', 'Admission & studies', auto: (s) => InWords.standard('${s.admission['courname'] ?? ''}')),
   TcField('Division', 'Admission & studies', auto: (s) => s.a('division')),
   TcField('Standard', 'Admission & studies', auto: (s) => '${s.student['courname'] ?? ''}'),
   TcField('Standard in Words', 'Admission & studies', auto: (s) => InWords.standard('${s.student['courname'] ?? ''}')),
+  TcField('Standard Ordinal', 'Admission & studies', auto: (s) => InWords.standardOrdinal('${s.student['courname'] ?? ''}'),
+      hint: 'e.g. Twelfth'),
   TcField('Class', 'Admission & studies', auto: (s) => '${s.student['stuclass'] ?? ''}'),
   TcField('Medium', 'Admission & studies', auto: (s) => s.a('medium')),
   TcField('First Language', 'Admission & studies'),
   TcField('Subjects Studied', 'Admission & studies'),
   TcField('Last Exam Result', 'Admission & studies'),
+  TcField('Whether Failed', 'Admission & studies', auto: (_) => 'NA', hint: 'If so, once / twice in the same class'),
   TcField('Qualified for Promotion', 'Admission & studies', auto: (_) => 'Yes'),
   TcField('Promoted Class', 'Admission & studies'),
+  TcField('Promoted Class in Words', 'Admission & studies'),
   // course (state board / higher secondary)
   TcField('Course Offered', kTcCourseGroup, auto: (_) => 'General Education', hint: 'General Education / Vocational Education'),
   TcField('Part I Language', kTcCourseGroup),
@@ -125,7 +157,7 @@ final List<TcField> kTcFields = [
       TcField('Study $n ${c.$1}', kTcStudyGroup, auto: switch ((n, c.$1)) {
         (1, 'School') => (s) => s.schoolName,
         (1, 'Years') => (s) {
-            final from = _yearOf(s.admission['admdate'] ?? s.student['stuadmdate']);
+            final from = _yearOf(s.admission['admdate'] ?? s.student['stuadmdate'], s.yearStartMonth);
             return from.isEmpty || from == s.yearLabel ? s.yearLabel : '$from to ${s.yearLabel}';
           },
         (1, 'Standard') => (s) {
@@ -141,6 +173,9 @@ final List<TcField> kTcFields = [
   TcField('Total Working Days', 'Attendance & fees'),
   TcField('Days Present', 'Attendance & fees'),
   TcField('Fees Paid Up To', 'Attendance & fees'),
+  TcField('All Fees Paid', 'Attendance & fees',
+      auto: (s) => s.pendingFees == null ? '' : (s.pendingFees! <= 0.005 ? 'Yes' : 'No'),
+      hint: 'Whether the pupil has paid all the fees due (from the fee balance)'),
   TcField('Fee Concession', 'Attendance & fees'),
   TcField('Scholarship', 'Attendance & fees'),
   TcField('Medical Inspection', 'Attendance & fees'),
@@ -158,6 +193,8 @@ final Set<String> kTcFieldKeys = {for (final f in kTcFields) f.key};
 /// this label instead; a key not listed here reads as itself.
 const Map<String, String> _kTcFieldLabels = {
   'TC No': 'TC No.',
+  'Affiliation No': 'Affiliation No.',
+  'UDISE Code': 'UDISE+ Code',
   'Book No': 'Book No.',
   'Admission No': 'Admission No.',
   'DOB': 'Date of Birth',
@@ -172,6 +209,8 @@ const Map<String, String> _kTcFieldLabels = {
   'Father or Mother Name': "Father's or Mother's Name",
   'Father Name (Tamil)': "Father's Name (Tamil)",
   'Mark Certificate S.No': 'Mark Certificate Serial No.',
+  'Cert Sl No': 'Cert. Sl. No.',
+  'Proof of DOB': 'Proof of Date of Birth',
   'Register No': 'Register No.',
   'TMR Code No & Date': 'TMR Code No. and Date',
 };
@@ -195,7 +234,11 @@ const List<(String, String)> kTcStudyCols = [
 
 /// School-level typed fields: a new certificate starts with the value from
 /// the last saved one.
-const kTcCarryKeys = {'Educational District', 'Revenue District'};
+const kTcCarryKeys = {
+  'Educational District', 'Revenue District',
+  'Affiliation No', 'School Code', 'UDISE Code', 'School Phone', 'School Email', 'School Website',
+  'School Category',
+};
 
 /// Lines of the downloadable sample format (label, placeholder) -- CBSE order.
 const List<(String, String)> kTcSampleLines = [

@@ -41,7 +41,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       if (resp.statusCode != 200) throw 'HTTP ${resp.statusCode}';
       final total = resp.contentLength ?? 0;
       final path =
-          '${Directory.systemTemp.path}${Platform.pathSeparator}EduCore360-Setup-${widget.info.version}.exe';
+          '${Directory.systemTemp.path}${Platform.pathSeparator}FITSchool-Setup-${widget.info.version}.exe';
       final file = File(path);
       final sink = file.openWrite();
       int received = 0;
@@ -53,7 +53,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       await sink.close();
       client.close();
       // Launch the installer detached, then quit so it can replace the running
-      // app. The Inno installer closes/reopens EduCore360.
+      // app. The Inno installer closes/reopens FIT School.
       await Process.start(path, [], mode: ProcessStartMode.detached, runInShell: true);
       await Future.delayed(const Duration(milliseconds: 400));
       exit(0);

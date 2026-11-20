@@ -1,0 +1,6 @@
+{
+  "version": "0.0.16",
+  "url": "https://exasnbapvgfeooxyxjas.supabase.co/storage/v1/object/public/app-updates/EduCore360-Setup-0.0.16.exe",
+  "notes": "Fixes Paytm checkout hanging after the Windows WebView update. Fee type ordering and fee group filters on reports.",
+  "mandatory": false
+}

@@ -9,6 +9,7 @@ const _kEmail = 'saved_email';
 const _kPassword = 'saved_password';
 const _kInsId = 'saved_ins_id';
 const _kIsSuperAdmin = 'saved_is_super_admin';
+const _kRememberMe = 'login_remember_me';
 const _kSchema = 'saved_schema';
 const _kYearLabel = 'saved_year_label';
 
@@ -99,25 +100,10 @@ class AuthProvider extends ChangeNotifier {
         _currentUser = user;
         _userRole = isSuperAdmin ? 'Super Admin' : user.desname;
 
-        // Mint a server-side session token (Phase 0 security foundation).
-        // Best-effort — nothing requires it yet; write RPCs will gate on it in a
-        // later phase. Credentials are re-verified server-side by the RPC.
-        _sessionToken = null;
-        if (user.insId != null) {
-          try {
-            _sessionToken = await SupabaseService.createAppSession(
-              email: email,
-              password: password,
-              insId: user.insId!,
-              isSuperAdmin: isSuperAdmin,
-            );
-          } catch (e) {
-            debugPrint('create_app_session failed: $e');
-          }
-        }
-        // Expose the token to the static service layer so centralized write
-        // helpers (addStudent/saveParent/…) can route through session-gated RPCs.
-        SupabaseService.sessionToken = _sessionToken;
+        // The server-side session was minted by loginUser right after the
+        // password check (the server refuses the app's requests without one),
+        // so it is already on SupabaseService.sessionToken.
+        _sessionToken = SupabaseService.sessionToken;
 
         _isLoading = false;
         notifyListeners();
@@ -152,7 +138,7 @@ class AuthProvider extends ChangeNotifier {
 
         return true;
       } else {
-        _errorMessage = 'Invalid email or password. Please try again.';
+        _errorMessage = SupabaseService.lastLoginError ?? 'Invalid email or password. Please try again.';
         _isLoading = false;
         notifyListeners();
         return false;
@@ -221,6 +207,25 @@ class AuthProvider extends ChangeNotifier {
     final v = prefs.getString(_kEmail);
     return (v == null || v.isEmpty) ? null : v;
   }
+
+  /// What the sign-in card pre-fills when "Remember Me" was ticked: the last
+  /// email, institution and access type. Never a password.
+  Future<({String? email, int? insId, bool superAdmin})> savedLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString(_kEmail);
+    return (
+      email: (email == null || email.isEmpty) ? null : email,
+      insId: prefs.getInt(_kInsId),
+      superAdmin: prefs.getBool(_kIsSuperAdmin) ?? false,
+    );
+  }
+
+  /// The sign-in card's "Remember Me" tick (on by default).
+  Future<bool> rememberMe() async =>
+      (await SharedPreferences.getInstance()).getBool(_kRememberMe) ?? true;
+
+  Future<void> setRememberMe(bool value) async =>
+      (await SharedPreferences.getInstance()).setBool(_kRememberMe, value);
 
   /// Save credentials for auto-login on next launch
   Future<void> saveCredentials(String email, String password, {int? insId, bool isSuperAdmin = false, String? yearLabel}) async {

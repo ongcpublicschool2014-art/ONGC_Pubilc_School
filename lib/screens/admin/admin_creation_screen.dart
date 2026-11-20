@@ -12,6 +12,7 @@ import '../../utils/app_text.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 class AdminCreationScreen extends StatefulWidget {
   const AdminCreationScreen({super.key});
 
@@ -133,7 +134,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               SizedBox(height: 16.h),
               Text('Reports To', style: AppUI.label),
               SizedBox(height: 6.h),
-              DropdownButtonFormField<int?>(
+              AppDropdownField<int?>(
                 value: reportsTo,
                 icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                 dropdownColor: Colors.white,
@@ -386,7 +387,8 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: EdgeInsets.zero,
+      // room for the scrollbar, so it never sits over the cards' right edge
+      padding: const EdgeInsets.only(right: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -453,7 +455,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             Text('Staff Designation *',
                 style: AppUI.label),
             SizedBox(height: 6.h),
-            DropdownButtonFormField<String>(
+            AppDropdownField<String>(
               value: _selectedDesignation,
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               isExpanded: true,
@@ -504,7 +506,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             Text('Reports To',
                 style: AppUI.label),
             SizedBox(height: 6.h),
-            DropdownButtonFormField<int>(
+            AppDropdownField<int>(
               value: _selectedReportTo,
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               isExpanded: true,
@@ -532,7 +534,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
             Text('Role *',
                 style: AppUI.label),
             SizedBox(height: 6.h),
-            DropdownButtonFormField<String>(
+            AppDropdownField<String>(
               value: _selectedRole,
               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
               isExpanded: true,
@@ -718,7 +720,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
               children: [
                 const CardTitleBlock(icon: 'people', title: 'Existing Users', subtitle: 'all user accounts in this institution'),
                 const Spacer(),
-                AppUI.chip('${_users.length} users', AppStatus.info),
+                AppUI.chip('${_users.length} user${_users.length == 1 ? '' : 's'}', AppStatus.info),
                 SizedBox(width: 8.w),
                 SizedBox(
                   height: AppBtn.height(context),
@@ -751,7 +753,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                 Expanded(flex: 3, child: Text('NAME', style: AppUI.tableHead)),
                 Expanded(flex: 2, child: Text('DESIGNATION', style: AppUI.tableHead)),
                 Expanded(flex: 2, child: Text('ROLE', style: AppUI.tableHead)),
-                SizedBox(width: 70.w, child: Text('STATUS', textAlign: TextAlign.center, style: AppUI.tableHead)),
+                SizedBox(width: 100, child: Text('STATUS', textAlign: TextAlign.center, style: AppUI.tableHead)),
                 SizedBox(width: 50.w, child: Text('EDIT', textAlign: TextAlign.center, style: AppUI.tableHead)),
                 SizedBox(width: 30.w),
               ],
@@ -788,7 +790,7 @@ class _AdminCreationScreenState extends State<AdminCreationScreen> {
                         ),
                       ),
                       SizedBox(
-                        width: 70.w,
+                        width: 100, // fits an INACTIVE chip in a small window too
                         child: Center(
                           child: AppUI.chip(u.isActive ? 'Active' : 'Inactive', u.isActive ? AppStatus.success : AppStatus.danger),
                         ),

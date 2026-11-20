@@ -46,3 +46,7 @@ String feeKindLabel(String code) {
   }
   return code;
 }
+
+/// What makes two fee type names (or short names) the same fee: spaces, dots
+/// and capitals do not count. Used by Fee Master -> Fee Type and its import.
+String feeTypeKey(Object? v) => '${v ?? ''}'.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');

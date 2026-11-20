@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
@@ -18,6 +19,8 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// PENDING FEE REPORT AS ON <date> -- the old product's Fee Pending Report,
 /// with its two layouts (the two sheets of the old workbook):
@@ -356,7 +359,7 @@ class _PendingFeeReportScreenState extends State<PendingFeeReportScreen> {
     if (_rows.isEmpty) return _snack('Nothing to export yet.', AppColors.warning);
     setState(() => _exporting = true);
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Pending Fee Report',
         fileName: '$_fileStem.xlsx',
         type: FileType.custom,
@@ -694,7 +697,7 @@ class _PendingFeeReportScreenState extends State<PendingFeeReportScreen> {
           SizedBox(width: 10.w),
           Expanded(
             flex: 3,
-            child: DropdownButtonFormField<String>(
+            child: AppDropdownField<String>(
               key: ValueKey('tc-$_tc'),
               initialValue: _tc,
               isExpanded: true,
@@ -770,7 +773,25 @@ class _PendingFeeReportScreenState extends State<PendingFeeReportScreen> {
         icon: 'wallet-money',
       );
     }
-    const wSno = 70.0, wSec = 100.0, wAdm = 120.0, wName = 220.0, wAmt = 112.0, wRem = 120.0;
+    const wSno = 70.0, wSec = 100.0, wAdm = 120.0, wName = 220.0, wRem = 120.0;
+    String fmt(double v, bool zero) => _zero(v) && !zero ? '' : formatIndianNumber(v);
+    final strongMoney = AppUI.money.copyWith(fontWeight: FontWeight.w800);
+    // The amount columns are never narrower than the widest total (the grand
+    // total), so a large figure is never cut to "14,41,88,...".
+    final grandLine = _lines.isNotEmpty && _lines.last.kind == _Kind.grand ? _lines.last : null;
+    var wAmt = 112.0;
+    if (grandLine != null) {
+      for (final c in cols) {
+        final tp = TextPainter(
+          text: TextSpan(text: fmt(grandLine.sum(c), true), style: DefaultTextStyle.of(context).style.merge(strongMoney)),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout();
+        wAmt = math.max(wAmt, tp.width + 2 * 8.w + 6);
+        tp.dispose();
+      }
+    }
     final total = wSno + wSec + wAdm + wName + wAmt * cols.length + wRem + 32;
     final two = _feeLayout || cols.any((c) => c.top.isNotEmpty);
 
@@ -791,8 +812,6 @@ class _PendingFeeReportScreenState extends State<PendingFeeReportScreen> {
             ]),
           ),
         );
-    String fmt(double v, bool zero) => _zero(v) && !zero ? '' : formatIndianNumber(v);
-    final strongMoney = AppUI.money.copyWith(fontWeight: FontWeight.w800);
 
     Widget lineRow(_Line l) {
       final s = l.stu;

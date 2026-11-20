@@ -13,6 +13,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/pill_tab.dart';
 import 'master_import_screen.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Master Data — Course and Class masters in the Fee-Master CRUD style:
 /// a left Add/Edit form + right table, with a top-right "Import CSV/Excel"
@@ -125,6 +126,11 @@ Widget _lbl(String text) =>
 InputDecoration _filledFieldDec(BuildContext context, String hint, {bool filled = false}) {
   return AppUI.field(context, hint, filled: filled);
 }
+
+/// A dropdown's placeholder, passed as its own `hint:`. Left to the
+/// decoration, it is laid on the empty button's baseline and sits low in the
+/// box; as the button's hint it is centred like a text field's.
+Widget _ddHint(BuildContext context, String hint) => AppFitText(hint, style: AppUI.field(context, hint).hintStyle);
 
 TextStyle _fieldTextStyle(BuildContext context, {bool filled = false}) {
   return AppUI.fieldText(context, filled: filled);
@@ -316,6 +322,10 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
   // School: fee demand level -- SECTION (each section its own fees) or
   // STANDARD (one Section / Advance Fee Demand for every section).
   String _feeLevel = 'SECTION';
+  // School: the standard's division (course.div_id -> Master Data > Division).
+  // Admission fills a student's division from it.
+  List<Map<String, dynamic>> _divisions = [];
+  String? _divId;
   int? _editId; // non-null while editing an existing row
   bool _loading = true, _saving = false;
 
@@ -341,6 +351,13 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
     try {
       final res = await SupabaseService.fromSchema('course')
           .select('*').eq('ins_id', _insId).eq('activestatus', 1);
+      List divs = const [];
+      if (isSchool) {
+        try {
+          divs = await SupabaseService.fromSchema('division')
+              .select('div_id, divname').eq('ins_id', _insId).eq('activestatus', 1).order('divname');
+        } catch (_) {}
+      }
       final list = List<Map<String, dynamic>>.from(res as List)
         ..sort((a, b) {
           final oa = (a['ordid'] is num) ? (a['ordid'] as num).toInt() : 1 << 30;
@@ -351,6 +368,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       if (!mounted) return;
       setState(() {
         _rows = list;
+        _divisions = List<Map<String, dynamic>>.from(divs);
         _loading = false;
       });
     } catch (e) {
@@ -364,8 +382,16 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       _name.text = r['courname']?.toString() ?? '';
       _stdType = _stdTypes.contains(r['classtype']?.toString()) ? r['classtype'].toString() : 'PROMOTIONAL';
       _feeLevel = r['feelevel']?.toString() == 'STANDARD' ? 'STANDARD' : 'SECTION';
+      final d = r['div_id']?.toString();
+      _divId = _divisions.any((x) => x['div_id'].toString() == d) ? d : null;
     });
   }
+
+  String _divName(dynamic id) => id == null
+      ? ''
+      : (_divisions.firstWhere((x) => x['div_id'].toString() == id.toString(),
+              orElse: () => const {})['divname'] ?? '')
+          .toString();
 
   void _cancelEdit() {
     setState(() {
@@ -373,6 +399,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       _name.clear();
       _stdType = 'PROMOTIONAL';
       _feeLevel = 'SECTION';
+      _divId = null;
     });
   }
 
@@ -390,6 +417,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
           'courname': name,
           if (isSchool) 'classtype': _stdType,
           if (isSchool) 'feelevel': _feeLevel,
+          if (isSchool) 'div_id': _divId == null ? null : int.tryParse(_divId!),
         }, pkCol: 'cour_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Course updated.', AppColors.success);
       } else {
@@ -401,6 +429,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
           'activestatus': 1,
           if (isSchool) 'classtype': _stdType,
           if (isSchool) 'feelevel': _feeLevel,
+          if (isSchool) 'div_id': _divId == null ? null : int.tryParse(_divId!),
         });
         if (mounted) _snack(context, 'Course added.', AppColors.success);
       }
@@ -408,6 +437,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
       _editId = null;
       _stdType = 'PROMOTIONAL';
       _feeLevel = 'SECTION';
+      _divId = null;
       await _load();
     } catch (e) {
       if (mounted) _snack(context, '${schoolTerm('Could not save the course.')} ${friendlyError(e)}', AppColors.error);
@@ -473,7 +503,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                   SizedBox(height: 16.h),
                   _lbl('Standard Type'),
                   SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
+                  AppDropdownField<String>(
                     initialValue: _stdType,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                     isExpanded: true,
@@ -498,7 +528,7 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                   SizedBox(height: 16.h),
                   _lbl('Fee Demand By'),
                   SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
+                  AppDropdownField<String>(
                     key: ValueKey('fl-$_editId-$_feeLevel'),
                     initialValue: _feeLevel,
                     isExpanded: true,
@@ -518,6 +548,30 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                   ),
                   SizedBox(height: 6.h),
                   Text('How Section Fee Demand and Advance Fee Demand are defined for this standard.',
+                      style: AppUI.muted.copyWith(height: 1.3)),
+                  SizedBox(height: 16.h),
+                  _lbl('Division'),
+                  SizedBox(height: 6.h),
+                  AppDropdownField<String?>(
+                    key: ValueKey('dv-$_editId-$_divId-${_divisions.length}'),
+                    initialValue: _divId,
+                    isExpanded: true,
+                    dropdownColor: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    style: _fieldTextStyle(context, filled: _divId != null),
+                    decoration: _filledFieldDec(context,
+                        _divisions.isEmpty ? 'No divisions yet. Add one under Division' : 'Select division',
+                        filled: _divId != null),
+                    items: [
+                      DropdownMenuItem<String?>(value: null, child: Text('None', style: AppUI.fieldText(context))),
+                      ..._divisions.map((d) => DropdownMenuItem<String?>(
+                          value: d['div_id'].toString(),
+                          child: Text((d['divname'] ?? '').toString(), overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context)))),
+                    ],
+                    onChanged: (v) => setState(() => _divId = v),
+                  ),
+                  SizedBox(height: 6.h),
+                  Text('New admissions to this standard get this division.',
                       style: AppUI.muted.copyWith(height: 1.3)),
                 ],
                 SizedBox(height: 16.h),
@@ -552,10 +606,11 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
             action: _importButton(context, title: 'Course', tabIndex: 2, disabled: _saving, onReturn: _load),
             headerCells: [
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
-              Expanded(child: Text(schoolTerm('COURSE'), style: _h())),
-              if (isSchool) SizedBox(width: 110.w, child: Text('TYPE', style: _h())),
-              if (isSchool) SizedBox(width: 120.w, child: Text('FEE DEMAND BY', style: _h())),
-              SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _h())),
+              Expanded(flex: 3, child: Text(schoolTerm('COURSE'), style: _h())),
+              if (isSchool) Expanded(flex: 2, child: Text('TYPE', style: _h())),
+              if (isSchool) Expanded(flex: 2, child: Text('FEE DEMAND BY', style: _h())),
+              if (isSchool) Expanded(flex: 2, child: Text('DIVISION', style: _h())),
+              SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -572,12 +627,12 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                             padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
                             child: Row(children: [
                               SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
-                              Expanded(child: Text(r['courname']?.toString() ?? '', style: _c())),
+                              Expanded(flex: 3, child: Text(r['courname']?.toString() ?? '', style: _c())),
                               if (isSchool)
-                                SizedBox(width: 110.w, child: Text(_stdTypeShort[r['classtype']?.toString()] ?? 'Promotional', style: _c())),
+                                Expanded(flex: 2, child: Text(_stdTypeShort[r['classtype']?.toString()] ?? 'Promotional', style: _c())),
                               if (isSchool)
-                                SizedBox(
-                                  width: 120.w,
+                                Expanded(
+                                  flex: 2,
                                   child: Align(
                                     alignment: Alignment.centerLeft,
                                     child: r['feelevel']?.toString() == 'STANDARD'
@@ -585,6 +640,8 @@ class _CourseMasterPanelState extends State<_CourseMasterPanel> with AutomaticKe
                                         : Text('Section', style: _c()),
                                   ),
                                 ),
+                              if (isSchool)
+                                Expanded(flex: 2, child: Text(_divName(r['div_id']), style: _c(), overflow: TextOverflow.ellipsis)),
                               SizedBox(width: 90.w, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                                 InkWell(onTap: () => _edit(r), child: Padding(padding: EdgeInsets.all(4.w), child: const AppIcon('edit-2', size: 16, color: AppColors.primary))),
                                 SizedBox(width: 8.w),
@@ -935,7 +992,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
               children: [
                 _lbl('Course *'),
                 SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   initialValue: _courId,
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   isExpanded: true,
@@ -944,6 +1001,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   elevation: 6,
                   style: _fieldTextStyle(context, filled: _courId != null),
                   decoration: _filledFieldDec(context, schoolTerm('Select course'), filled: _courId != null),
+                  hint: _ddHint(context, schoolTerm('Select course')),
                   items: [
                     ..._courses.map((c) => DropdownMenuItem(value: c['cour_id'].toString(), child: Text(c['courname']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis))),
                   ],
@@ -977,7 +1035,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                 ] else ...[
                 _lbl('Class Level *'),
                 SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   initialValue: _classLevel,
                   icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   isExpanded: true,
@@ -986,6 +1044,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                   elevation: 6,
                   style: _fieldTextStyle(context, filled: _classLevel != null),
                   decoration: _filledFieldDec(context, 'Select class level', filled: _classLevel != null),
+                  hint: _ddHint(context, 'Select class level'),
                   items: _classLevels
                       .map((lvl) => DropdownMenuItem(value: lvl, child: Text(lvl, style: AppUI.fieldText(context))))
                       .toList(),
@@ -999,7 +1058,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                 SizedBox(height: 16.h),
                 _lbl('Class Type'),
                 SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   initialValue: _classType,
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   isExpanded: true,
@@ -1046,7 +1105,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                           : r['cour_id']?.toString() == _courId)).toList();
                   final succValue =
                       succClasses.any((r) => r['cla_id'].toString() == _succId) ? _succId : null;
-                  return DropdownButtonFormField<String>(
+                  return AppDropdownField<String>(
                     initialValue: succValue,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                     isExpanded: true,
@@ -1055,6 +1114,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
                     elevation: 6,
                     style: _fieldTextStyle(context, filled: succValue != null),
                     decoration: _filledFieldDec(context, 'Linked automatically when the next class is added', filled: succValue != null),
+                    hint: _ddHint(context, 'Linked automatically when the next class is added'),
                     items: [
                       DropdownMenuItem<String>(
                         value: '',
@@ -1123,7 +1183,7 @@ class _ClassMasterPanelState extends State<_ClassMasterPanel> with AutomaticKeep
               Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: _h())),
               if (!isSchool) Expanded(flex: 2, child: Text('SUCCEEDING CLASS', style: _h())),
               if (!isSchool) SizedBox(width: 110.w, child: Text('TYPE', style: _h())),
-              SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _h())),
+              SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
                 ? const Center(child: CircularProgressIndicator())

@@ -11,6 +11,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/app_text.dart';
+import '../../widgets/app_dropdown_field.dart';
 class RegisterScreen extends StatefulWidget {
   final VoidCallback? onRegistered;
   final Map<String, dynamic>? editInstitution; // when set, the wizard edits this institution
@@ -856,7 +857,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   _fieldLabel('Institution Type'),
                   SizedBox(
                     height: AppUI.controlHeight(context),
-                    child: DropdownButtonFormField<String>(
+                    child: AppDropdownField<String>(
                       initialValue: _institutionType,
                       isExpanded: true,
                       dropdownColor: Colors.white,
@@ -1033,7 +1034,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   _fieldLabel('Institution Recognized'),
                   SizedBox(
                     height: AppUI.controlHeight(context),
-                    child: DropdownButtonFormField<String>(
+                    child: AppDropdownField<String>(
                       initialValue: _institutionRecognized,
                       dropdownColor: Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -1429,7 +1430,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     _fieldLabel('Designation *'),
                     SizedBox(
                       height: AppUI.controlHeight(context),
-                      child: DropdownButtonFormField<String>(
+                      child: AppDropdownField<String>(
                         initialValue: _adminDesignation,
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),

@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'save_path.dart';
 
 /// One way to print a tabular report, shared by the Admission Register, the
 /// Admission Abstract and the TC Report.
@@ -120,7 +121,7 @@ Future<bool> saveReportPdf(
   ));
 
   final bytes = await pdf.save();
-  final result = await FilePicker.platform.saveFile(
+  final result = await pickSavePath(
     dialogTitle: 'Save PDF',
     fileName: '$fileName.pdf',
     type: FileType.custom,

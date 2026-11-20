@@ -506,7 +506,7 @@ class _DonutPainter extends CustomPainter {
 
 /// Cohesive categorical palette for chart bars — distinct hues that still sit
 /// in the app's cool, blue-anchored family. Cycled per bar so each reads apart.
-const List<Color> _barPalette = AppColors.chart; // Royal series order
+const List<Color> _barPalette = AppColors.chart; // Peacock series order
 
 Color _barColor(int i) => _barPalette[i % _barPalette.length];
 Color _barColorDark(int i) => Color.lerp(_barColor(i), Colors.black, 0.18)!;

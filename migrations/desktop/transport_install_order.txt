@@ -1,0 +1,29 @@
+# TRANSPORT MODULE - SQL files in install order.
+# Read by transport_db.ps1; see TRANSPORT_DB_README.md.
+#
+#   once    run only when installing on a database that has no transport yet
+#   always  run on install AND on every update; the file must be safe to run again
+#
+# A new change goes at the END as the next number (transport_09_..., ...).
+transport_01_schema.sql                  once
+transport_04_move_masters_to_public.sql  always
+transport_05_year_schemas.sql            always
+transport_02_phase1_api.sql              always
+transport_03_admin_menu_access.sql       once
+transport_06_vehicle_gps_device_id.sql   always
+transport_07_staff_license.sql           always
+transport_08_gps_device_created_by.sql   always
+transport_09_trip_schedules_menu.sql     once
+transport_10_gps_device_to_public.sql    always
+transport_11_vehicle_gps_history.sql     always
+transport_12_duty_roster_menu.sql        once
+transport_13_student_enrollment_menu.sql once
+transport_14_vehicle_allotment_menu.sql  once
+transport_15_enrollment_drop_fee_snapshot.sql always
+transport_16_stage_fee_by_semester.sql   always
+transport_17_stage_fees_menu.sql         once
+transport_18_stage_fee_demand.sql        always
+transport_19_vehicle_service_year.sql    always
+transport_20_vehicle_fuel_required.sql   always
+transport_21_vehicle_additional_capacity.sql always
+transport_22_audit_columns.sql           always

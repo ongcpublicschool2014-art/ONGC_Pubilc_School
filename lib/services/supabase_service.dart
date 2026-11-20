@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/student_model.dart';
+import '../utils/mobile_rules.dart';
 import '../models/institution_user_model.dart';
 import '../models/payment_model.dart';
 import '../models/fee_model.dart';
@@ -108,6 +109,10 @@ class SupabaseService {
       'useotpstatus, usedob, ur_id, urname, des_id, desname, userepto, '
       'usecategory, activestatus';
 
+  /// Why the last sign-in was refused when it was not the password: the
+  /// institution has been switched off in Super Admin.
+  static String? lastLoginError;
+
   static Future<InstitutionUserModel?> loginUser({
     required String email,
     required String password,
@@ -115,6 +120,7 @@ class SupabaseService {
     bool isSuperAdmin = false,
     String? selectedYearLabel,
   }) async {
+    lastLoginError = null;
     try {
       List<dynamic> result;
       try {
@@ -141,6 +147,25 @@ class SupabaseService {
 
       final useId = row['use_id'];
       final isSuperAdminUser = isSuperAdmin || row['urname']?.toString() == 'Super Admin';
+
+      // The signed-in session FIRST: every read after this point (the user
+      // row, institution, year) carries it, and the server refuses the app's
+      // requests without one (school_security_gate.sql). No session, no login.
+      try {
+        sessionToken = await createAppSession(
+          email: email.trim(),
+          password: password,
+          insId: insId ?? 0,
+          isSuperAdmin: isSuperAdminUser,
+        );
+      } catch (e) {
+        debugPrint('LOGIN: create_app_session failed: $e');
+        sessionToken = null;
+        if ('$e'.contains('institution is inactive')) {
+          lastLoginError = 'This institution is inactive. Please contact your administrator.';
+        }
+      }
+      if (sessionToken == null || sessionToken!.isEmpty) return null;
 
       // Super admin lives in public table, institution users in schema table
       Map<String, dynamic>? response;
@@ -988,7 +1013,8 @@ class SupabaseService {
     required String fallbackName,
     required String fallbackAddress,
   }) {
-    if (fgId == null) {
+    // A school has no per-fee-group letterhead (user, 2026-11-18).
+    if (fgId == null || isSchoolLayout) {
       return (name: fallbackName, address: fallbackAddress, banner: '');
     }
     final n = (settings[letterheadNameKey(fgId)] ?? '').trim();
@@ -1479,14 +1505,22 @@ class SupabaseService {
   /// Void a MISC receipt. Separate RPC from voidReceipt: a misc receipt
   /// settles no feedemand, so there is no balance to restore -- only the
   /// receipt to void and an audit trail to leave.
-  static Future<void> voidMiscReceipt(int mcId,
+  ///
+  /// Every void returns the Cancel No. it was given (CANCNO sequence; null
+  /// when none is set up) -- school_receipt_cancel_no.sql.
+  static Future<String?> voidMiscReceipt(int mcId,
       {required int insId, required String user, String? reason}) async {
-    await client.rpc('void_misc_receipt', params: {
+    return _cancelNo(await client.rpc('void_misc_receipt', params: {
       'p_ins_id': insId,
       'p_mc_id': mcId,
       'p_user': user,
       'p_reason': reason,
-    });
+    }));
+  }
+
+  static String? _cancelNo(dynamic res) {
+    final v = res is Map ? res['cancelno'] : null;
+    return v == null || '$v'.trim().isEmpty ? null : '$v';
   }
 
   /// Void an ADVANCE receipt (AD26/...). Session-gated, so the institution
@@ -1495,14 +1529,14 @@ class SupabaseService {
   /// The server refuses it once any of the advance has been applied to a fee or
   /// refunded: a demand has been settled or reduced on the strength of it, and
   /// that has to be put back first. See migrations/ADVANCE_CANCEL_REFUND.sql.
-  static Future<void> voidAdvanceReceipt(int advId,
+  static Future<String?> voidAdvanceReceipt(int advId,
       {required String token, required String user, String? reason}) async {
-    await client.rpc('void_advance_receipt', params: {
+    return _cancelNo(await client.rpc('void_advance_receipt', params: {
       'p_token': token,
       'p_adv_id': advId,
       'p_user': user,
       'p_reason': reason,
-    });
+    }));
   }
 
   /// Give back the UNUSED balance of an advance. Writes an ordinary fee_refund
@@ -1531,17 +1565,16 @@ class SupabaseService {
   /// that was theirs. Without it (or on an older database) the plain
   /// void_receipt runs, which restores the demands but leaves the advance
   /// showing as spent.
-  static Future<void> voidReceipt(int payId,
+  static Future<String?> voidReceipt(int payId,
       {required int insId, required String user, String? reason, String? token}) async {
     if (token != null && token.isNotEmpty) {
       try {
-        await client.rpc('void_receipt_with_advance', params: {
+        return _cancelNo(await client.rpc('void_receipt_with_advance', params: {
           'p_token': token,
           'p_pay_id': payId,
           'p_user': user,
           'p_reason': reason,
-        });
-        return;
+        }));
       } on PostgrestException catch (e) {
         // Not deployed yet -> fall through to the plain void below. Any other
         // failure (a reconciled receipt, an admission advance) is the server
@@ -1551,12 +1584,12 @@ class SupabaseService {
     }
     try {
       // Reason-aware 4-arg overload (add_void_receipt_reason.sql).
-      await client.rpc('void_receipt', params: {
+      return _cancelNo(await client.rpc('void_receipt', params: {
         'p_ins_id': insId,
         'p_pay_id': payId,
         'p_user': user,
         'p_reason': reason,
-      });
+      }));
     } on PostgrestException catch (e) {
       // Older DB that only has the 3-arg void_receipt — retry without p_reason
       // so cancellation still works before the reason migration is applied.
@@ -1564,11 +1597,11 @@ class SupabaseService {
           e.code == '42883' ||
           e.message.toLowerCase().contains('void_receipt');
       if (!notFound) rethrow;
-      await client.rpc('void_receipt', params: {
+      return _cancelNo(await client.rpc('void_receipt', params: {
         'p_ins_id': insId,
         'p_pay_id': payId,
         'p_user': user,
-      });
+      }));
     }
   }
 
@@ -2042,34 +2075,30 @@ class SupabaseService {
     String? motherMobile,
     String? payMobile,
   }) async {
-    if (fatherMobile != null && fatherMobile.isNotEmpty) {
-      final result = await fromSchema('parents')
+    // Reuse is for brothers and sisters only. A placeholder number
+    // (9999999999, a staff mobile copied down a sheet) or one already linked
+    // to more than 5 students would merge unrelated families into one parent
+    // record and one parent-app login, so those always get a new record.
+    // Same rule as public._reusable_parent_id in the database.
+    Future<int?> match(String column, String? mobile) async {
+      final m = mobile?.trim() ?? '';
+      if (!isRealMobile(m)) return null;
+      final rows = await fromSchema('parents')
           .select('par_id')
           .eq('ins_id', insId)
-          .eq('fathermobile', fatherMobile)
+          .eq(column, m)
           .eq('activestatus', 1)
-          .maybeSingle();
-      if (result != null) return result['par_id'] as int;
+          .order('par_id')
+          .limit(1);
+      if ((rows as List).isEmpty) return null;
+      final parId = (rows.first['par_id'] as num).toInt();
+      final linked = await fromSchema('parentdetail').select('pd_id').eq('par_id', parId).count(CountOption.exact);
+      return linked.count > 5 ? null : parId;
     }
-    if (motherMobile != null && motherMobile.isNotEmpty) {
-      final result = await fromSchema('parents')
-          .select('par_id')
-          .eq('ins_id', insId)
-          .eq('mothermobile', motherMobile)
-          .eq('activestatus', 1)
-          .maybeSingle();
-      if (result != null) return result['par_id'] as int;
-    }
-    if (payMobile != null && payMobile.isNotEmpty) {
-      final result = await fromSchema('parents')
-          .select('par_id')
-          .eq('ins_id', insId)
-          .eq('payinchargemob', payMobile)
-          .eq('activestatus', 1)
-          .maybeSingle();
-      if (result != null) return result['par_id'] as int;
-    }
-    return null;
+
+    return await match('fathermobile', fatherMobile) ??
+        await match('mothermobile', motherMobile) ??
+        await match('payinchargemob', payMobile);
   }
 
   /// Insert parent record — returns the new par_id
@@ -2189,11 +2218,12 @@ class SupabaseService {
   static Future<List<InstitutionUserModel>> getInstitutionUsers(
       int insId) async {
     try {
-      // Explicit column list — anon has SELECT revoked on `usepassword`
-      // (security hardening), so `select('*')` would be denied wholesale.
+      // Explicit column list — anon has SELECT revoked on `usepassword` and
+      // the OTP codes `usemaiotp` / `usemobotp` (security hardening). Naming
+      // any of them denies the whole query, and the Users list came back empty.
       final response = await client.from('institutionusers')
           .select('use_id, ins_id, inscode, usename, usemail, usephone, '
-              'usestadate, usemaiotp, usemobotp, useotpstatus, usedob, '
+              'usestadate, useotpstatus, usedob, '
               'usecategory, ur_id, urname, des_id, desname, userepto, '
               'approvedby, approveddate, suspendeddate, suspendedby, '
               'terminateddate, terminatedby, activestatus, terminatedreason')
@@ -3102,17 +3132,13 @@ class SupabaseService {
   static Future<Map<String, double>> getFeeTotals(int insId) async {
     try {
       final result = await _retry(() => client.rpc('get_fee_totals', params: {'p_ins_id': insId}));
-      final rpcFine = (result['total_fine'] as num?)?.toDouble() ?? 0;
+      // total_paid is the fee collected only (paidamount carries no fine since
+      // the fine model); total_fine is the fines on reconciled receipts.
       return {
         'totalDemand': (result['total_demand'] as num?)?.toDouble() ?? 0,
-        // The RPC's total_paid is SUM(paidamount), which carries the fine
-        // portion with it. Fine is a late-payment penalty, not fee collection,
-        // so it is reported on its own card -- and the paginated fallback below
-        // has always subtracted it, so the two paths disagreed depending on
-        // whether the RPC was reachable.
-        'totalPaid': ((result['total_paid'] as num?)?.toDouble() ?? 0) - rpcFine,
+        'totalPaid': (result['total_paid'] as num?)?.toDouble() ?? 0,
         'totalPending': (result['total_pending'] as num?)?.toDouble() ?? 0,
-        'totalFine': rpcFine,
+        'totalFine': (result['total_fine'] as num?)?.toDouble() ?? 0,
       };
     } catch (e) {
       debugPrint('RPC get_fee_totals failed, using fallback: $e');
@@ -3120,33 +3146,44 @@ class SupabaseService {
 
     // Fallback: paginate through all rows to avoid 1000-row cap
     try {
-      double totalDemand = 0, totalPaidRaw = 0, totalPending = 0, totalFine = 0;
+      double totalDemand = 0, totalPaid = 0, totalPending = 0, totalFine = 0;
       const batchSize = 1000;
       int offset = 0;
       while (true) {
         final demandRes = await fromSchema('feedemand')
-            .select('feeamount, paidamount, balancedue, fineamount, paidstatus')
+            .select('feeamount, paidamount, balancedue')
             .eq('ins_id', insId)
             .eq('activestatus', 1)
             .range(offset, offset + batchSize - 1);
         final rows = demandRes as List;
         for (final row in rows) {
-          totalDemand += (row['feeamount'] as num?)?.toDouble() ?? 0;
-          totalPaidRaw += (row['paidamount'] as num?)?.toDouble() ?? 0;
-          totalPending += (row['balancedue'] as num?)?.toDouble() ?? 0;
-          // Count fine on demands that are paid OR partially paid
+          final fee = (row['feeamount'] as num?)?.toDouble() ?? 0;
           final paid = (row['paidamount'] as num?)?.toDouble() ?? 0;
-          final isPaid = (row['paidstatus']?.toString() ?? '') == 'P';
-          if (isPaid || paid > 0) {
-            totalFine += (row['fineamount'] as num?)?.toDouble() ?? 0;
-          }
+          totalDemand += fee;
+          totalPaid += paid < fee ? paid : fee; // fee part only, as the RPC
+          totalPending += (row['balancedue'] as num?)?.toDouble() ?? 0;
         }
         if (rows.length < batchSize) break;
         offset += batchSize;
       }
-
-      // Match RPC: totalPaid is fee-only collection (excludes fine portion of paid rows)
-      return {'totalDemand': totalDemand, 'totalPaid': totalPaidRaw - totalFine, 'totalPending': totalPending, 'totalFine': totalFine};
+      // Fines sit on the receipt lines (rough: refunds and reconciliation
+      // are not taken off here, as the RPC does).
+      offset = 0;
+      while (true) {
+        final fineRes = await fromSchema('paymentdetails')
+            .select('fineamount')
+            .eq('ins_id', insId)
+            .gt('fineamount', 0)
+            .eq('activestatus', 1)
+            .range(offset, offset + batchSize - 1);
+        final rows = fineRes as List;
+        for (final row in rows) {
+          totalFine += (row['fineamount'] as num?)?.toDouble() ?? 0;
+        }
+        if (rows.length < batchSize) break;
+        offset += batchSize;
+      }
+      return {'totalDemand': totalDemand, 'totalPaid': totalPaid, 'totalPending': totalPending, 'totalFine': totalFine};
     } catch (e) {
       debugPrint('Error fetching fee totals: $e');
       return {'totalDemand': 0, 'totalPaid': 0, 'totalPending': 0, 'totalFine': 0};
@@ -3192,9 +3229,12 @@ class SupabaseService {
   }
 
   /// Aggregate summary per class — one row per class, no row-limit issues
-  static Future<List<Map<String, dynamic>>> getFeeDemandSummary(int insId) async {
+  /// [seqType] 'REGULAR' / 'ARREAR' narrows it to that kind of demand (Fee
+  /// Demand's drop-down); null = both (school_fee_summary_seqtype.sql).
+  static Future<List<Map<String, dynamic>>> getFeeDemandSummary(int insId, {String? seqType}) async {
     try {
-      final response = await _retry(() => client.rpc('get_fee_demand_summary', params: {'p_ins_id': insId}));
+      final response = await _retry(() => client.rpc('get_fee_demand_summary',
+          params: {'p_ins_id': insId, if (seqType != null) 'p_seqtype': seqType}));
       return List<Map<String, dynamic>>.from(response as List);
     } catch (e) {
       debugPrint('RPC get_fee_demand_summary failed: $e');
@@ -3449,17 +3489,29 @@ class SupabaseService {
       //
       // paymentdetails is written once per receipt and never rewritten, so it
       // is the only faithful record of what a given receipt covered.
-      final pd = await fromSchema('paymentdetails')
-          .select('dem_id, transtotalamount')
-          .eq('pay_id', payId);
-      final pdRows = List<Map<String, dynamic>>.from(pd as List);
+      // fineamount = the fine collected on THIS receipt's line (the demand's
+      // own fineamount is only the latest one). Older databases lack it.
+      List<Map<String, dynamic>> pdRows;
+      var lineFines = true;
+      try {
+        pdRows = List<Map<String, dynamic>>.from(await fromSchema('paymentdetails')
+            .select('dem_id, transtotalamount, fineamount')
+            .eq('pay_id', payId) as List);
+      } catch (_) {
+        lineFines = false;
+        pdRows = List<Map<String, dynamic>>.from(await fromSchema('paymentdetails')
+            .select('dem_id, transtotalamount')
+            .eq('pay_id', payId) as List);
+      }
       final paidMap = <int, double>{};
+      final fineMap = <int, double>{};
       final demIds = <int>[];
       for (final p in pdRows) {
         final demId = (p['dem_id'] as num?)?.toInt();
         if (demId == null) continue;
         // One receipt can carry two lines for the same demand; sum them.
         paidMap[demId] = (paidMap[demId] ?? 0) + ((p['transtotalamount'] as num?)?.toDouble() ?? 0);
+        fineMap[demId] = (fineMap[demId] ?? 0) + ((p['fineamount'] as num?)?.toDouble() ?? 0);
         if (!demIds.contains(demId)) demIds.add(demId);
       }
       debugPrint('RECEIPT: pay_id=$payId paymentdetails=${paidMap.length} rows=${paidMap.entries.map((e) => '${e.key}:${e.value}').join(", ")}');
@@ -3474,6 +3526,9 @@ class SupabaseService {
           final demId = (d['dem_id'] as num?)?.toInt();
           if (demId != null && paidMap.containsKey(demId)) {
             d['collectedamount'] = paidMap[demId];
+            // This receipt's own fine, not the demand's latest one (no receipt
+            // with a fine existed before the column was added, 2026-11-05).
+            if (lineFines) d['fineamount'] = fineMap[demId] ?? 0;
           }
         }
         // Keep receipt order stable: follow the order the lines were written.

@@ -1,6 +1,8 @@
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -18,6 +20,8 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// CONSOLIDATED SUMMARY STATEMENT OF DEMAND - CONCESSION - COLLECTION -
 /// BALANCE FOR THE YEAR -- the old product's "Consolidated Summary"
@@ -44,6 +48,10 @@ class _Stu {
   final Map<String, dynamic> s;
   final Map<String, double> fee = {}; // fee type -> demand (or misc amount)
   double concession = 0, coll = 0, preadv = 0, refund = 0, bal = 0, misc = 0, advRefund = 0;
+  /// Late fine collected, and advance for next year received this year (reconciled).
+  double fine = 0, adv = 0;
+  /// Collected but still awaiting bank reconciliation: not in [coll], still in [bal].
+  double unrec = 0;
   _Stu(this.s);
   bool get tc => s['tc'] == true;
   double get tcDemand => tc ? coll + preadv : 0;
@@ -58,6 +66,9 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
   ];
 
   String _mode = 'CURRENT';
+  /// The old app's "With Arrear Fees / With Out Arrear Fees" (current year only).
+  bool _withArrear = true;
+  static const _arrearPrefix = 'ARREAR ';
   int? _cour, _cla;
   String? _term, _feeType;
   List<Map<String, dynamic>> _courses = [], _classes = [];
@@ -69,6 +80,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
   List<_Stu> _rows = [];
   List<String> _cols = []; // fee type columns, in order
   String _nextYear = '';
+  /// Misc / advance receipts still awaiting bank reconciliation (CURRENT).
+  double _awaitMisc = 0, _awaitAdv = 0;
 
   int get _insId => context.read<AuthProvider>().insId ?? 1;
   static int? _id(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
@@ -142,6 +155,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         'p_cla_ids': _claIds,
         'p_terms': _term == null ? null : [_term],
         'p_fee_types': _feeType == null ? null : [_feeType],
+        'p_arrear': _withArrear,
       });
       final j = Map<String, dynamic>.from(res as Map);
       final byId = <int, _Stu>{};
@@ -154,7 +168,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         final l = x as Map;
         final s = byId[_id(l['stu_id'])];
         if (s == null) continue;
-        final ft = '${l['ft']}';
+        // arrear demands get their own columns ("ARREAR TUTION FEE")
+        final ft = '${l['seq'] == 'ARREAR' ? _arrearPrefix : ''}${l['ft']}';
         cols.add(ft);
         s.fee[ft] = (s.fee[ft] ?? 0) + _num(l['demand']);
         s.concession += _num(l['concession']);
@@ -162,6 +177,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         s.preadv += _num(l['preadv']);
         s.refund += _num(l['refund']);
         s.bal += _num(l['bal']);
+        s.unrec += _num(l['unrec']);
       }
       for (final x in (j['misc'] as List? ?? const [])) {
         final l = x as Map;
@@ -174,6 +190,15 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           s.fee[ft] = (s.fee[ft] ?? 0) + _num(l['amt']);
         }
       }
+      for (final x in (j['fine'] as List? ?? const [])) {
+        final s = byId[_id((x as Map)['stu_id'])];
+        if (s != null) s.fine += _num(x['amt']);
+      }
+      for (final x in (j['adv'] as List? ?? const [])) {
+        final s = byId[_id((x as Map)['stu_id'])];
+        if (s != null) s.adv += _num(x['amt']);
+      }
+      final awaiting = j['awaiting'] is Map ? j['awaiting'] as Map : const {};
       for (final x in (j['advrefund'] as List? ?? const [])) {
         final s = byId[_id((x as Map)['stu_id'])];
         if (s != null) s.advRefund += _num(x['amt']);
@@ -186,8 +211,14 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
       if (!mounted) return;
       setState(() {
         _rows = rows;
-        _cols = cols.toList()..sort((a, b) => _feeTypes.indexOf(a).compareTo(_feeTypes.indexOf(b)));
+        // this year's fee types first, then the arrear columns, each in fee type order
+        int order(String c) => c.startsWith(_arrearPrefix)
+            ? 1000 + _feeTypes.indexOf(c.substring(_arrearPrefix.length))
+            : _feeTypes.indexOf(c);
+        _cols = cols.toList()..sort((a, b) => order(a).compareTo(order(b)));
         _nextYear = '${j['year'] ?? ''}';
+        _awaitMisc = _num(awaiting['misc']);
+        _awaitAdv = _num(awaiting['adv']);
         _error = null;
       });
     } catch (e) {
@@ -247,6 +278,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           ('TC COLLECTION', (s) => _m(s.tcDemand), true),
           ('TC REFUND', (s) => _m(s.tcRefund), true),
           ('MISCELLANEOUS COLLECTION', (s) => _m(s.misc), true),
+          ('FINE COLLECTED', (s) => _m(s.fine), true),
+          ('ADVANCE COLLECTED (NEXT YEAR)', (s) => _m(s.adv), true),
           ('ADVANCE REFUND', (s) => _m(s.advRefund), true),
           ('NET BALANCE', (s) => s.tc ? '' : _m(s.bal), true),
           ...tail,
@@ -266,7 +299,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
   String get _title => switch (_mode) {
         'NEXT' => 'CONSOLIDATED SUMMARY STATEMENT OF ADVANCE DEMAND - COLLECTION - BALANCE${_nextYear.isEmpty ? '' : ' FOR $_nextYear'}',
         'MISC' => 'CONSOLIDATED SUMMARY STATEMENT FOR MISCELLANEOUS COLLECTION',
-        _ => 'CONSOLIDATED SUMMARY STATEMENT OF DEMAND - CONCESSION - COLLECTION - BALANCE FOR THE YEAR $_year',
+        _ => 'CONSOLIDATED SUMMARY STATEMENT OF DEMAND - CONCESSION - COLLECTION - BALANCE FOR THE YEAR $_year'
+            '${_withArrear ? ' (WITH ARREAR FEES)' : ' (WITHOUT ARREAR FEES)'}',
       };
 
   String get _scope {
@@ -316,7 +350,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
     setState(() => _exporting = true);
     try {
       String safe(String s) => s.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Consolidated Summary',
         fileName: 'Consolidated_Summary_${_mode}_${safe(_scope)}.xlsx',
         type: FileType.custom,
@@ -328,7 +362,7 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
       final sheet = book['Consolidated Summary'];
       book.delete('Sheet1');
       final bold = xl.CellStyle(bold: true, fontSize: 11);
-      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: xl.ExcelColor.fromHexString('#F2F4F7'));
+      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg);
       void put(int c, int r, String v, [xl.CellStyle? st, bool number = false]) {
         final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
         final n = number ? double.tryParse(v.replaceAll(',', '')) : null;
@@ -371,20 +405,100 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
 
   // ── UI ───────────────────────────────────────────────────────────────────
   Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?> onChanged, {String? icon, bool allowAll = true, String allLabel = 'All'}) {
-    return DropdownButtonFormField<T?>(
+    final labels = [if (allowAll) allLabel, for (final e in items) e.$2];
+    final shown = AppUI.fieldText(context, filled: value != null);
+    return AppDropdownField<T?>(
       key: ValueKey('$hint-$value-${items.length}'),
       initialValue: value,
       isExpanded: true,
       dropdownColor: Colors.white,
       borderRadius: BorderRadius.circular(12),
-      style: AppUI.fieldText(context, filled: value != null),
+      style: shown,
       decoration: AppUI.field(context, hint, filled: value != null, leadingIcon: icon),
       items: [
         if (allowAll) DropdownMenuItem<T?>(value: null, child: Text(allLabel, overflow: TextOverflow.ellipsis)),
         for (final e in items) DropdownMenuItem<T?>(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis)),
       ],
+      // The chosen value shrinks a little to fit instead of ending in "...".
+      // Mirrors the items 1:1.
+      selectedItemBuilder: (_) => [
+        for (final l in labels)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AppFitText(l, style: shown),
+          ),
+      ],
       onChanged: _running ? null : onChanged,
     );
+  }
+
+  /// Width a _drop needs to show its longest choice in full: leading icon,
+  /// field padding and chevron included. Capped so one long name cannot take
+  /// the bar; past the cap the value shrinks to fit (see _drop).
+  double _dropWidth(List<String> labels, {double cap = 290}) {
+    final style = AppUI.fieldText(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    double widest = 0;
+    for (final s in labels) {
+      final tp = TextPainter(
+        text: TextSpan(text: s, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        textScaler: scaler,
+      )..layout();
+      if (tp.width > widest) widest = tp.width;
+    }
+    final c = AppUI.compact(context);
+    // leading icon (pad + icon + gap) + right padding + chevron + air
+    final chrome = (c ? 10 + 15 + 8 : 12 + 17 + 8) + (c ? 12.0 : 14.0) + 24 + 10;
+    final need = widest + chrome;
+    return need > cap ? cap : need;
+  }
+
+  /// The filter bar: one row, each filter given room in proportion to what it
+  /// needs, when everything fits; otherwise the filters wrap onto a second
+  /// line at their natural width rather than cutting "All Standards" to
+  /// "All Standa...".
+  Widget _filterBar(List<(double, Widget)> filters, Widget trailing) {
+    final gap = 10.w;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(
+        child: LayoutBuilder(builder: (context, box) {
+          final need = filters.fold<double>(0, (a, f) => a + f.$1) + gap * (filters.length - 1);
+          if (need <= box.maxWidth) {
+            return Row(children: [
+              for (int i = 0; i < filters.length; i++) ...[
+                if (i > 0) SizedBox(width: gap),
+                Expanded(flex: filters[i].$1.round(), child: filters[i].$2),
+              ],
+            ]);
+          }
+          return Wrap(spacing: gap, runSpacing: 10.h, children: [
+            for (final f in filters)
+              SizedBox(width: f.$1 > box.maxWidth ? box.maxWidth : f.$1, child: f.$2),
+          ]);
+        }),
+      ),
+      SizedBox(width: gap),
+      trailing,
+    ]);
+  }
+
+  /// Collected but not yet reconciled, across the rows shown.
+  double get _unrec => _rows.fold<double>(0, (a, s) => a + (s.tc ? 0 : s.unrec));
+
+  /// Reconciled receipts only are counted; say what is still with the bank.
+  String _awaitNote() {
+    final misc = _mode == 'CURRENT' ? _awaitMisc : 0.0, adv = _mode == 'CURRENT' ? _awaitAdv : 0.0;
+    final total = _unrec + misc + adv;
+    if (total <= 0) return '';
+    final parts = [
+      if (_unrec > 0) 'fee ₹${formatIndianNumber(_unrec)}',
+      if (misc > 0) 'misc ₹${formatIndianNumber(misc)}',
+      if (adv > 0) 'advance ₹${formatIndianNumber(adv)}',
+    ];
+    return ' · counts reconciled receipts only: ₹${formatIndianNumber(total)} awaiting bank reconciliation'
+        '${parts.length > 1 ? ' (${parts.join(', ')})' : ''} is not counted yet';
   }
 
   @override
@@ -425,56 +539,62 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
         ),
         SizedBox(height: 16.h),
         // filters
-        Row(children: [
-          Expanded(
-            flex: 5,
-            child: _drop<String>('Collection Type', _mode, [for (final m in _modes) (m.$1, m.$2)], (v) {
-              setState(() => _mode = v ?? 'CURRENT');
-              _run();
-            }, icon: 'layer', allowAll: false),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            flex: 3,
-            child: _drop<int>(schoolTerm('Course'), _cour, [for (final c in _courses) (_id(c['cour_id'])!, '${c['courname']}')], (v) {
-              setState(() {
-                _cour = v;
-                _cla = null;
-              });
-              _run();
-            }, icon: 'teacher', allLabel: schoolTerm('All Courses')),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            flex: 3,
-            child: _drop<int>(schoolTerm('Class'), _cla, sections, (v) {
-              setState(() => _cla = v);
-              _run();
-            }, icon: 'book-1', allLabel: schoolTerm('All Classes')),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            flex: 3,
-            child: _drop<String>(schoolTerm('Semester'), _term, [for (final t in _terms) (t, t)], (v) {
-              setState(() => _term = v);
-              _run();
-            }, icon: 'calendar-1', allLabel: schoolTerm('All Semesters')),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            flex: 3,
-            child: _drop<String>('Fee Type', _feeType, [for (final f in _feeTypes) (f, f)], (v) {
-              setState(() => _feeType = v);
-              _run();
-            }, icon: 'receipt-discount', allLabel: 'All Fee Types'),
-          ),
-          SizedBox(width: 10.w),
+        _filterBar(
+          [
+            (
+              _dropWidth([for (final m in _modes) m.$2]),
+              _drop<String>('Collection Type', _mode, [for (final m in _modes) (m.$1, m.$2)], (v) {
+                setState(() => _mode = v ?? 'CURRENT');
+                _run();
+              }, icon: 'layer', allowAll: false),
+            ),
+            if (_mode == 'CURRENT')
+              (
+                _dropWidth(const ['With Arrear Fees', 'Without Arrear Fees']),
+                _drop<bool>('Arrear Fees', _withArrear, const [(true, 'With Arrear Fees'), (false, 'Without Arrear Fees')], (v) {
+                  setState(() => _withArrear = v ?? true);
+                  _run();
+                }, icon: 'clock', allowAll: false),
+              ),
+            (
+              // The "All ..." label sets the width; a long name shrinks to fit.
+              _dropWidth([schoolTerm('All Courses')]),
+              _drop<int>(schoolTerm('Course'), _cour, [for (final c in _courses) (_id(c['cour_id'])!, '${c['courname']}')], (v) {
+                setState(() {
+                  _cour = v;
+                  _cla = null;
+                });
+                _run();
+              }, icon: 'teacher', allLabel: schoolTerm('All Courses')),
+            ),
+            (
+              _dropWidth([schoolTerm('All Classes')]),
+              _drop<int>(schoolTerm('Class'), _cla, sections, (v) {
+                setState(() => _cla = v);
+                _run();
+              }, icon: 'book-1', allLabel: schoolTerm('All Classes')),
+            ),
+            (
+              _dropWidth([schoolTerm('All Semesters')]),
+              _drop<String>(schoolTerm('Semester'), _term, [for (final t in _terms) (t, t)], (v) {
+                setState(() => _term = v);
+                _run();
+              }, icon: 'calendar-1', allLabel: schoolTerm('All Semesters')),
+            ),
+            (
+              _dropWidth(const ['All Fee Types']),
+              _drop<String>('Fee Type', _feeType, [for (final f in _feeTypes) (f, f)], (v) {
+                setState(() => _feeType = v);
+                _run();
+              }, icon: 'receipt-discount', allLabel: 'All Fee Types'),
+            ),
+          ],
           OutlinedButton.icon(
             onPressed: _running ? null : _run,
             icon: _running ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh, size: 16),
             label: const Text('Refresh'),
           ),
-        ]),
+        ),
         SizedBox(height: 16.h),
         // KPI tiles
         Row(children: [
@@ -483,9 +603,30 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           if (_mode == 'MISC')
             Expanded(child: AppUI.kpi(icon: 'receipt-2', label: 'Miscellaneous Collection', value: '₹${formatIndianNumber(sum((s) => s.misc))}', tint: AppColors.success))
           else ...[
-            Expanded(child: AppUI.kpi(icon: 'receipt-2', label: 'Demand', value: '₹${formatIndianNumber(sum((s) => s.tc ? 0 : s.fee.values.fold(0.0, (a, b) => a + b)))}', tint: AppColors.demand)),
+            // A TC student's demand is what they paid (less any refund), as the
+            // TC DEMAND column: they owe nothing more. So Demand - Collected
+            // equals Net Balance, as the cards are read.
+            Expanded(
+                child: AppUI.kpi(
+                    icon: 'receipt-2',
+                    label: 'Demand',
+                    value: '₹${formatIndianNumber(sum((s) => s.tc ? s.coll + s.preadv - s.refund : s.fee.values.fold(0.0, (a, b) => a + b)))}',
+                    sub: _rows.any((s) => s.tc) ? 'TC students: what they paid' : null,
+                    tint: AppColors.demand)),
             SizedBox(width: 12.w),
             Expanded(child: AppUI.kpi(icon: 'money-recive', label: 'Collected', value: '₹${formatIndianNumber(sum((s) => s.coll + s.preadv - s.refund))}', tint: AppColors.success)),
+            SizedBox(width: 12.w),
+            if (_mode == 'CURRENT') ...[
+              SizedBox(width: 12.w),
+              // every rupee received this year -- agrees with Daily Collection
+              Expanded(
+                  child: AppUI.kpi(
+                      icon: 'wallet-check',
+                      label: 'Total Received',
+                      value: '₹${formatIndianNumber(sum((s) => s.coll + s.fine + s.misc + s.adv))}',
+                      sub: 'Fee + fine + misc + advance',
+                      tint: AppColors.success)),
+            ],
             SizedBox(width: 12.w),
             Expanded(child: AppUI.kpi(icon: 'wallet-money', label: 'Net Balance', value: '₹${formatIndianNumber(sum((s) => s.tc ? 0 : s.bal))}', tint: AppColors.warning)),
           ],
@@ -497,7 +638,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
           _rows.isEmpty
               ? ''
               : '${AppUI.showing(1, _rows.length, _rows.length)} students · $_scope'
-                  '${_mode == 'CURRENT' ? ' · current-year demands only (arrears are not part of this statement)' : ''}',
+                  '${_mode == 'CURRENT' ? (_withArrear ? ' · with arrear fees (last year\'s unpaid fees, in the ARREAR columns)' : ' · current-year demands only, without arrear fees') : ''}'
+                  '${_awaitNote()}',
           style: AppUI.muted,
         ),
       ]),
@@ -522,10 +664,29 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
       if (head == 'STUDENT NAME') return 220;
       if (head == 'ADMISSION NO' || head == 'MOBILE NO') return 110;
       if (head == schoolTerm('CLASS') || head == 'CATEGORY') return 100;
-      return head.length > 14 ? 130 : 110;
+      return head.length > 24 ? 150 : head.length > 14 ? 130 : 110;
     }
 
-    final widths = [56.0, for (var i = 0; i < cols.length; i++) w(i, cols[i].$1)];
+    // An amount column is never narrower than its TOTAL (the widest figure in
+    // it), so a large total is never cut to "13,29,17,...".
+    final totalStyle = AppUI.money.copyWith(fontWeight: FontWeight.w800);
+    double fit(String text) {
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: DefaultTextStyle.of(context).style.merge(totalStyle)),
+        maxLines: 1,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final need = tp.width + 2 * 8.w + 6;
+      tp.dispose();
+      return need;
+    }
+
+    final widths = [
+      64.0,
+      for (var i = 0; i < cols.length; i++)
+        cols[i].$3 && i > 0 ? math.max(w(i, cols[i].$1), fit(_total(cols[i].$2))) : w(i, cols[i].$1),
+    ];
     final total = widths.fold(0.0, (a, b) => a + b) + 32;
     Widget cell(String t, double width, {bool right = false, TextStyle? style}) => SizedBox(
           width: width,
@@ -534,6 +695,34 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
             child: Text(t, textAlign: right ? TextAlign.right : TextAlign.left, overflow: TextOverflow.ellipsis, style: style ?? AppUI.cell),
           ),
         );
+    // A heading wraps to a second line between words ("ARREAR TUTION / FEE")
+    // instead of ending in "..."; a word wider than its column (rare) shrinks a
+    // little rather than breaking in half.
+    Widget head(String t, double width, {bool right = false}) {
+      final inner = width - 2 * 8.w;
+      var style = AppUI.tableHead;
+      var widest = 0.0;
+      for (final word in t.split(' ')) {
+        final tp = TextPainter(
+          text: TextSpan(text: word, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout();
+        if (tp.width > widest) widest = tp.width;
+        tp.dispose();
+      }
+      if (inner > 0 && widest > inner) {
+        style = style.copyWith(fontSize: style.fontSize! * (inner / widest * 0.98).clamp(0.75, 1.0));
+      }
+      return SizedBox(
+        width: width,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 8.w),
+          child: Text(t, textAlign: right ? TextAlign.right : TextAlign.left, maxLines: 3, overflow: TextOverflow.ellipsis, style: style),
+        ),
+      );
+    }
 
     return Container(
       clipBehavior: Clip.antiAlias,
@@ -558,8 +747,8 @@ class _ConsolidatedSummaryScreenState extends State<ConsolidatedSummaryScreen> {
                 color: AppColors.tableHeadBg,
                 padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 12.h),
                 child: Row(children: [
-                  cell('S. NO.', widths[0], style: AppUI.tableHead),
-                  for (var i = 0; i < cols.length; i++) cell(cols[i].$1, widths[i + 1], right: cols[i].$3, style: AppUI.tableHead),
+                  head('S. NO.', widths[0]),
+                  for (var i = 0; i < cols.length; i++) head(cols[i].$1, widths[i + 1], right: cols[i].$3),
                 ]),
               ),
               Expanded(

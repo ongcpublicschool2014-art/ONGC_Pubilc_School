@@ -9,15 +9,21 @@ import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/master_usage.dart';
+import '../../utils/payment_gateways.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
+import '../../widgets/online_route_chip.dart';
+import '../../widgets/quick_bank_dialog.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
+import '../../utils/formatters.dart' show formatIndianNumber;
 import '../../widgets/card_title_block.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../widgets/pill_tab.dart';
 import '../admin/master_import_screen.dart';
 import '../admin/settings_screen.dart' show PaymentSequenceTab, FineRulesTab;
+import '../../widgets/app_dropdown_field.dart';
+import '../../widgets/sequence_ui.dart';
 
 /// Fee Master — clean CRUD (Admission-Master style) for the fee lookups:
 /// Fee Group, Fee Type, Concession, Class Fee Demand, Payment Sequence, Fine
@@ -53,6 +59,12 @@ class FeeMasterScreen extends StatefulWidget {
     'Class Matching',
     'Advance Fee Definition',
     'Advance Fee Receipt No',
+    // Cancelled / bounced receipt numbers (CANCNO) -- Sequence Master only.
+    'Cancel No',
+    // Arrear fee receipts (ARRFEENO) -- Sequence Master only.
+    'Arrear Receipt No',
+    // Miscellaneous Collection receipts (MISCFEENO) -- Sequence Master only.
+    'Misc Receipt No',
   ];
 
   @override
@@ -75,12 +87,16 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
     'warning-2',
     'arrow-swap-horizontal',
     'empty-wallet-add',
+    'close-circle',
+    'receipt-minus',
+    'receipt-text',
   ];
 
   /// What a tab shows. [FeeMasterScreen.tabLabels] are routing keys and stay
   /// as they are; only the displayed text spells out "No." in full.
   static String _tabText(String key) {
-    final t = schoolTerm(key);
+    // 'Class Matching' is shown as Section Mapping (user, 2026-11-14).
+    final t = schoolTerm(key == 'Class Matching' ? 'Class Mapping' : key);
     return t.endsWith(' No') ? '$t.' : t;
   }
 
@@ -152,8 +168,14 @@ class _FeeMasterScreenState extends State<FeeMasterScreen> with SingleTickerProv
               FineRulesTab(),
               _ClassMatchPanel(),
               _AdvanceFeePanel(),
-              // Advance Fee Collection's own receipt series (school).
-              _DemandSequencePanel(actname: 'ADVFEENO', defaultPrefix: 'AF', title: 'Advance Receipt No.'),
+              // Advance Fee Collection's own receipt series, one per fee group.
+              PaymentSequenceTab(series: 'ADVFEENO'),
+              // Every cancelled / bounced receipt (school_receipt_cancel_no.sql).
+              _DemandSequencePanel(actname: 'CANCNO', defaultPrefix: 'CAN', title: 'Cancel No.'),
+              // Arrear fee receipts, one series per fee group.
+              PaymentSequenceTab(series: 'ARRFEENO'),
+              // Miscellaneous Collection receipts, one series per fee group.
+              PaymentSequenceTab(series: 'MISCFEENO'),
             ],
           ),
         ),
@@ -223,6 +245,11 @@ InputDecoration _filledFieldDec(BuildContext context, String hint, {bool filled 
     AppUI.field(context, hint, filled: filled, leadingIcon: leadingIcon);
 
 TextStyle _fieldTextStyle(BuildContext context) => AppUI.fieldText(context);
+
+/// A dropdown's placeholder, passed as its own `hint:`. Left to the
+/// decoration, it is laid on the empty button's baseline and sits low in the
+/// box; as the button's hint it is centred like a text field's.
+Widget _ddHint(BuildContext context, String hint) => AppFitText(hint, style: AppUI.field(context, hint).hintStyle);
 
 /// Outer Add card — the kit card (white, 16r, 1px border, 20 padding).
 /// Header uses the shared [CardTitleBlock] with optional subtitle.
@@ -366,8 +393,47 @@ class _FeeGroupPanel extends StatefulWidget {
 class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveClientMixin {
   final _name = TextEditingController();
   List<Map<String, dynamic>> _rows = [];
+  // The bank account the group's money is collected into (feegroup.ban_id),
+  // picked -- or created -- right here (user, 2026-11-14). No bank: Fee
+  // Collection takes Cash only for the group.
+  List<Map<String, dynamic>> _banks = [];
+  int? _banId;
+  int? _bankIdOf(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
+  String _bankLabel(Map<String, dynamic> b) {
+    final acc = '${b['banaccno'] ?? ''}'.trim();
+    return '${'${b['banname'] ?? ''}'.trim()}${acc.length > 4 ? '  ·  •••• ${acc.substring(acc.length - 4)}' : (acc.isEmpty ? '' : '  ·  $acc')}';
+  }
+  Map<String, dynamic>? _bankById(int? id) =>
+      id == null ? null : _banks.where((b) => _bankIdOf(b['ban_id']) == id).firstOrNull;
   int? _editId; // non-null while editing an existing row
   bool _loading = true, _saving = false;
+
+  // School: where each group's ONLINE money goes. Choosing a bank does not by
+  // itself send it there (user, 2026-11-18). Only an Admin can read the
+  // gateway; for anyone else the column stays hidden.
+  bool _onlineKnown = false;
+  Map<String, dynamic>? _gateway;
+  Map<int, Map<String, dynamic>> _bankMerchants = {};
+
+  Future<void> _loadOnline() async {
+    if (!isSchool) return;
+    try {
+      final l = await PaymentGatewayService.list();
+      final gws = (l['gateways'] as List? ?? const []);
+      final bm = await PaymentGatewayService.bankMerchants();
+      if (!mounted) return;
+      setState(() {
+        _gateway = gws.isEmpty ? null : Map<String, dynamic>.from(gws.first as Map);
+        _bankMerchants = bm;
+        _onlineKnown = true;
+      });
+    } catch (e) {
+      debugPrint('fee group: gateway lookup failed: $e');
+    }
+  }
+
+  OnlineRoute _routeOf(int? banId) =>
+      onlineRouteFor(gateway: _gateway, bank: _bankById(banId), bankMerchants: _bankMerchants);
 
   @override
   bool get wantKeepAlive => true;
@@ -388,11 +454,17 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
 
   Future<void> _load() async {
     setState(() => _loading = true);
+    _loadOnline();
     try {
-      final res = await SupabaseService.fromSchema('feegroup').select('*').eq('ins_id', _insId).eq('activestatus', 1).order('fg_id', ascending: true);
+      final r = await Future.wait<dynamic>([
+        SupabaseService.fromSchema('feegroup').select('*').eq('ins_id', _insId).eq('activestatus', 1).order('fg_id', ascending: true),
+        SupabaseService.getBanks(),
+      ]);
       if (!mounted) return;
       setState(() {
-        _rows = List<Map<String, dynamic>>.from(res as List);
+        _rows = List<Map<String, dynamic>>.from(r[0] as List);
+        _banks = List<Map<String, dynamic>>.from(r[1] as List);
+        if (_banId != null && _bankById(_banId) == null) _banId = null;
         _loading = false;
       });
     } catch (e) {
@@ -413,7 +485,28 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
       _editId = r['fg_id'] is int ? r['fg_id'] as int : int.tryParse(r['fg_id'].toString());
       _name.text = r['fgdesc']?.toString() ?? '';
       _hostelOnly = !isSchool && r['hostellers_only'] == true;
+      _banId = _bankById(_bankIdOf(r['ban_id'])) == null ? null : _bankIdOf(r['ban_id']);
     });
+  }
+
+  /// "Manage bank accounts": every account in full, then the list is re-read
+  /// (an account may have been renamed or removed).
+  Future<void> _manageBanks() async {
+    await showManageBanksDialog(context);
+    if (mounted) await _load();
+  }
+
+  /// "+ New bank account": add one without leaving the screen, and pick it.
+  Future<void> _newBank() async {
+    final id = await showQuickBankDialog(context, existing: _banks);
+    if (id == null || !mounted) return;
+    final banks = await SupabaseService.getBanks();
+    if (!mounted) return;
+    setState(() {
+      _banks = banks;
+      _banId = id;
+    });
+    _snack(context, 'Bank account added -- save the fee group to collect into it.', AppColors.success);
   }
 
   void _cancelEdit() {
@@ -421,6 +514,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
       _editId = null;
       _name.clear();
       _hostelOnly = false;
+      _banId = null;
     });
   }
 
@@ -433,7 +527,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
     setState(() => _saving = true);
     try {
       if (_editId != null) {
-        await SupabaseService.saveSchemaRow('feegroup', {'fgdesc': name, 'hostellers_only': _hostelOnly}, pkCol: 'fg_id', pkVal: _editId!);
+        await SupabaseService.saveSchemaRow('feegroup', {'fgdesc': name, 'hostellers_only': _hostelOnly, 'ban_id': _banId}, pkCol: 'fg_id', pkVal: _editId!);
         if (mounted) _snack(context, 'Fee group updated.', AppColors.success);
       } else {
         final yr = await _currentYear(_insId);
@@ -441,6 +535,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
           'fg_id': await _nextId('feegroup', 'fg_id'),
           'fgdesc': name,
           'hostellers_only': _hostelOnly,
+          'ban_id': _banId,
           'ins_id': _insId,
           // School: fee groups / fee types are shared by every year (no year columns).
           if (!isSchool) 'yr_id': yr != null ? int.tryParse(yr['yr_id'].toString()) ?? 0 : 0,
@@ -452,6 +547,7 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
       _name.clear();
       _editId = null;
       _hostelOnly = false;
+      _banId = null;
       await _load();
     } catch (e) {
       if (mounted) _snack(context, 'Could not save the fee group. ${friendlyError(e)}', AppColors.error);
@@ -506,6 +602,58 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) => _add(),
                 ),
+                SizedBox(height: 14.h),
+                _lbl('Bank Account'),
+                SizedBox(height: 6.h),
+                AppDropdownField<int?>(
+                  initialValue: _banId,
+                  isExpanded: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  elevation: 6,
+                  style: AppUI.fieldText(context, filled: _banId != null),
+                  decoration: _filledFieldDec(context, 'Not mapped -- Cash only', filled: _banId != null),
+                  items: [
+                    DropdownMenuItem<int?>(value: null, child: Text('Not mapped -- Cash only', overflow: TextOverflow.ellipsis)),
+                    for (final b in _banks)
+                      DropdownMenuItem<int?>(value: _bankIdOf(b['ban_id']), child: Text(_bankLabel(b), overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: _saving ? null : (v) => setState(() => _banId = v),
+                ),
+                SizedBox(height: 4.h),
+                Row(children: [
+                  Expanded(
+                    child: Text(
+                      _banId == null
+                          ? 'Without a bank account only Cash can be collected for this group.'
+                          : _onlineKnown
+                              ? _routeOf(_banId).detail
+                              : "This group's fees are banked here.",
+                      style: AppUI.muted.copyWith(
+                          fontSize: 12.sp,
+                          color: _banId == null
+                              ? AppColors.warning
+                              : _onlineKnown && _routeOf(_banId).kind == OnlineRouteKind.problem
+                                  ? AppColors.error
+                                  : null),
+                    ),
+                  ),
+                ]),
+                // Add one on the spot, or open every account in full (edit,
+                // delete, merchant keys) -- Payment Gateways no longer has them.
+                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  TextButton.icon(
+                    onPressed: _saving ? null : _newBank,
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('New'),
+                  ),
+                  SizedBox(width: 4.w),
+                  TextButton.icon(
+                    onPressed: _saving ? null : _manageBanks,
+                    icon: const Icon(Icons.account_balance_outlined, size: 16),
+                    label: const Text('Manage bank accounts'),
+                  ),
+                ]),
                 SizedBox(height: 10.h),
                 // Narrows who the group's fees are offered to. Only Student Fee
                 // Definition reads it today; Misc Collection and Advance can
@@ -571,6 +719,8 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
             headerCells: [
               SizedBox(width: 50.w, child: Text('S NO.', style: _h())),
               Expanded(child: Text('GROUP NAME', style: _h())),
+              Expanded(child: Text('BANK ACCOUNT', style: _h())),
+              if (_onlineKnown) Expanded(child: Text('ONLINE MONEY GOES TO', style: _h())),
               if (!isSchool) SizedBox(width: 120.w, child: Text('HOSTELLERS ONLY', textAlign: TextAlign.center, style: _h())),
               SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
@@ -590,6 +740,20 @@ class _FeeGroupPanelState extends State<_FeeGroupPanel> with AutomaticKeepAliveC
                             child: Row(children: [
                               SizedBox(width: 50.w, child: Text('${i + 1}', style: _c())),
                               Expanded(child: Text(r['fgdesc']?.toString() ?? '', style: _c())),
+                              Expanded(
+                                child: Builder(builder: (_) {
+                                  final b = _bankById(_bankIdOf(r['ban_id']));
+                                  return b == null
+                                      ? Align(alignment: Alignment.centerLeft, child: AppUI.chip('Cash only -- no bank', AppStatus.danger))
+                                      : Text(_bankLabel(b), style: _c(), overflow: TextOverflow.ellipsis);
+                                }),
+                              ),
+                              if (_onlineKnown)
+                                Expanded(
+                                  child: _bankById(_bankIdOf(r['ban_id'])) == null
+                                      ? Text('-', style: AppUI.cell.copyWith(color: AppColors.textLight))
+                                      : onlineRouteChip(_routeOf(_bankIdOf(r['ban_id']))),
+                                ),
                               if (!isSchool)
                               SizedBox(
                                 width: 120.w,
@@ -630,6 +794,9 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   final _name = TextEditingController();
   final _short = TextEditingController();
   final _type = TextEditingController();
+  // School: the old app's fee Type -- SCH (school) or HOS (hostel), stored in
+  // feetype.feecat (user, 2026-11-11). Reg/Opt stays in feetype.type.
+  String? _cat;
   String? _fgId;
   String? _fine;
 
@@ -670,6 +837,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _name.text = r['feedesc']?.toString() ?? '';
       _short.text = r['feeshort']?.toString() ?? '';
       _type.text = r['type']?.toString() ?? '';
+      _cat = const {'SCH', 'HOS'}.contains(r['feecat']?.toString()) ? r['feecat'].toString() : null;
       _fgId = r['fg_id']?.toString();
       _fine = '${r['feefineapplicable'] ?? 0}' == '1' ? 'Yes' : 'No';
       // Absent on a database where fee_payment_priority.sql has not run: show
@@ -689,6 +857,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _name.clear();
       _short.clear();
       _type.clear();
+      _cat = null;
       _fine = null;
       _payseq.clear();
       _partial = null;
@@ -696,6 +865,52 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
   }
 
   int get _insId => context.read<AuthProvider>().insId ?? 1;
+
+  // Compact form (user, 2026-11-11): short fields sit two to a row so the
+  // whole form fits the window without scrolling.
+  Widget _field(String label, Widget child) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [_lbl(label), SizedBox(height: 6.h), child],
+      );
+
+  Widget _pair(Widget a, Widget b) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [Expanded(child: a), SizedBox(width: 12.w), Expanded(child: b)],
+      );
+
+  Widget _text(TextEditingController c, String hint, {bool number = false}) => TextField(
+        controller: c,
+        keyboardType: number ? TextInputType.number : null,
+        style: AppUI.fieldText(context, filled: c.text.trim().isNotEmpty),
+        decoration: _filledFieldDec(context, hint, filled: c.text.trim().isNotEmpty),
+        onChanged: (_) => setState(() {}),
+      );
+
+  /// [items] are (value, label) pairs.
+  Widget _dd(String? value, String hint, List<(String, String)> items, ValueChanged<String?> onChanged) =>
+      AppDropdownField<String>(
+        initialValue: items.any((e) => e.$1 == value) ? value : null,
+        isExpanded: true,
+        dropdownColor: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        elevation: 6,
+        style: _fieldTextStyle(context),
+        icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+        decoration: _filledFieldDec(context, hint, filled: value != null && value.isNotEmpty),
+        hint: _ddHint(context, hint),
+        items: [
+          for (final e in items)
+            DropdownMenuItem(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
+        ],
+        selectedItemBuilder: (context) => [
+          for (final e in items)
+            Align(
+                alignment: Alignment.centerLeft,
+                child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
+        ],
+        onChanged: onChanged,
+      );
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -708,7 +923,13 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       setState(() {
         _feeGroups = fgList;
         _fgName = {for (final g in fgList) g['fg_id'] as int: g['fgdesc']?.toString() ?? ''};
-        _rows = List<Map<String, dynamic>>.from(types);
+        // FeeType Order first, then ID (rows without an order go last).
+        _rows = List<Map<String, dynamic>>.from(types)
+          ..sort((a, b) {
+            final oa = (a['ordid'] as num?)?.toInt() ?? 1 << 30, ob = (b['ordid'] as num?)?.toInt() ?? 1 << 30;
+            if (oa != ob) return oa.compareTo(ob);
+            return ((a['fee_id'] as num?) ?? 0).compareTo((b['fee_id'] as num?) ?? 0);
+          });
         // Start with no fee group selected so the 'Select fee group'
         // placeholder shows (edit mode sets _fgId explicitly).
         _loading = false;
@@ -718,12 +939,48 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
     }
   }
 
+  /// Why [name] / [short] cannot be saved: a fee type belongs to ONE fee group,
+  /// so the same fee in two groups would clash on receipts and fee demands,
+  /// which find a fee type by its name (user, 2026-11-18). Spaces, dots and
+  /// capitals do not make a different fee. Read fresh, across every group.
+  Future<String?> _feeTypeClash(String name, String short) async {
+    final rows = await SupabaseService.fromSchema('feetype')
+        .select('fee_id, feedesc, feeshort, fg_id')
+        .eq('ins_id', _insId)
+        .eq('activestatus', 1);
+    final others = [
+      for (final r in rows as List)
+        if ('${r['fee_id']}' != '$_editId') Map<String, dynamic>.from(r as Map),
+    ];
+    String groupOf(Map<String, dynamic> r) {
+      final g = _fgName[(r['fg_id'] as num?)?.toInt()]?.trim().replaceAll(RegExp(r'\s+'), ' ') ?? '';
+      return g.isEmpty ? 'another fee group' : g;
+    }
+
+    for (final r in others) {
+      if (feeTypeKey(r['feedesc']) == feeTypeKey(name)) {
+        return '"${'${r['feedesc']}'.trim()}" already exists in ${groupOf(r)}. A fee type can be in only one fee group.';
+      }
+    }
+    if (feeTypeKey(short).isNotEmpty) {
+      for (final r in others) {
+        if (feeTypeKey(r['feeshort']) == feeTypeKey(short)) {
+          return '"$short" is already the short name of ${'${r['feedesc']}'.trim()} (${groupOf(r)}). Enter a different short name.';
+        }
+      }
+    }
+    return null;
+  }
+
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return _snack(context, 'Enter a fee name.', AppColors.warning);
     if (_fgId == null) return _snack(context, 'Add a fee group first (Fee Master > Fee Group).', AppColors.warning);
     setState(() => _saving = true);
     try {
+      final clash = await _feeTypeClash(name, _short.text.trim());
+      if (!mounted) return;
+      if (clash != null) return _snack(context, clash, AppColors.warning);
       if (_editId != null) {
         await SupabaseService.saveSchemaRow(
             'feetype',
@@ -739,6 +996,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
               // the form was saved.
               'payseq': _payseq.text.trim().isEmpty ? null : int.tryParse(_payseq.text.trim()),
               'partialallowed': _partial == 'No' ? 'N' : 'Y',
+              if (isSchool) 'feecat': _cat ?? 'SCH',
             },
             pkCol: 'fee_id',
             pkVal: _editId!);
@@ -747,6 +1005,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
         final yr = await _currentYear(_insId);
         await SupabaseService.saveSchemaRow('feetype', {
           'fee_id': await _nextId('feetype', 'fee_id'),
+          if (isSchool) 'feecat': _cat ?? 'SCH',
           'feedesc': name,
           'feeshort': _short.text.trim(),
           'fg_id': int.tryParse(_fgId!),
@@ -771,6 +1030,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       _name.clear();
       _short.clear();
       _type.clear();
+      _cat = null;
       _payseq.clear();
       _partial = null;
       _editId = null;
@@ -809,7 +1069,7 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 320.w,
+          width: 380.w,
           // Scrollable: this Row hands the card the window's full height as a
           // hard limit, and the form is a min-height Column, so on a laptop
           // screen the last fields (Priority, its help text, Part Payment
@@ -826,159 +1086,55 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _lbl('Fee Type Name *'),
-                  SizedBox(height: 6.h),
-                  TextField(
-                      controller: _name,
-                      style: AppUI.fieldText(context, filled: _name.text.trim().isNotEmpty),
-                      decoration: _filledFieldDec(context, 'Enter fee type name', filled: _name.text.trim().isNotEmpty),
-                      onChanged: (_) => setState(() {})),
-                  SizedBox(height: 16.h),
-                  _lbl('Short Name'),
-                  SizedBox(height: 6.h),
-                  TextField(
-                      controller: _short,
-                      style: AppUI.fieldText(context, filled: _short.text.trim().isNotEmpty),
-                      decoration: _filledFieldDec(context, 'Enter short name', filled: _short.text.trim().isNotEmpty),
-                      onChanged: (_) => setState(() {})),
-                  SizedBox(height: 16.h),
-                  _lbl('Fee Group *'),
-                  SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
-                    initialValue: _fgId,
-                    isExpanded: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    elevation: 6,
-                    style: _fieldTextStyle(context),
-                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select fee group', filled: _fgId != null),
-                    items: _feeGroups
-                        .map((g) => DropdownMenuItem(
-                            value: g['fg_id'].toString(),
-                            child: Text(g['fgdesc']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis)))
-                        .toList(),
-                    selectedItemBuilder: (context) => _feeGroups
-                        .map((g) => Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))))
-                        .toList(),
-                    onChanged: (v) => setState(() => _fgId = v),
+                  _field('Fee Type Name *', _text(_name, 'Enter fee type name')),
+                  SizedBox(height: 14.h),
+                  _pair(
+                    _field('Short Name', _text(_short, 'Short name')),
+                    _field('Fee Group *', _dd(_fgId, 'Select', [
+                      for (final g in _feeGroups) (g['fg_id'].toString(), g['fgdesc']?.toString() ?? ''),
+                    ], (v) => setState(() => _fgId = v))),
                   ),
-                  SizedBox(height: 16.h),
-                  _lbl('Fine Applicable'),
+                  SizedBox(height: 14.h),
+                  _pair(
+                    _field('Fine Applicable', _dd(_fine, 'Yes / No', const [('No', 'No'), ('Yes', 'Yes')],
+                        (v) => setState(() => _fine = v))),
+                    // School: Type (SCH / HOS). College: its fee category.
+                    isSchool
+                        ? _field('Type', _dd(_cat, 'SCH / HOS', const [('SCH', 'SCH  School'), ('HOS', 'HOS  Hostel')],
+                            (v) => setState(() => _cat = v)))
+                        : _field('Fee Category', _dd(_type.text.trim().toUpperCase(), 'Select', [for (final k in kFeeKinds) (k.code, k.label)],
+                            (v) => setState(() => _type.text = v ?? ''))),
+                  ),
+                  SizedBox(height: 14.h),
+                  _pair(
+                    // feetype.type is a code reports key off exactly (see fee_kind.dart),
+                    // so it's a list, not free text.
+                    isSchool
+                        ? _field('Reg/Opt', _dd(_type.text.trim().toUpperCase(), 'REG / OPT', [for (final k in kFeeKinds) (k.code, k.label)],
+                            (v) => setState(() => _type.text = v ?? '')))
+                        : _field('Priority', _text(_payseq, 'Blank = 100', number: true)),
+                    _field('Part Payment', _dd(_partial, 'Yes / No', const [('Yes', 'Yes'), ('No', 'No (full only)')],
+                        (v) => setState(() => _partial = v))),
+                  ),
+                  if (isSchool) ...[
+                    SizedBox(height: 14.h),
+                    _field('Priority', _text(_payseq, 'e.g. 100 (blank = normal)', number: true)),
+                  ],
                   SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
-                    initialValue: _fine,
-                    isExpanded: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    elevation: 6,
-                    style: _fieldTextStyle(context),
-                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select whether a fine applies', filled: _fine != null),
-                    items: [
-                      DropdownMenuItem(value: 'No', child: Text('No', style: AppUI.fieldText(context))),
-                      DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
-                    ],
-                    selectedItemBuilder: (context) => [
-                      Align(
-                          alignment: Alignment.centerLeft, child: Text('No', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
-                      Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('Yes', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
-                    ],
-                    onChanged: (v) => setState(() => _fine = v),
-                  ),
-                  SizedBox(height: 16.h),
-                  _lbl('Fee Category'),
-                  SizedBox(height: 6.h),
-                  // A LIST, not free text. The stored value is a three-letter
-                  // code and reports key off it exactly -- the DCB Register
-                  // splits its COLLEGE and TRANSPORT columns on type = 'TRA'.
-                  // Typed by hand, 'Transport', 'TRANS' or a trailing space
-                  // all read as College and the money lands in the wrong
-                  // column with nothing to show it went wrong.
-                  //
-                  // The codes are what the database already holds: COL on 92
-                  // fee types, HOS on 2, TRA on 1.
-                  DropdownButtonFormField<String>(
-                    initialValue: kFeeKinds
-                            .any((k) => k.code == _type.text.trim().toUpperCase())
-                        ? _type.text.trim().toUpperCase()
-                        : null,
-                    isExpanded: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    elevation: 6,
-                    style: _fieldTextStyle(context),
-                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select fee category',
-                        filled: _type.text.trim().isNotEmpty),
-                    items: [
-                      for (final k in kFeeKinds)
-                        DropdownMenuItem(
-                          value: k.code,
-                          child: Text(k.label,
-                              style: AppUI.fieldText(context)),
-                        ),
-                    ],
-                    selectedItemBuilder: (context) => [
-                      for (final k in kFeeKinds)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(k.label,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppUI.fieldText(context, filled: true)),
-                        ),
-                    ],
-                    onChanged: (v) => setState(() => _type.text = v ?? ''),
-                  ),
-                  SizedBox(height: 16.h),
-                  _lbl('Priority'),
-                  SizedBox(height: 6.h),
-                  TextField(
-                    controller: _payseq,
-                    keyboardType: TextInputType.number,
-                    style: AppUI.fieldText(context, filled: _payseq.text.trim().isNotEmpty),
-                    decoration: _filledFieldDec(context, 'e.g. 100 (leave blank for normal)', filled: _payseq.text.trim().isNotEmpty),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  SizedBox(height: 4.h),
-                  Text(
-                    'A fee can be paid only after every fee with a lower priority '
-                    'number is cleared. 10 = paid first (e.g. Bus), 100 = normal '
-                    '(default when blank), '
-                    '900 = paid last (e.g. Exam). Arrears are always cleared before '
-                    'the same student\'s current-year fees.',
-                    style: AppUI.muted.copyWith(height: 1.35),
-                  ),
-                  SizedBox(height: 16.h),
-                  _lbl('Part Payment Allowed'),
-                  SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
-                    initialValue: _partial,
-                    isExpanded: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    elevation: 6,
-                    style: _fieldTextStyle(context),
-                    icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                    decoration: _filledFieldDec(context, 'Select whether part payment is allowed', filled: _partial != null),
-                    items: [
-                      DropdownMenuItem(value: 'Yes', child: Text('Yes', style: AppUI.fieldText(context))),
-                      DropdownMenuItem(value: 'No', child: Text('No — full amount only', style: AppUI.fieldText(context))),
-                    ],
-                    selectedItemBuilder: (context) => [
-                      Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('Yes', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
-                      Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('No — full amount only', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
-                    ],
-                    onChanged: (v) => setState(() => _partial = v),
-                  ),
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(
+                      child: Text('Lower priority is paid first: 10 first (Bus), 100 normal, 900 last (Exam).',
+                          style: AppUI.muted.copyWith(height: 1.3)),
+                    ),
+                    Tooltip(
+                      message: 'A fee can be paid only after every fee with a lower priority number is cleared. '
+                          'Blank counts as 100. Arrears are always cleared before the same student\'s current-year fees.',
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 6.w, top: 2.h),
+                        child: const AppIcon('info-circle', size: 14, color: AppColors.textSecondary),
+                      ),
+                    ),
+                  ]),
                   SizedBox(height: 18.h),
                   Row(children: [
                     Expanded(
@@ -1014,7 +1170,9 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
               Expanded(flex: 3, child: Text('FEE TYPE', style: _h())),
               SizedBox(width: 90.w, child: Text('SHORT NAME', style: _h())),
               Expanded(flex: 2, child: Text('FEE GROUP', style: _h())),
-              SizedBox(width: 60.w, child: Text('FINE', style: _h())),
+              SizedBox(width: 50.w, child: Text('FINE', style: _h())),
+              if (isSchool) SizedBox(width: 60.w, child: Text('TYPE', style: _h())),
+              SizedBox(width: 70.w, child: Text(isSchool ? 'REG/OPT' : 'CATEGORY', style: _h())),
               SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _h())),
             ],
             body: _loading
@@ -1036,7 +1194,9 @@ class _FeeTypePanelState extends State<_FeeTypePanel> with AutomaticKeepAliveCli
                               Expanded(flex: 3, child: Text(r['feedesc']?.toString() ?? '', style: _c())),
                               SizedBox(width: 90.w, child: Text(r['feeshort']?.toString() ?? '', style: _c())),
                               Expanded(flex: 2, child: Text(_fgName[r['fg_id']] ?? '', style: _c())),
-                              SizedBox(width: 60.w, child: Text(fine, style: _c())),
+                              SizedBox(width: 50.w, child: Text(fine, style: _c())),
+                              if (isSchool) SizedBox(width: 60.w, child: Text(r['feecat']?.toString() ?? 'SCH', style: _c())),
+                              SizedBox(width: 70.w, child: Text(r['type']?.toString() ?? '', style: _c())),
                               SizedBox(
                                   width: 90.w,
                                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -1288,7 +1448,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                 SizedBox(height: 16.h),
                 _lbl(schoolTerm('Semester Type *')),
                 SizedBox(height: 6.h),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   initialValue: _type,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -1297,6 +1457,7 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
                   style: _fieldTextStyle(context),
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   decoration: _filledFieldDec(context, schoolTerm('Select semester type'), filled: _type != null),
+                  hint: _ddHint(context, schoolTerm('Select semester type')),
                   items: _typeLabels.entries
                       .map((e) => DropdownMenuItem(value: e.key, child: Text(schoolTerm(e.value), style: AppUI.fieldText(context))))
                       .toList(),
@@ -1402,13 +1563,30 @@ class _SemesterPanelState extends State<_SemesterPanel> with AutomaticKeepAliveC
 // Fee Demand, whose lines are generated onto students).
 // ══════════════════════════════════════════════════════════════════════════
 
+/// Dispose a grid row's amount controller once the current frame is drawn.
+/// The rows are replaced inside setState, and the amount boxes still hold the
+/// old controller until they rebuild; disposing it at once made the box touch
+/// a dead controller ("TextEditingController was used after being disposed").
+void _disposeAfterFrame(TextEditingController c) =>
+    WidgetsBinding.instance.addPostFrameCallback((_) => c.dispose());
+
+/// Two Applicable To flags (New/Old, Boy/Girl, Day/Hostel) reach at least one
+/// student in common -- 3 = Both reaches everyone. The same fee type on two
+/// rows whose flags all meet would bill those students twice.
+bool _flagsMeet(int a, int b) => a == 3 || b == 3 || a == b;
+
 class _AdvLine {
   static int _seq = 0;
   final int uid = ++_seq;
   String? feeType;
+  /// Loaded from a saved line (Edit): its fee type is locked -- change the
+  /// amount or who it applies to, or delete the row (user, 2026-11-16).
+  bool saved = false;
   final amount = TextEditingController();
+  // dhb (Day Scholar / Hosteller) is no longer asked: always 3 = Both
+  // (user, 2026-11-02). The column stays in the table for older rows.
   int nob = 3, bgb = 3, dhb = 3;
-  void dispose() => amount.dispose();
+  void dispose() => _disposeAfterFrame(amount);
 }
 
 class _AdvanceFeePanel extends StatefulWidget {
@@ -1419,6 +1597,8 @@ class _AdvanceFeePanel extends StatefulWidget {
 
 class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAliveClientMixin {
   List<Map<String, dynamic>> _courses = [], _classes = [], _terms = [], _fees = [], _saved = [];
+  // Section Mapping rows and pre-admission students, for "raised for whom".
+  List<Map<String, dynamic>> _maps = [], _preStudents = [];
   String _nextYear = '';
   /// 0 = section-wise, 1 = standard-wise. Not chosen here: it follows the
   /// standard's Fee Demand By (Setup > Master Data > Standard).
@@ -1434,16 +1614,15 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
   bool _loading = true, _saving = false;
   bool _editMode = false; // New = blank grid, Edit = the saved lines
 
-  /// Fee groups for the group filter, as on Section Fee Demand: it narrows the
-  /// fee-type picker and the rows shown -- Save still writes every row.
-  List<Map<String, dynamic>> _feeGroups = [];
   final Map<String, Set<int>> _groupsOf = {}; // feedesc -> its fg_ids
   /// OPTIONAL fee types (feetype.type 'OPT', e.g. bus). They are never raised
   /// as advance demands -- like Section Fee Demand, an optional fee is added
   /// per student in Fee Definition -- so a line using one is flagged.
   final Set<String> _optional = {};
-  /// Next-year sections / standards that Section Matching (or a pre-admission)
-  /// leads into -- the only ones offered in the dropdowns.
+  /// Next-year sections / standards offered in the dropdowns: only the ones
+  /// saved in Section Mapping, the ones pre-admission students are admitted
+  /// into, and the first standard (user, 2026-11-14: "only mapped class should
+  /// list").
   final Set<int> _targetCla = {}, _targetCour = {};
   List<Map<String, dynamic>> get _matchedCourses => [
         for (final c in _courses)
@@ -1491,14 +1670,14 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     setState(() => _loading = true);
     try {
       final r = await Future.wait<dynamic>([
-        SupabaseService.fromSchema('course').select('cour_id, courname, ordid, feelevel').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('course').select('cour_id, courname, ordid, feelevel, classtype').eq('ins_id', _insId).eq('activestatus', 1),
         SupabaseService.fromSchema('class').select('cla_id, claname, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
         SupabaseService.fromSchema('semester').select('sem_id, semname').eq('ins_id', _insId).eq('activestatus', 1).order('sem_id'),
         SupabaseService.fromSchema('feetype').select('fee_id, feedesc, fg_id, type').eq('ins_id', _insId).eq('activestatus', 1),
         SupabaseService.fetchAll(() => SupabaseService.fromSchema('advfeedemand').select('*').eq('activestatus', 1).order('af_id')),
         SupabaseService.getYears(_insId),
         SupabaseService.fromSchema('feegroup').select('fg_id, fgdesc').eq('ins_id', _insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('classmatch').select('nextclassid, nextcourseid').eq('ins_id', _insId).eq('activestatus', 1),
+        SupabaseService.fromSchema('classmatch').select('curclassid, nextclassid, nextcourseid').eq('ins_id', _insId).eq('activestatus', 1),
         SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
             .select('cla_id, cour_id').eq('ins_id', _insId).eq('activestatus', 1).eq('preadmission', 1)),
       ]);
@@ -1524,18 +1703,29 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
         }
         final seen = <String>{};
         _fees = [for (final f in fees) if (seen.add('${f['feedesc']}')) f]..sort((a, b) => '${a['feedesc']}'.compareTo('${b['feedesc']}'));
-        _feeGroups = m(r[6])..sort((a, b) => '${a['fgdesc']}'.compareTo('${b['fgdesc']}'));
-        // Next-year sections offered: the targets of Section Matching, plus the
+        _maps = m(r[7]);
+        _preStudents = m(r[8]);
+        // Next-year sections offered: the targets of Section Mapping, plus the
         // sections pre-admission students are already admitted into (they stay
-        // where they are, no matching involved).
+        // where they are, no mapping involved).
         _targetCla
           ..clear()
           ..addAll([for (final x in [...m(r[7]).map((e) => e['nextclassid']), ...m(r[8]).map((e) => e['cla_id'])]) if (_id(x) != null) _id(x)!]);
         _targetCour
           ..clear()
           ..addAll([for (final x in [...m(r[7]).map((e) => e['nextcourseid']), ...m(r[8]).map((e) => e['cour_id'])]) if (_id(x) != null) _id(x)!]);
-        _fg ??= _feeGroups.isEmpty ? null : _id(_feeGroups.first['fg_id']);
-        if (_fg != null && !_feeGroups.any((g) => _id(g['fg_id']) == _fg)) _fg = null;
+        // The first standard (PREKG ...) and its sections as well: nobody is
+        // promoted into it, but new admissions and pre-admissions start there.
+        final first = _courses.isEmpty ? null : _id(_courses.first['cour_id']);
+        if (first != null) {
+          _targetCour.add(first);
+          _targetCla.addAll([
+            for (final c in _classes)
+              if (_id(c['cour_id']) == first && _id(c['cla_id']) != null) _id(c['cla_id'])!,
+          ]);
+        }
+        // no fee group selector: all groups' fee types (_fg stays null)
+        _fg = null;
         _saved = m(r[4]);
         final years = r[5] as List;
         final cur = years.isNotEmpty ? '${(years.first as Map)['yrlabel'] ?? ''}' : '';
@@ -1554,6 +1744,31 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
 
   bool get _scopeReady => _cour != null && (_type == 1 || _cla != null) && _term != null;
 
+  /// Whose fees these are -- as the old product, where an advance fee was a
+  /// pair "current class -> applicable class": the sections mapped into the
+  /// chosen next-year section / standard in Section Mapping, and the
+  /// pre-admission students already in it (user, 2026-11-14).
+  String? get _forWhom {
+    if (_cour == null || (_type == 0 && _cla == null)) return null;
+    String cls(int? id) => '${_classes.firstWhere((c) => _id(c['cla_id']) == id, orElse: () => const {})['claname'] ?? ''}';
+    String std(int? id) => '${_courses.firstWhere((c) => _id(c['cour_id']) == id, orElse: () => const {})['courname'] ?? ''}';
+    final from = <String>[];
+    for (final x in _maps) {
+      final hit = _type == 0 ? _id(x['nextclassid']) == _cla : _id(x['nextcourseid']) == _cour;
+      final n = cls(_id(x['curclassid']));
+      if (hit && n.isNotEmpty && !from.contains(n)) from.add(n);
+    }
+    final pre = _preStudents.where((x) => _type == 0 ? _id(x['cla_id']) == _cla : _id(x['cour_id']) == _cour).length;
+    final target = _type == 0 ? cls(_cla) : std(_cour);
+    final parts = [
+      if (from.isNotEmpty) 'the students of ${from.join(', ')} (moving to $target next year)',
+      if (pre > 0) '$pre pre-admission student${pre == 1 ? '' : 's'} admitted to $target',
+    ];
+    return parts.isEmpty
+        ? 'No section is mapped to $target in Section Mapping and no pre-admission student is in it yet -- saving raises no demands.'
+        : 'Raised for ${parts.join(' and ')}.';
+  }
+
   bool _inScope(Map<String, dynamic> r) =>
       _id(r['aftype']) == _type &&
       _id(r['cour_id']) == _cour &&
@@ -1570,8 +1785,14 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
       ..addAll(List.generate(5, (_) => _AdvLine()));
   }
 
-  /// New: blank rows. Edit: the lines saved for the chosen scope + term.
+  /// The chosen scope + term already has advance fees saved.
+  bool get _hasSaved => _scopeReady && _saved.any(_inScope);
+
+  /// New: blank rows. Edit: the lines saved for the chosen scope + term. The
+  /// mode follows what is saved: fees already there open in Edit and New is
+  /// not offered (user, 2026-11-16).
   void _reload() {
+    _editMode = _hasSaved;
     _blank();
     if (!_editMode || !_scopeReady) return;
     final rows = _saved.where(_inScope).toList();
@@ -1583,6 +1804,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     for (final r in rows) {
       final l = _AdvLine()
         ..feeType = '${r['affeetype']}'
+        ..saved = true
         ..nob = _id(r['afnob']) ?? 3
         ..bgb = _id(r['afbgb']) ?? 3
         ..dhb = _id(r['afdhb']) ?? 3;
@@ -1605,11 +1827,8 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     }
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Add at least one fee line.', AppColors.warning);
-    final seen = <String>{};
     for (final l in lines) {
-      if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
-        return _snack(context, '${l.feeType} is entered twice with the same Applicable To. Remove one row or change its Applicable To.', AppColors.warning);
-      }
+      if (_dupFee(l, l.feeType)) return _dupSnack(l.feeType!);
     }
     setState(() => _saving = true);
     try {
@@ -1667,10 +1886,9 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
       _snack(context, 'Enter fee amounts to copy.', AppColors.warning);
       return null;
     }
-    final seen = <String>{};
     for (final l in lines) {
-      if (!seen.add('${l.feeType}|${l.nob}|${l.bgb}|${l.dhb}')) {
-        _snack(context, '${l.feeType} is entered twice with the same Applicable To. Remove one row or change its Applicable To.', AppColors.warning);
+      if (_dupFee(l, l.feeType)) {
+        _dupSnack(l.feeType!);
         return null;
       }
     }
@@ -1845,7 +2063,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
   }
 
   Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?>? onChanged, {String? icon}) {
-    return DropdownButtonFormField<T>(
+    return AppDropdownField<T>(
       key: ValueKey('$hint-$value-${items.length}'),
       initialValue: items.any((e) => e.$1 == value) ? value : null,
       isExpanded: true,
@@ -1853,6 +2071,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
       borderRadius: BorderRadius.circular(12),
       style: _fieldTextStyle(context),
       decoration: _filledFieldDec(context, hint, filled: value != null, leadingIcon: icon),
+      hint: _ddHint(context, hint),
       items: [
         for (final e in items)
           DropdownMenuItem<T>(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
@@ -1864,7 +2083,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
   Widget _flag(int value, Map<int, String> labels, ValueChanged<int> onChanged) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 4.w),
-      child: DropdownButtonFormField<int>(
+      child: AppDropdownField<int>(
         initialValue: labels.containsKey(value) ? value : 3,
         isExpanded: true,
         isDense: true,
@@ -1930,7 +2149,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
               // (or holding pre-admission students) are offered.
               Expanded(
                 child: _drop<int>(
-                    _matchedCourses.isEmpty ? 'Match sections first in Section Matching' : schoolTerm('Select next year course'),
+                    _matchedCourses.isEmpty ? 'Map sections first in Section Mapping' : schoolTerm('Select next year course'),
                     _cour,
                     [
                       for (final c in _matchedCourses)
@@ -1968,14 +2187,9 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                     icon: 'book'),
               ),
               SizedBox(width: 8.w),
-              // FEE GROUP -- narrows the fee-type picker and the rows shown;
-              // it does not reload the grid (typed amounts stay).
-              Expanded(
-                child: _drop<int>('Select fee group', _fg, [for (final g in _feeGroups) (_id(g['fg_id'])!, '${g['fgdesc']}')],
-                    (v) => setState(() => _fg = v),
-                    icon: 'receipt-discount'),
-              ),
-              SizedBox(width: 8.w),
+              // No fee group selector (user, 2026-10-30): every group's fee
+              // types are offered; each saved line takes its group from its
+              // fee type.
               Expanded(
                 child: FocusableTap(
                   onTap: () async {
@@ -1992,7 +2206,7 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                       suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
                     child: Text(
-                      _due == null ? 'Select pay on or before date' : '${_due!.day.toString().padLeft(2, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.year}',
+                      _due == null ? 'Select date' : '${_due!.day.toString().padLeft(2, '0')}-${_due!.month.toString().padLeft(2, '0')}-${_due!.year}',
                       overflow: TextOverflow.ellipsis,
                       style: _due == null
                           ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)
@@ -2004,20 +2218,35 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
             ]),
           ),
         ),
+        // Who these fees are raised for (current section -> next year's).
+        if (_forWhom != null)
+          Padding(
+            padding: EdgeInsets.only(bottom: 10.h),
+            child: Row(children: [
+              const AppIcon('people', size: 15, color: AppColors.textSecondary),
+              SizedBox(width: 8.w),
+              Expanded(child: Text(_forWhom!, style: AppUI.muted)),
+            ]),
+          ),
         // Mode buttons on their own line, right-aligned (as Section Fee Demand).
         Padding(
           padding: EdgeInsets.only(bottom: 10.h),
           child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-            ExcludeFocus(child: _mode('New', Icons.add, !_editMode, () => setState(() {
-                  _editMode = false;
-                  _reload();
-                }))),
-            SizedBox(width: 8.w),
-            ExcludeFocus(child: _mode('Edit', Icons.edit, _editMode, () => setState(() {
-                  _editMode = true;
-                  _reload();
-                }))),
-            SizedBox(width: 8.w),
+            // New only while nothing is saved, Edit only once it is.
+            if (!_hasSaved) ...[
+              ExcludeFocus(child: _mode('New', Icons.add, !_editMode, () => setState(() {
+                    _editMode = false;
+                    _reload();
+                  }))),
+              SizedBox(width: 8.w),
+            ],
+            if (_hasSaved) ...[
+              ExcludeFocus(child: _mode('Edit', Icons.edit, _editMode, () => setState(() {
+                    _editMode = true;
+                    _reload();
+                  }))),
+              SizedBox(width: 8.w),
+            ],
             ExcludeFocus(
               child: OutlinedButton.icon(
                 onPressed: _saving ? null : _copyFee,
@@ -2041,7 +2270,6 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                   SizedBox(width: 140.w, child: Text('AMOUNT', textAlign: TextAlign.right, style: _h())),
                   SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
                   SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
-                  SizedBox(width: 170.w, child: Text('DAY SCHOLAR / HOSTELLER', textAlign: TextAlign.center, style: _h())),
                   SizedBox(width: 44.w),
                 ]),
               ),
@@ -2076,11 +2304,13 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                     label: const Text('Add Row'),
                   ),
                   SizedBox(width: 12.w),
-                  Flexible(
+                  // Takes all the free width and wraps to a second line rather
+                  // than ending in "…".
+                  Expanded(
                     child: Text('Applicable To "Both" means every student. Saving raises the advance demands; collect them in Advance Fee Collection.',
-                        overflow: TextOverflow.ellipsis, style: AppUI.muted),
+                        maxLines: 2, overflow: TextOverflow.ellipsis, style: AppUI.muted),
                   ),
-                  const Spacer(),
+                  SizedBox(width: 12.w),
                   Text(_fg == null ? 'Total  ' : 'Total, all groups  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
                   Text(_total.toStringAsFixed(2), style: AppUI.money.copyWith(color: AppColors.primary)),
                   SizedBox(width: 16.w),
@@ -2135,6 +2365,22 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
     return null;
   }
 
+  /// [fee] is already on another row that reaches any of the same students
+  /// (New/Old, Boy/Girl, Day/Hostel meet; "Both" meets everything) -- a
+  /// duplicate (user, 2026-11-14 "restrict duplicate selection", 2026-11-16 "no
+  /// duplicate feetype"). The same fee for DIFFERENT students (New at one
+  /// amount, Old at another) is still allowed.
+  bool _dupFee(_AdvLine l, String? fee, {int? nob, int? bgb, int? dhb}) =>
+      fee != null &&
+      _lines.any((o) =>
+          !identical(o, l) &&
+          o.feeType == fee &&
+          _flagsMeet(o.nob, nob ?? l.nob) &&
+          _flagsMeet(o.bgb, bgb ?? l.bgb) &&
+          _flagsMeet(o.dhb, dhb ?? l.dhb));
+
+  void _dupSnack(String fee) => _snack(context, _dupText(fee), AppColors.warning);
+
   /// One grid row -- the same anatomy as a Section Fee Demand line: a
   /// type-to-find fee type, the amount with a rupee mark, the three Applicable
   /// To pickers and a remove button.
@@ -2151,20 +2397,30 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
             child: Autocomplete<String>(
               key: ValueKey('adv-ft-${l.uid}-${_fg ?? 'all'}'),
               initialValue: TextEditingValue(text: l.feeType ?? ''),
+              // Fee types already on another row for the same students are
+              // not offered again. A saved row's fee type is locked.
               optionsBuilder: (v) {
+                if (l.saved) return const Iterable<String>.empty();
                 final q = v.text.trim().toLowerCase();
-                return q.isEmpty ? names : names.where((e) => e.toLowerCase().contains(q));
+                final free = names.where((e) => e == l.feeType || !_dupFee(l, e));
+                return q.isEmpty ? free : free.where((e) => e.toLowerCase().contains(q));
               },
-              onSelected: (v) => setState(() => l.feeType = v),
+              onSelected: (v) {
+                if (_dupFee(l, v)) return _dupSnack(v);
+                setState(() => l.feeType = v);
+              },
               fieldViewBuilder: (context, ctrl, focus, onSubmit) => Focus(
                 canRequestFocus: false,
                 skipTraversal: true,
                 // Leaving with text that matches no fee type puts the last
                 // valid pick back -- a row never looks filled but is empty.
                 onFocusChange: (has) {
-                  if (has) return;
+                  if (has || l.saved) return;
                   final m = _matchFee(ctrl.text);
-                  if (m != null) {
+                  if (m != null && _dupFee(l, m)) {
+                    _dupSnack(m);
+                    ctrl.text = l.feeType ?? '';
+                  } else if (m != null) {
                     if (l.feeType != m) setState(() => l.feeType = m);
                   } else {
                     ctrl.text = l.feeType ?? '';
@@ -2174,21 +2430,27 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
                   controller: ctrl,
                   focusNode: focus,
                   enabled: !_saving,
+                  readOnly: l.saved,
                   style: AppUI.fieldText(context, filled: true),
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
                     hintText: 'Search fee type',
                     hintStyle: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
-                    suffixIcon: Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
+                    suffixIcon: l.saved ? _lockedMark() : Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
                     suffixIconConstraints: BoxConstraints(minWidth: 22.w, minHeight: 22.h),
                   ),
                   onChanged: (v) {
                     final m = _matchFee(v);
-                    if (m != null) l.feeType = m;
+                    if (m != null && !_dupFee(l, m)) l.feeType = m;
                   },
                   onSubmitted: (v) {
                     final m = _matchFee(v);
+                    if (m != null && _dupFee(l, m)) {
+                      _dupSnack(m);
+                      ctrl.text = l.feeType ?? '';
+                      return;
+                    }
                     if (m != null) setState(() => l.feeType = m);
                     onSubmit();
                   },
@@ -2248,9 +2510,15 @@ class _AdvanceFeePanelState extends State<_AdvanceFeePanel> with AutomaticKeepAl
             onChanged: (_) => setState(() {}),
           ),
         ),
-        SizedBox(width: 120.w, child: _flag(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
-        SizedBox(width: 120.w, child: _flag(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
-        SizedBox(width: 170.w, child: _flag(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+        // Changing who a row is for may not make it repeat another row.
+        SizedBox(width: 120.w, child: _flag(l.nob, _kNobLabels, (v) {
+          if (_dupFee(l, l.feeType, nob: v)) return _dupSnack(l.feeType!);
+          setState(() => l.nob = v);
+        })),
+        SizedBox(width: 120.w, child: _flag(l.bgb, _kBgbLabels, (v) {
+          if (_dupFee(l, l.feeType, bgb: v)) return _dupSnack(l.feeType!);
+          setState(() => l.bgb = v);
+        })),
         SizedBox(
           width: 44.w,
           child: IconButton(
@@ -2332,7 +2600,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack(context, '${schoolTerm('Could not load the class matching.')} ${friendlyError(e)}', AppColors.error);
+        _snack(context, '${schoolTerm('Could not load the class mapping.')} ${friendlyError(e)}', AppColors.error);
       }
     }
   }
@@ -2406,29 +2674,29 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
         });
       }
       if (!mounted) return;
-      _snack(context, schoolTerm('Class matching saved for ${_courseName(_cur)} to ${_courseName(_next)} (${rows.length} class(es)).'), AppColors.success);
+      _snack(context, schoolTerm('Class mapping saved for ${_courseName(_cur)} to ${_courseName(_next)} (${rows.length} class(es)).'), AppColors.success);
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, '${schoolTerm('Could not save the class matching.')} ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not save the class mapping.')} ${friendlyError(e)}', AppColors.error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _deleteStandard(int cour) async {
-    if (!await _confirmDelete(context, schoolTerm('class matching for ${_courseName(cour)}'))) return;
+    if (!await _confirmDelete(context, schoolTerm('class mapping for ${_courseName(cour)}'))) return;
     try {
       await SupabaseService.deleteSchemaRowsWhere('classmatch', {'curcourseid': cour});
       if (_cur == cour) _cur = null;
       await _load();
     } catch (e) {
-      if (mounted) _snack(context, '${schoolTerm('Could not delete the class matching.')} ${friendlyError(e)}', AppColors.error);
+      if (mounted) _snack(context, '${schoolTerm('Could not delete the class mapping.')} ${friendlyError(e)}', AppColors.error);
     }
   }
 
   Widget _courseDrop(String hint, int? value, ValueChanged<int?> onChanged, {int? exclude}) {
     final opts = _courses.where((c) => _id(c['cour_id']) != exclude).toList();
-    return DropdownButtonFormField<int>(
+    return AppDropdownField<int>(
       key: ValueKey('$hint-$value-${opts.length}'),
       initialValue: opts.any((c) => _id(c['cour_id']) == value) ? value : null,
       isExpanded: true,
@@ -2436,6 +2704,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
       borderRadius: BorderRadius.circular(12),
       style: _fieldTextStyle(context),
       decoration: _filledFieldDec(context, hint, filled: value != null, leadingIcon: 'teacher'),
+      hint: _ddHint(context, hint),
       items: [
         for (final c in opts)
           DropdownMenuItem(value: _id(c['cour_id']), child: Text('${c['courname']}', style: AppUI.fieldText(context))),
@@ -2448,7 +2717,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
   Widget build(BuildContext context) {
     super.build(context);
     if (!isSchool) {
-      return AppUI.empty(title: 'Class Matching is available for schools only.');
+      return AppUI.empty(title: 'Class Mapping is available for schools only.');
     }
     if (_loading) return const Center(child: CircularProgressIndicator());
     final cur = _sectionsOf(_cur);
@@ -2471,7 +2740,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
           padding: EdgeInsets.all(AppUI.cardPad),
           decoration: AppUI.card(),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            CardTitleBlock(icon: 'arrow-swap-horizontal', title: schoolTerm('Class Matching'), subtitle: schoolTerm('Which class each class moves into at promotion')),
+            CardTitleBlock(icon: 'arrow-swap-horizontal', title: schoolTerm('Class Mapping'), subtitle: schoolTerm('Which class each class moves into at promotion')),
             SizedBox(height: 18.h),
             _lbl(schoolTerm('Current Course *')),
             SizedBox(height: 6.h),
@@ -2512,7 +2781,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
                                     child: Row(children: [
                                       Expanded(child: Text('${s['claname']}', style: AppUI.fieldText(context))),
                                       Expanded(
-                                        child: DropdownButtonFormField<int>(
+                                        child: AppDropdownField<int>(
                                           key: ValueKey('nx-$id-$chosen-$_next'),
                                           initialValue: nextOpts.any((c) => _id(c['cla_id']) == chosen) ? chosen : null,
                                           isExpanded: true,
@@ -2559,9 +2828,9 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
       Expanded(
         child: _listCard(
           icon: 'category',
-          title: schoolTerm('Saved Class Matching'),
+          title: schoolTerm('Saved Class Mapping'),
           count: listRows.length,
-          countLabel: 'matches',
+          countLabel: 'mappings',
           headerCells: [
             Expanded(child: Text(schoolTerm('COURSE'), style: _h())),
             Expanded(child: Text(schoolTerm('CURRENT CLASS'), style: _h())),
@@ -2569,7 +2838,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
             SizedBox(width: 90.w, child: Text('', style: _h())),
           ],
           body: listRows.isEmpty
-              ? AppUI.empty(title: schoolTerm('No class matching saved yet'), why: schoolTerm('Pick the current and next course on the left and save.'))
+              ? AppUI.empty(title: schoolTerm('No class mapping saved yet'), why: schoolTerm('Pick the current and next course on the left and save.'))
               : ListView.separated(
                   itemCount: listRows.length,
                   separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
@@ -2592,7 +2861,7 @@ class _ClassMatchPanelState extends State<_ClassMatchPanel> with AutomaticKeepAl
                                 ? Align(
                                     alignment: Alignment.centerRight,
                                     child: IconButton(
-                                      tooltip: schoolTerm('Delete this course\'s matching'),
+                                      tooltip: schoolTerm('Delete this course\'s mapping'),
                                       onPressed: () => _deleteStandard(std!),
                                       icon: const AppIcon('trash', size: 16, color: AppColors.error),
                                     ),
@@ -2636,16 +2905,31 @@ class _FeeLine {
   /// unticked → saved on the classfeedemand template only.
   bool applyAll = false;
   bool isCustom = false; // user-added via "Add Row" — fee type is a dropdown
+  /// School, Edit: loaded from a saved line, so its fee type is locked --
+  /// change the amount or who it applies to, or delete the row (user,
+  /// 2026-11-16 "on edit already selected feetypes cannot change").
+  bool saved = false;
 
   /// School "Applicable To" (classfeedemand.cfnob / cfbgb / cfdhb):
   /// New(1)/Old(2), Boy(1)/Girl(2), Dayscholar(1)/Hostler(2); 3 = Both.
+  // dhb (Day Scholar / Hosteller) is no longer asked: always 3 = Both
+  // (user, 2026-11-02). The column stays in the table for older rows.
   int nob = 3, bgb = 3, dhb = 3;
-  void dispose() => amount.dispose();
+  void dispose() => _disposeAfterFrame(amount);
 }
+
+/// Why a fee type cannot go on a second row.
+String _dupText(String fee) => '$fee is already added for these students. To add it again for different students, '
+    'set New / Old or Boy / Girl on both rows so they do not overlap ("Both" includes everyone).';
+
+/// The lock shown in place of the search mark on a saved fee type.
+Widget _lockedMark() => Tooltip(
+      message: 'Saved fee type - it cannot be changed. Edit the amount, or delete the row to remove it.',
+      child: Icon(Icons.lock_outline, size: 16.sp, color: AppColors.textSecondary),
+    );
 
 const Map<int, String> _kNobLabels = {3: 'Both', 1: 'New', 2: 'Old'};
 const Map<int, String> _kBgbLabels = {3: 'Both', 1: 'Boy', 2: 'Girl'};
-const Map<int, String> _kDhbLabels = {3: 'Both', 1: AppText.dayScholar, 2: AppText.hosteller};
 
 class _ClassFeeDemandPanel extends StatefulWidget {
   const _ClassFeeDemandPanel();
@@ -2681,6 +2965,11 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
 
   /// Fee groups, for the group filter above the grid.
   List<Map<String, dynamic>> _feeGroups = [];
+
+  /// OPTIONAL fee types (feetype.type 'OPT'): kept on the section template
+  /// but never raised for every student (generate_feedemand_for_class) --
+  /// flagged on the row, as Advance Fee Demand does (user, 2026-11-14).
+  final Set<String> _optional = {};
 
   /// Who the demand is raised for: null = everyone, 'Y' = hostellers only,
   /// 'N' = day scholars only.
@@ -2783,6 +3072,28 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     return _lines.where((l) => l.feeType == null || (_feeTypeGroups[l.feeType]?.contains(_fgFilter) ?? false)).toList();
   }
 
+  /// [fee] is already on another row that reaches any of the same students
+  /// (user, 2026-11-16 "no duplicate feetype to add"). College rows are all
+  /// "Both", so there it is simply the same fee type twice.
+  bool _dupFee(_FeeLine l, String? fee, {int? nob, int? bgb}) =>
+      fee != null &&
+      _lines.any((o) =>
+          !identical(o, l) &&
+          o.feeType == fee &&
+          _flagsMeet(o.nob, nob ?? l.nob) &&
+          _flagsMeet(o.bgb, bgb ?? l.bgb) &&
+          _flagsMeet(o.dhb, l.dhb));
+
+  void _dupSnack(String fee) => _snack(context, _dupText(fee), AppColors.warning);
+
+  /// The first fee line that repeats another for the same students, if any.
+  _FeeLine? _firstDup(List<_FeeLine> lines) {
+    for (final l in lines) {
+      if (_dupFee(l, l.feeType)) return l;
+    }
+    return null;
+  }
+
   /// The fee types the picker offers, after the group filter.
   List<String> get _pickableFeeTypes => _fgFilter == null ? _feeTypeNames : _feeTypeNames.where((n) => _feeTypeGroups[n]?.contains(_fgFilter) ?? false).toList();
   List<Map<String, dynamic>> _admTypes = [];
@@ -2824,7 +3135,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
             // needs every row to prefill. Ordered by cf_id for stable paging.
             SupabaseService.fetchAll(() => SupabaseService.fromSchema('classfeedemand').select('*').eq('activestatus', 1).order('cf_id')),
             SupabaseService.fromSchema('class').select('claname, ordid, cour_id').eq('ins_id', _insId).eq('activestatus', 1),
-            SupabaseService.fromSchema('feetype').select('feedesc, fg_id').eq('activestatus', 1),
+            SupabaseService.fromSchema('feetype').select('feedesc, fg_id, type').eq('activestatus', 1),
             // No admission type on the school database -- keep the slot, empty.
             if (isSchool)
               Future.value(<Map<String, dynamic>>[])
@@ -2888,6 +3199,12 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
           if (_cls != null && !_classNames.contains(_cls)) _cls = null; // the flag changed
         }
         _feeTypeNames = (results[2] as List).map((e) => e['feedesc']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort();
+        _optional
+          ..clear()
+          ..addAll([
+            for (final e in (results[2] as List))
+              if ('${e['type'] ?? ''}'.trim().toUpperCase() == 'OPT') '${e['feedesc']}'.trim(),
+          ]);
         _feeTypeGroups.clear();
         for (final e in (results[2] as List)) {
           final nm = e['feedesc']?.toString().trim() ?? '';
@@ -2899,17 +3216,10 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         _hostelOnlyGroups
           ..clear()
           ..addAll(_feeGroups.where((g) => g['hostellers_only'] == true).map((g) => (g['fg_id'] as num?)?.toInt()).whereType<int>());
-        // A fee group is now always chosen -- there is no "All Fee Groups"
-        // option, because one saved demand belongs to one group and offering
-        // every fee type at once invited mixing them. Default to the first so
-        // the picker is never empty on open.
-        _fgFilter ??= (_feeGroups.isEmpty ? null : (_feeGroups.first['fg_id'] as num?)?.toInt());
-        // A group that has since been removed must not leave the picker stuck
-        // on an id nothing matches -- that would show an empty list with no
-        // way to tell why.
-        if (_fgFilter != null && !_feeGroups.any((g) => (g['fg_id'] as num?)?.toInt() == _fgFilter)) {
-          _fgFilter = null;
-        }
+        // No fee group selector (user, 2026-10-30): the picker offers every
+        // group's fee types; each saved line takes its group from its fee
+        // type, so _fgFilter stays null.
+        _fgFilter = null;
         _admTypes = List<Map<String, dynamic>>.from((results[3] as List).cast<Map<String, dynamic>>());
         _semesters = (results[4] as List).map((e) => e['semname']?.toString().trim() ?? '').where((s) => s.isNotEmpty).toSet().toList()..sort(_semesterOrder);
         _admName = {for (final a in _admTypes) a['adm_id'].toString(): a['admname']?.toString() ?? ''};
@@ -2939,7 +3249,13 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     if (isSchool) {
       int flag(dynamic v) => (v is num ? v.toInt() : int.tryParse('${v ?? ''}')) ?? 3;
       bool inSel(Map r, String c) => (r['cfclass']?.toString() ?? '') == c && (_sem == null || (r['cfterm']?.toString() ?? '') == _sem);
-      final secs = _sectionsOf(_cls!);
+      // Edit can be pressed before a section is picked: show one empty row
+      // rather than failing half-way with the old rows already gone.
+      final secs = _cls == null ? const <String>[] : _sectionsOf(_cls!);
+      if (secs.isEmpty) {
+        _lines.add(_FeeLine()..isCustom = true);
+        return;
+      }
       final src = secs.firstWhere((c) => _rows.any((r) => inSel(r, c)), orElse: () => secs.first);
       final saved = _rows
           .where((r) => inSel(r, src))
@@ -2955,6 +3271,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       for (final r in saved) {
         final line = _FeeLine()
           ..feeType = r['cffeetype']?.toString()
+          ..saved = true
           ..applyAll = true
           ..nob = flag(r['cfnob'])
           ..bgb = flag(r['cfbgb'])
@@ -3063,9 +3380,22 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     }
   }
 
+  /// The chosen section (or every section of a standard) already has fees for
+  /// the chosen term.
+  bool get _hasSaved {
+    if (_cls == null || _sem == null) return false;
+    final secs = _sectionsOf(_cls!);
+    return _rows.any((r) => secs.contains('${r['cfclass'] ?? ''}') && '${r['cfterm'] ?? ''}' == _sem);
+  }
+
   /// Rebuild the grid for the current selection per the active mode: New shows
-  /// blank rows, Edit prefills from saved classfeedemand.
-  void _reloadGrid() => _editMode ? _loadLinesForSelection() : _blankLines();
+  /// blank rows, Edit prefills from saved classfeedemand. School: the mode
+  /// follows what is saved -- fees already there open in Edit and New is not
+  /// offered; nothing saved is New (user, 2026-11-16).
+  void _reloadGrid() {
+    if (isSchool) _editMode = _hasSaved;
+    _editMode ? _loadLinesForSelection() : _blankLines();
+  }
 
   Future<void> _save() async {
     if (_cls == null || _sem == null || _due == null) {
@@ -3073,6 +3403,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     }
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Add at least one fee line.', AppColors.warning);
+    final dup = _firstDup(lines);
+    if (dup != null) return _dupSnack(dup.feeType!);
     if (isSchool) {
       for (final l in lines) {
         l.applyAll = true; // no ALL tick: Applicable To decides who is billed
@@ -3138,6 +3470,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         // a demand that cannot be traced back to the template that raised it,
         // and that the Fee Demand import then reports as missing ids.
         await _loadTemplateIds();
+        _belowPaid.clear();
         if (isSchool) {
           for (final cls in targets) {
             demCount += await _schoolDemands(lines, auth, cls, propagate: _editMode);
@@ -3173,6 +3506,32 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                     : 'Saved $done fee line(s)$secNote • $demCount demand(s) sent for approval.',
         (noneTicked || noStudents) ? AppColors.warning : AppColors.success,
       );
+      if (_belowPaid.isNotEmpty && mounted) {
+        final list = List<String>.from(_belowPaid);
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text('${list.length} Student Fee(s) Not Changed'),
+            content: SizedBox(
+              width: 560,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('These students have already paid more than the new amount, so their fee was left as it was. '
+                        'Refund the difference (Fee Refund) or set a fee they have not overpaid.', style: AppUI.body),
+                    const SizedBox(height: 10),
+                    for (final t in list)
+                      Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('• $t', style: AppUI.cell)),
+                  ],
+                ),
+              ),
+            ),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+          ),
+        );
+      }
       setState(() {
         for (final l in _lines) {
           l.dispose();
@@ -3326,6 +3685,32 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   /// generate_feedemand_for_class stages a demand for every matching student
   /// who has none yet for that term + fee type -- the same rules the Class Fee
   /// Demand import uses. Returns demands updated + staged.
+  /// Students the server leaves unchanged on an amount edit: they have already
+  /// paid (+ concession) more than the new amount. Listed after the save.
+  final List<String> _belowPaid = [];
+
+  Future<void> _noteBelowPaid(int insId, String cls, String feeType, double amt, Iterable<String>? admnos) async {
+    try {
+      final rows = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('feedemand')
+          .select('stuadmno, paidamount, conamount')
+          .eq('ins_id', insId)
+          .eq('stuclass', cls)
+          .eq('demfeeterm', _sem ?? '')
+          .eq('demfeetype', feeType)
+          .eq('activestatus', 1));
+      final only = admnos?.toSet();
+      for (final r in rows) {
+        final adm = r['stuadmno']?.toString() ?? '';
+        if (only != null && !only.contains(adm)) continue;
+        final paid = (r['paidamount'] as num?)?.toDouble() ?? 0;
+        final con = (r['conamount'] as num?)?.toDouble() ?? 0;
+        if (paid <= 0.005 || amt + 0.005 >= paid + con) continue;
+        _belowPaid.add('$adm ($cls): $feeType ${formatIndianNumber(amt)} is below already paid '
+            '${formatIndianNumber(paid)}${con > 0 ? ' + concession ${formatIndianNumber(con)}' : ''}');
+      }
+    } catch (_) {/* only the report is lost; the server still skips them */}
+  }
+
   Future<int> _schoolDemands(List<_FeeLine> lines, AuthProvider auth, String cls, {required bool propagate}) async {
     final insId = auth.insId ?? 1;
     var n = 0;
@@ -3349,6 +3734,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       for (final l in lines) {
         final admnos = [for (final s in (studs as List)) if (fits(l, s as Map)) s['stuadmno'].toString()];
         if (admnos.isEmpty) continue;
+        await _noteBelowPaid(insId, cls, l.feeType ?? '', double.tryParse(l.amount.text.trim()) ?? 0, admnos);
         final res = await SupabaseService.client.rpc('propagate_class_fee', params: {
           'p_ins_id': insId,
           'p_class': cls,
@@ -3392,6 +3778,9 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     // each of potentially thousands of student demands). Falls back to the
     // per-row loop on ANY error so it stays correct even before the migration
     // is run (add_propagate_class_fee.sql) or if the RPC misbehaves.
+    for (final l in lines) {
+      await _noteBelowPaid(insId, _cls!, l.feeType ?? '', double.tryParse(l.amount.text.trim()) ?? 0, allowed);
+    }
     try {
       final lineMaps = [
         for (final l in lines)
@@ -3429,6 +3818,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
         if (allowed != null && !allowed.contains(m['stuadmno'].toString())) continue;
         final con = (m['conamount'] as num?)?.toDouble() ?? 0;
         final paid = (m['paidamount'] as num?)?.toDouble() ?? 0;
+        if (amt + 0.005 < paid + con) continue; // already paid more: left as is (listed)
         final bal = (amt - con - paid) > 0 ? (amt - con - paid) : 0;
         await SupabaseService.rebuildDemand(
           (m['dem_id'] as num).toInt(),
@@ -3449,6 +3839,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
   Future<void> _copyFee() async {
     final lines = _lines.where((l) => l.feeType != null && l.amount.text.trim().isNotEmpty).toList();
     if (lines.isEmpty) return _snack(context, 'Enter fee amounts to copy.', AppColors.warning);
+    final dup = _firstDup(lines);
+    if (dup != null) return _dupSnack(dup.feeType!);
     if (isSchool) {
       for (final l in lines) {
         l.applyAll = true;
@@ -3460,6 +3852,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     final picked = await _pickTargetClasses();
     if (picked == null || picked.isEmpty) return;
     final targets = [for (final t in picked) ...(isSchool ? _sectionsOf(t) : [t])];
+    final byStd = isSchool && _stdSections.containsKey(_cls);
 
     final auth = context.read<AuthProvider>();
     setState(() => _saving = true);
@@ -3504,7 +3897,9 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
       context,
       fails.isEmpty
           ? copiedTicked
-              ? schoolTerm('Copied fees to $classesDone class(es) • $demTotal demand(s) staged.')
+              ? (byStd
+                  ? 'Copied fees to ${picked.length} standard(s) • $demTotal demand(s) staged.'
+                  : schoolTerm('Copied fees to $classesDone class(es) • $demTotal demand(s) staged.'))
               : schoolTerm('Copied fees to $classesDone class(es). No line is ticked ALL, so no student demands were created.')
           : 'Copied to $classesDone; could not copy to ${fails.length}. ${fails.first}',
       fails.isEmpty ? (copiedTicked ? AppColors.success : AppColors.warning) : AppColors.error,
@@ -3526,26 +3921,39 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
           // `picked` lives outside this builder -- so you can search, tick,
           // clear the search, search again and the earlier ticks survive.
           final q = copyQuery.trim().toLowerCase();
-          final options = _classNames.where((c) => c != _cls && (q.isEmpty || c.toLowerCase().contains(q))).toList();
+          // School: copy like to like. Fees set for a whole standard (Fee
+          // Demand By = Standard) go to other such standards; fees set for a
+          // section go to other section-wise sections only.
+          final byStd = isSchool && _stdSections.containsKey(_cls);
+          String shown(String c) => byStd ? c.replaceFirst(RegExp(r' - all sections$'), '') : c;
+          final options = _classNames
+              .where((c) => c != _cls && (!isSchool || _stdSections.containsKey(c) == byStd) && (q.isEmpty || shown(c).toLowerCase().contains(q)))
+              .toList();
           return AlertDialog(
-            title: Text(schoolTerm('Copy Fees to Classes'), style: AppUI.cardTitle),
+            title: Text(byStd ? 'Copy Fees to Standards' : schoolTerm('Copy Fees to Classes'), style: AppUI.cardTitle),
             content: SizedBox(
               width: 360.w,
               height: 360.h,
               child: options.isEmpty
-                  ? AppUI.empty(title: schoolTerm('No other classes'))
+                  ? AppUI.empty(
+                      title: byStd ? 'No other standards' : schoolTerm('No other classes'),
+                      why: !isSchool
+                          ? null
+                          : byStd
+                              ? 'Only standards whose Fee Demand By is Standard are listed.'
+                              : 'Only sections of standards whose Fee Demand By is Section are listed.')
                   : ListView(
                       children: [
                         Padding(
                           padding: EdgeInsets.only(bottom: 4.h),
-                          child: Text('From ${_cls ?? ''} • ${_sem ?? ''}${isSchool ? '' : ' • ${_admId == null ? 'All' : (_admName[_admId] ?? '')}'}', style: AppUI.muted),
+                          child: Text('From ${shown(_cls ?? '')} • ${_sem ?? ''}${isSchool ? '' : ' • ${_admId == null ? 'All' : (_admName[_admId] ?? '')}'}', style: AppUI.muted),
                         ),
                         Padding(
                           padding: EdgeInsets.only(bottom: 6.h),
                           child: TextField(
                             autofocus: true,
                             style: AppUI.fieldText(context),
-                            decoration: AppUI.field(context, schoolTerm('Search by class name'), leadingIcon: 'search-normal'),
+                            decoration: AppUI.field(context, byStd ? 'Search by standard name' : schoolTerm('Search by class name'), leadingIcon: 'search-normal'),
                             onChanged: (v) => setLocal(() => copyQuery = v),
                           ),
                         ),
@@ -3558,7 +3966,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                           CheckboxListTile(
                             dense: true,
                             value: picked.contains(c),
-                            title: Text(c, style: AppUI.body),
+                            title: Text(shown(c), style: AppUI.body),
                             controlAffinity: ListTileControlAffinity.leading,
                             onChanged: (v) => setLocal(() => v == true ? picked.add(c) : picked.remove(c)),
                           ),
@@ -3644,7 +4052,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
     final set = value != 3;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 6.w),
-      child: DropdownButtonFormField<int>(
+      child: AppDropdownField<int>(
         initialValue: labels.containsKey(value) ? value : 3,
         isExpanded: true,
         isDense: true,
@@ -3830,7 +4238,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 )),
                 SizedBox(width: 8.w),
                 Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: AppDropdownField<String>(
                   initialValue: _sem,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -3858,7 +4266,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 // No admission type on the school database.
                 if (!isSchool) ...[
                 Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: AppDropdownField<String>(
                   initialValue: _admId,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -3907,7 +4315,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 // School: Dayscholar/Hostler is chosen per fee line instead.
                 if (!isSchool) ...[
                 Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: AppDropdownField<String>(
                   key: ValueKey('hostel-${_effHostelFilter ?? 'all'}'),
                   initialValue: _effHostelFilter ?? 'all',
                   isExpanded: true,
@@ -3932,46 +4340,8 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                 )),
                 SizedBox(width: 8.w),
                 ],
-                // FEE GROUP -- narrows the fee-type picker, nothing else.
-                //
-                // Deliberately NOT part of the Class/Semester/Admission Type
-                // selection: those three identify WHICH saved records are being
-                // edited, so each calls _reloadGrid(). This one only decides
-                // which names the picker offers, so it must not reload the grid
-                // -- doing so would throw away amounts typed but not yet saved.
-                Expanded(
-                    child: DropdownButtonFormField<String>(
-                  initialValue: _fgFilter?.toString(),
-                  isExpanded: true,
-                  dropdownColor: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  elevation: 6,
-                  style: _fieldTextStyle(context),
-                  icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
-                  decoration: _filledFieldDec(context, 'Select fee group', filled: _fgFilter != null, leadingIcon: 'receipt-discount'),
-                  hint: Text('Select fee group',
-                      overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight)),
-                  items: [
-                    ..._feeGroups.map((g) => DropdownMenuItem(
-                          value: (g['fg_id'] as num?)?.toInt().toString(),
-                          child: Text(g['fgdesc']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis),
-                        )),
-                  ],
-                  selectedItemBuilder: (context) => [
-                    ..._feeGroups.map((g) => Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(g['fgdesc']?.toString() ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))),
-                  ],
-                  // Deliberately does NOT write to _hostelFilter. A HOSTELLERS
-                  // ONLY group pins the roster, but pinning it by assignment
-                  // was one-way: it set 'Y' and never let go, so switching
-                  // back to COLLEGE FEES left the box still reading
-                  // "Hostellers only" and quietly billed half the class.
-                  // _effHostelFilter derives the pin instead, so it reverts to
-                  // the user's own choice the moment the group changes.
-                  onChanged: (v) => setState(() => _fgFilter = v == null ? null : int.tryParse(v)),
-                )),
-                SizedBox(width: 8.w),
+                // No fee group selector (user, 2026-10-30): the fee-type picker
+                // offers every group's fee types.
                 Expanded(
                     child: FocusableTap(
                   onTap: () async {
@@ -3996,7 +4366,7 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
                     child: Text(
-                      _due == null ? 'Select pay on or before date' : _fmt(_due!),
+                      _due == null ? 'Select date' : _fmt(_due!),
                       overflow: TextOverflow.ellipsis,
                       style: _due == null ? AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight) : AppUI.fieldText(context, filled: true),
                     ),
@@ -4021,26 +4391,31 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
               children: [
                 // Mouse-only — kept out of Tab so the key moves through the
                 // input fields (pickers + amounts) and not the buttons.
-                ExcludeFocus(
-                    child: _modeButton(
-                        'New',
-                        Icons.add,
-                        !_editMode,
-                        () => setState(() {
-                              _editMode = false;
-                              _reloadGrid();
-                            }))),
-                SizedBox(width: 8.w),
-                ExcludeFocus(
-                    child: _modeButton(
-                        'Edit',
-                        Icons.edit,
-                        _editMode,
-                        () => setState(() {
-                              _editMode = true;
-                              _reloadGrid();
-                            }))),
-                SizedBox(width: 8.w),
+                // School: New only while nothing is saved, Edit only once it is.
+                if (!isSchool || !_hasSaved) ...[
+                  ExcludeFocus(
+                      child: _modeButton(
+                          'New',
+                          Icons.add,
+                          !_editMode,
+                          () => setState(() {
+                                _editMode = false;
+                                _reloadGrid();
+                              }))),
+                  SizedBox(width: 8.w),
+                ],
+                if (!isSchool || _hasSaved) ...[
+                  ExcludeFocus(
+                      child: _modeButton(
+                          'Edit',
+                          Icons.edit,
+                          _editMode,
+                          () => setState(() {
+                                _editMode = true;
+                                _reloadGrid();
+                              }))),
+                  SizedBox(width: 8.w),
+                ],
                 ExcludeFocus(
                   child: OutlinedButton.icon(
                     onPressed: _saving ? null : _copyFee,
@@ -4070,7 +4445,6 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                       if (isSchool) ...[
                         SizedBox(width: 120.w, child: Text('NEW / OLD', textAlign: TextAlign.center, style: _h())),
                         SizedBox(width: 120.w, child: Text('BOY / GIRL', textAlign: TextAlign.center, style: _h())),
-                        SizedBox(width: 170.w, child: Text('DAY SCHOLAR / HOSTELLER', textAlign: TextAlign.center, style: _h())),
                       ] else
                         SizedBox(width: 70.w, child: Text('ALL', textAlign: TextAlign.center, style: _h())),
                       SizedBox(width: 44.w, child: Text('', style: _h())),
@@ -4113,8 +4487,12 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                       key: ValueKey('ft-${l.uid}-${_fgFilter ?? 'all'}'),
                                       initialValue: TextEditingValue(text: l.feeType ?? ''),
                                       optionsBuilder: (v) {
+                                        // A saved row's fee type is locked (school, Edit).
+                                        if (isSchool && l.saved) return const Iterable<String>.empty();
                                         final q = v.text.trim().toLowerCase();
-                                        final pool = _pickableFeeTypes;
+                                        // Fee types already on another row for the same
+                                        // students are not offered again.
+                                        final pool = _pickableFeeTypes.where((e) => e == l.feeType || !_dupFee(l, e));
                                         // Empty box shows everything, so tapping it still
                                         // behaves like the dropdown it replaced.
                                         if (q.isEmpty) return pool;
@@ -4123,7 +4501,10 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                         // found by typing "id").
                                         return pool.where((e) => e.toLowerCase().contains(q));
                                       },
-                                      onSelected: (v) => setState(() => l.feeType = v),
+                                      onSelected: (v) {
+                                        if (_dupFee(l, v)) return _dupSnack(v);
+                                        setState(() => l.feeType = v);
+                                      },
                                       // TYPING ALONE MUST COUNT AS CHOOSING.
                                       //
                                       // Autocomplete only reports through onSelected --
@@ -4140,9 +4521,12 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                         canRequestFocus: false,
                                         skipTraversal: true,
                                         onFocusChange: (hasFocus) {
-                                          if (hasFocus) return;
+                                          if (hasFocus || (isSchool && l.saved)) return;
                                           final m = _matchFeeType(ctrl.text);
-                                          if (m != null) {
+                                          if (m != null && _dupFee(l, m)) {
+                                            _dupSnack(m);
+                                            ctrl.text = l.feeType ?? '';
+                                          } else if (m != null) {
                                             if (l.feeType != m) setState(() => l.feeType = m);
                                           } else {
                                             ctrl.text = l.feeType ?? '';
@@ -4151,13 +4535,14 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                         child: TextField(
                                           controller: ctrl,
                                           focusNode: focus,
+                                          readOnly: isSchool && l.saved,
                                           style: AppUI.fieldText(context, filled: true),
                                           decoration: InputDecoration(
                                             isDense: true,
                                             border: InputBorder.none,
                                             hintText: 'Search fee type',
                                             hintStyle: AppUI.fieldText(context).copyWith(fontWeight: FontWeight.w500, color: AppColors.textLight),
-                                            suffixIcon: Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
+                                            suffixIcon: isSchool && l.saved ? _lockedMark() : Icon(Icons.search, size: 16.sp, color: AppColors.textSecondary),
                                             suffixIconConstraints: BoxConstraints(minWidth: 22.w, minHeight: 22.h),
                                           ),
                                           // No setState: only _save() and the blur check
@@ -4165,14 +4550,20 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                           // the options list on every keystroke.
                                           onChanged: (v) {
                                             final m = _matchFeeType(v);
-                                            if (m != null) l.feeType = m;
+                                            if (m != null && !_dupFee(l, m)) l.feeType = m;
                                           },
                                           onSubmitted: (v) {
                                             final m = _matchFeeType(v);
+                                            if (m != null && _dupFee(l, m)) {
+                                              _dupSnack(m);
+                                              ctrl.text = l.feeType ?? '';
+                                              return;
+                                            }
                                             if (m != null) setState(() => l.feeType = m);
                                             onSubmit();
                                           },
                                           onTap: () {
+                                            if (isSchool && l.saved) return;
                                             if (ctrl.text.isNotEmpty) ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
                                           },
                                         ),
@@ -4204,6 +4595,12 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                       ),
                                     ),
                                   )),
+                              if (isSchool && l.feeType != null && _optional.contains(l.feeType!.trim()))
+                                Tooltip(
+                                  message: 'Optional fee: kept on this section but not raised for every student. '
+                                      'Add it per student in Fee Collection -> Fee Definition.',
+                                  child: AppUI.chip('Optional - not raised', AppStatus.warning),
+                                ),
                               SizedBox(width: 8.w),
                               SizedBox(
                                   width: 132.w,
@@ -4224,9 +4621,15 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                                       ),
                                       onChanged: (_) => setState(() {}))),
                               if (isSchool) ...[
-                                SizedBox(width: 120.w, child: _flagDrop(l.nob, _kNobLabels, (v) => setState(() => l.nob = v))),
-                                SizedBox(width: 120.w, child: _flagDrop(l.bgb, _kBgbLabels, (v) => setState(() => l.bgb = v))),
-                                SizedBox(width: 170.w, child: _flagDrop(l.dhb, _kDhbLabels, (v) => setState(() => l.dhb = v))),
+                                // Changing who a row is for may not make it repeat another row.
+                                SizedBox(width: 120.w, child: _flagDrop(l.nob, _kNobLabels, (v) {
+                                  if (_dupFee(l, l.feeType, nob: v)) return _dupSnack(l.feeType!);
+                                  setState(() => l.nob = v);
+                                })),
+                                SizedBox(width: 120.w, child: _flagDrop(l.bgb, _kBgbLabels, (v) {
+                                  if (_dupFee(l, l.feeType, bgb: v)) return _dupSnack(l.feeType!);
+                                  setState(() => l.bgb = v);
+                                })),
                               ] else
                               SizedBox(
                                   width: 70.w,
@@ -4278,12 +4681,14 @@ class _ClassFeeDemandPanelState extends State<_ClassFeeDemandPanel> with Automat
                         label: const Text('Add Row'),
                       ),
                       SizedBox(width: 12.w),
-                      Flexible(
+                      // Takes all the free width and wraps to a second line
+                      // rather than ending in "…".
+                      Expanded(
                           child: Text(isSchool
                                   ? 'Regular fees are raised for the students they apply to ("Both" = everyone). Optional fees are not; add them per student in Fee Collection > Fee Definition.'
                                   : schoolTerm('Tick ALL to raise this fee as a demand for every student — untick to keep it on the class template only'),
-                              overflow: TextOverflow.ellipsis, style: AppUI.muted)),
-                      const Spacer(),
+                              maxLines: 2, overflow: TextOverflow.ellipsis, style: AppUI.muted)),
+                      SizedBox(width: 12.w),
                       // Save writes every row, not just the visible ones, so the
                       // total stays the full one -- and says so while a group filter
                       // is hiding rows that are part of it.
@@ -4509,35 +4914,47 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) return const Center(child: CircularProgressIndicator());
-    return Padding(
-      padding: EdgeInsets.only(top: 8.h),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 340.w, child: _form()),
-          SizedBox(width: 16.w),
-          Expanded(child: _info()),
-        ],
-      ),
-    );
+    return SequenceUI.layout(form: _form(), list: _info());
   }
 
+  /// The form card every sequence screen shares (SequenceUI).
   Widget _form() {
     final exists = _seq != null;
-    return Container(
-      padding: EdgeInsets.all(AppUI.cardPad),
-      decoration: AppUI.card(),
-      child: FocusTraversalGroup(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppUI.cardHeader(
-              icon: 'tag',
-              title: '$_title Sequence',
-              subtitle: 'One $_title sequence for the whole institution',
-            ),
-            SizedBox(height: 20.h),
+    return SequenceUI.formCard(
+      title: '$_title Sequence',
+      subtitle: 'One $_title sequence for the whole institution',
+      preview: _prefixCtrl.text.trim().isEmpty ? null : _preview,
+      button: SequenceUI.saveButton(saving: _saving, editing: exists, onPressed: _save),
+      fields: [
+            // Concession No. (school): pick Regular or Arrear Concession --
+            // the same as clicking its row on the right (user, 2026-11-13).
+            if (_series.length > 1) ...[
+              _lbl('Concession Type'),
+              SizedBox(height: 6.h),
+              AppDropdownField<int>(
+                key: ValueKey('contype-$_active'),
+                initialValue: _active,
+                isExpanded: true,
+                dropdownColor: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                elevation: 6,
+                style: _fieldTextStyle(context),
+                icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+                decoration: _filledFieldDec(context, 'Select concession type', filled: true),
+                items: [
+                  for (var i = 0; i < _series.length; i++)
+                    DropdownMenuItem(
+                      value: i,
+                      child: Text(_series[i].$1 == 'ARRCONNO' ? 'Arrear Concession' : 'Regular Concession',
+                          style: AppUI.fieldText(context)),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v != null && v != _active) _select(v);
+                },
+              ),
+              SizedBox(height: 16.h),
+            ],
             _lbl('Prefix *'),
             SizedBox(height: 6.h),
             TextField(
@@ -4570,119 +4987,61 @@ class _DemandSequencePanelState extends State<_DemandSequencePanel> with Automat
               decoration: _filledFieldDec(context, 'e.g. 1', filled: _startCtrl.text.trim().isNotEmpty),
               onChanged: (_) => setState(() {}),
             ),
-            SizedBox(height: 12.h),
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-              decoration: BoxDecoration(color: AppColors.infoBg, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.info.withValues(alpha: 0.25))),
-              child: Row(children: [
-                Text('Preview:  ', style: AppUI.label.copyWith(color: AppColors.textSecondary)),
-                Expanded(
-                    child: Text(_prefixCtrl.text.trim().isEmpty ? 'Enter a prefix to see the preview' : _preview,
-                        style: AppUI.money.copyWith(fontWeight: FontWeight.w800, color: AppColors.primary), overflow: TextOverflow.ellipsis)),
-              ]),
-            ),
-            SizedBox(height: 18.h),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _saving ? null : _save,
-                icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Icon(exists ? Icons.save_rounded : Icons.add, size: 16),
-                label: Text(exists ? AppText.update : AppText.save),
-              ),
-            ),
-            SizedBox(height: 10.h),
-            AppUI.requiredNote(),
-          ],
-        ),
-      ),
+      ],
     );
   }
 
-  /// Right panel -- every series this frame manages (one, or Concession +
-  /// Arrear Concession), as a table; click a row to edit it on the left.
+  /// The list every sequence screen shares (SequenceUI). Edit loads the
+  /// series into the form (Concession: also its Arrear Concession series).
   Widget _info() {
-    TextStyle h() => AppUI.tableHead;
-    TextStyle c() => AppUI.cell;
     final multi = _series.length > 1;
-    final listTitle = multi ? 'Concession Sequences' : '${widget.title} Sequences';
-    final count = _series.where((sr) => _rows[sr.$1] != null).length;
-    Widget row(int i) {
-      final sr = _series[i];
-      final s = _rows[sr.$1];
-      final width = (s?['seqwidth'] as num?)?.toInt() ?? 5;
-      final start = (s?['seqstart'] as num?)?.toInt() ?? 1;
-      final prefix = s?['seqprefix']?.toString() ?? '';
-      final on = multi && i == _active;
-      return InkWell(
-        onTap: multi ? () => _select(i) : null,
-        child: Container(
-          decoration: BoxDecoration(
-            color: on ? AppColors.primaryLight : Colors.white,
-            border: const Border(bottom: BorderSide(color: AppColors.divider)),
-          ),
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-          child: Row(children: [
-            Expanded(
-                flex: 3,
-                child: Text(sr.$3,
-                    style: c().copyWith(fontWeight: on ? FontWeight.w800 : null, color: on ? AppColors.primary : null),
-                    overflow: TextOverflow.ellipsis)),
-            SizedBox(width: 90.w, child: Text(s == null ? '—' : prefix, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, color: AppColors.primary))),
-            SizedBox(
-                width: 120.w,
-                child: s == null
-                    ? Align(alignment: Alignment.centerLeft, child: AppUI.chip('Not set', AppStatus.warning))
-                    : Text('$prefix${start.toString().padLeft(width, '0')}', style: AppUI.label.copyWith(color: AppColors.primary))),
-            SizedBox(width: 100.w, child: Text(s == null ? '—' : '${(s['seqcurno'] as num?)?.toInt() ?? 0}', textAlign: TextAlign.right, style: c())),
-          ]),
-        ),
-      );
-    }
+    return SequenceUI.listCard(
+      title: multi ? 'Concession Sequences' : '${widget.title} Sequences',
+      loading: false,
+      count: _series.where((sr) => _rows[sr.$1] != null).length,
+      emptyTitle: 'No ${widget.title} sequence set up yet',
+      emptyWhy: 'Set a prefix and starting number on the left and save.',
+      hint: multi ? 'Click a row to edit it' : null,
+      rows: [
+        for (var i = 0; i < _series.length; i++)
+          if (multi || _rows[_series[i].$1] != null) _seqRow(i, multi),
+      ],
+    );
+  }
 
-    return Container(
-      padding: EdgeInsets.all(AppUI.cardPad),
-      decoration: AppUI.card(),
-      child: Column(
-        children: [
-          Padding(
-            padding: EdgeInsets.only(bottom: 12.h),
-            child: Row(children: [
-              AppUI.iconTile('tag'),
-              SizedBox(width: 12.w),
-              Text(listTitle, style: AppUI.cardTitle),
-              SizedBox(width: 10.w),
-              AppUI.chip('$count sequence${count == 1 ? '' : 's'}', AppStatus.info),
-              const Spacer(),
-              if (multi) Text('Click a row to edit it', style: AppUI.muted),
-            ]),
-          ),
-          Expanded(
-            child: Container(
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
-              child: Column(
-                children: [
-                  Container(
-                    color: AppColors.tableHeadBg,
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                    child: Row(children: [
-                      Expanded(flex: 3, child: Text('SEQUENCE', style: h())),
-                      SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
-                      SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
-                      SizedBox(width: 100.w, child: Text('LAST ISSUED', textAlign: TextAlign.right, style: h())),
-                    ]),
-                  ),
-                  Expanded(
-                    child: !multi && _rows[widget.actname] == null
-                        ? AppUI.empty(title: 'No ${widget.title} sequence set up yet', why: 'Set a prefix and starting number on the left and save.')
-                        : ListView(children: [for (var i = 0; i < _series.length; i++) row(i)]),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+  Future<void> _deleteSeries(int i) async {
+    final s = _rows[_series[i].$1];
+    if (s == null) return;
+    if (!await SequenceUI.confirmDelete(context,
+        name: _series[i].$3,
+        current: (s['seqcurno'] as num?)?.toInt() ?? 0,
+        start: (s['seqstart'] as num?)?.toInt() ?? 1)) {
+      return;
+    }
+    try {
+      await SupabaseService.deleteSchemaRow('sequence', 'seq_id', (s['seq_id'] as num).toInt());
+      if (mounted) _snack(context, '${_series[i].$3} sequence deleted.', AppColors.success);
+      await _load();
+    } catch (e) {
+      if (mounted) _snack(context, 'Could not delete the sequence. ${friendlyError(e)}', AppColors.error);
+    }
+  }
+
+  SeqRow _seqRow(int i, bool multi) {
+    final sr = _series[i];
+    final s = _rows[sr.$1];
+    final prefix = s?['seqprefix']?.toString() ?? '';
+    final width = (s?['seqwidth'] as num?)?.toInt() ?? 5;
+    final start = (s?['seqstart'] as num?)?.toInt() ?? 1;
+    final cur = (s?['seqcurno'] as num?)?.toInt() ?? 0;
+    return SeqRow(
+      name: sr.$3,
+      prefix: prefix,
+      next: s == null ? null : SequenceUI.nextNumber(affix: prefix, current: cur, start: start, width: width),
+      lastIssued: s == null ? '—' : SequenceUI.lastIssued(current: cur, start: start),
+      selected: multi && i == _active,
+      onEdit: () => _select(i),
+      onDelete: s == null ? null : () => _deleteSeries(i),
     );
   }
 }

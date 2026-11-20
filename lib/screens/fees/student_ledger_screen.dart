@@ -8,6 +8,7 @@ import '../../widgets/student_avatar.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
@@ -17,6 +18,7 @@ import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../../utils/formatters.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/save_path.dart';
 
 class StudentLedgerScreen extends StatefulWidget {
   const StudentLedgerScreen({super.key});
@@ -1052,7 +1054,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     final colHeaderStyle = xl.CellStyle(
       bold: true,
       fontSize: 13,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#1E2532'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
     final debitStyle = xl.CellStyle(
@@ -1066,7 +1068,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     final totalRowStyle = xl.CellStyle(
       bold: true,
       fontSize: 13,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#1E2532'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
@@ -1200,7 +1202,7 @@ class _StudentLedgerScreenState extends State<StudentLedgerScreen> {
     sheet.setColumnWidth(8, 13);
 
     // Save
-    final result = await FilePicker.platform.saveFile(
+    final result = await pickSavePath(
       dialogTitle: 'Save Student Ledger',
       fileName: 'Ledger_${s.stuadmno}_${s.stuname.replaceAll(' ', '_')}.xlsx',
       type: FileType.custom,

@@ -40,7 +40,6 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
   /// Fee groups the Misc Collection counter may collect under. Empty means no
   /// restriction -- every group that owns a fee type, which is what the screen
   /// did before this setting existed.
-  final Set<int> _miscFgs = {};
 
   /// fg_id -> the letterhead its receipts print. Empty fields mean "use the
   /// institution's", which is what the college groups do.
@@ -85,9 +84,6 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
         _advRoute[t] =
             int.tryParse((s[SupabaseService.advanceRouteKey(t)] ?? '').trim());
       }
-      _miscFgs
-        ..clear()
-        ..addAll(SupabaseService.miscFeeGroups(s));
       for (final g in groups) {
         final id = g['fg_id'] as int?;
         if (id == null) continue;
@@ -118,12 +114,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
             insId, SupabaseService.advanceRouteKey(t),
             _advRoute[t]?.toString() ?? '', by: auth.userName);
       }
-      await SupabaseService.setInstitutionSetting(
-          insId,
-          'misc_collection_fee_groups',
-          (_miscFgs.toList()..sort()).join(','),
-          by: auth.userName);
-      for (final id in _lhName.keys) {
+      for (final id in isSchool ? const <int>[] : _lhName.keys) {
         await SupabaseService.setInstitutionSetting(
             insId,
             SupabaseService.letterheadNameKey(id),
@@ -214,8 +205,9 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
               // counter (its advance fees have their own series), so the
               // settlement-group mapping is college only.
               if (!isSchool) SizedBox(width: cardW, child: _advanceSettlementCard()),
-              SizedBox(width: cardW, child: _miscCollectionCard()),
-              SizedBox(width: cardW, child: _letterheadCard()),
+              // A school's receipts always carry the institution's own name,
+              // address and logo (user, 2026-11-18).
+              if (!isSchool) SizedBox(width: cardW, child: _letterheadCard()),
             ],
           ),
           SizedBox(height: 24.h),
@@ -540,79 +532,6 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
     );
   }
 
-  Widget _miscCollectionCard() {
-    return _sectionCard(
-      chip: const AppIcon('tag', size: 17, color: AppColors.demand),
-      tint: AppColors.demand,
-      state: _miscFgs.isEmpty ? 'ALL GROUPS' : '${_miscFgs.length} GROUPS',
-      title: 'Miscellaneous Collection',
-      desc: 'Which fee groups the Miscellaneous Collection counter may collect under. '
-          'Tick none to allow every group that owns a fee type.',
-      // Chips, not a checkbox list: the groups are few and short, and they read
-      // as the row of chips the Misc counter itself shows.
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 8.w,
-            runSpacing: 8.h,
-            children: [
-              for (final g in _feeGroups)
-                _toggleChip(
-                  tint: AppColors.demand,
-                  label: (g['fgdesc']?.toString() ?? '').toUpperCase(),
-                  on: _miscFgs.contains(g['fg_id']),
-                  onTap: () => setState(() {
-                    final id = g['fg_id'] as int?;
-                    if (id == null) return;
-                    if (!_miscFgs.remove(id)) _miscFgs.add(id);
-                  }),
-                ),
-            ],
-          ),
-          if (_miscFgs.isEmpty) ...[
-            SizedBox(height: 10.h),
-            Text(
-                'Nothing picked — every group with a fee type is offered, '
-                'including the advance groups.',
-                style: AppUI.muted),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// A chip that is on or off. Used for the Misc Collection groups.
-  Widget _toggleChip(
-      {required String label,
-      required bool on,
-      required VoidCallback onTap,
-      Color tint = AppColors.accent}) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppUI.controlRadius),
-      onTap: _saving ? null : onTap,
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-        decoration: BoxDecoration(
-          color: on ? tint.withValues(alpha: 0.10) : Colors.white,
-          borderRadius: BorderRadius.circular(AppUI.controlRadius),
-          border: Border.all(
-              color: on ? tint : AppColors.border, width: on ? 1.3 : 1),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(on ? Icons.check_circle : Icons.circle_outlined,
-              size: 14.sp, color: on ? tint : AppColors.textLight),
-          SizedBox(width: 7.w),
-          Text(label,
-              style: AppUI.label.copyWith(
-                  fontSize: 12.sp,
-                  letterSpacing: 0.2,
-                  color: on ? tint : AppColors.textSecondary)),
-        ]),
-      ),
-    );
-  }
-
   Widget _advanceSettlementCard() {
     return _sectionCard(
       chip: const AppIcon('bank', size: 17, color: AppColors.success),
@@ -622,7 +541,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
       desc: 'Which fee group each kind of advance is banked under. The group '
           'decides the bank account (Setup → Fee Master → Fee Group) and, for an '
           'online payment, the Paytm merchant registered against that account '
-          '(Setup → Bank Accounts).',
+          '(Setup → Fee Master → Fee Group → Manage bank accounts).',
       child: Column(children: [
         _advRouteRow('M', 'Mess Advance',
             'Collected for the mess. Normally the hostel group.'),
@@ -658,7 +577,7 @@ class _UtilitiesScreenState extends State<UtilitiesScreen> {
               Expanded(
                 child: Text(
                     'No bank account is assigned to ${chosen['fgdesc']}, so advances '
-                    'routed there are not banked. Assign one in Setup → Bank Accounts.',
+                    'routed there are not banked. Assign one in Setup → Fee Master → Fee Group.',
                     style: AppUI.muted.copyWith(
                         fontWeight: FontWeight.w600,
                         color: AppColors.warning)),

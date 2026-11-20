@@ -6,6 +6,7 @@ import '../../utils/app_theme.dart';
 import '../../utils/tc_fields.dart';
 import '../../utils/tc_pdf.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Values used by "Test print" so the placed fields can be checked on paper.
 const Map<String, String> kTcPdfSamples = {
@@ -23,16 +24,32 @@ const Map<String, String> kTcPdfSamples = {
   'Standard in Words': 'Fifth',
 };
 
-/// PDF TC format: place each field on the page. Click the page to set a
-/// marker, pick a field and Add; drag a box to move it, drag its right edge
-/// to change the width, arrow keys nudge (Shift = 5 pt), Delete removes.
+/// PDF format (TC, fee receipt): place each field on the page. Click the page
+/// to set a marker, pick a field and Add; drag a box to move it, drag its
+/// right edge to change the width, arrow keys nudge (Shift = 5 pt), Delete
+/// removes. [keys]/[samples] default to the TC's; [listKey] is the field that
+/// prints as a list (the receipt's fee lines), [bookName] names the stationery.
 class TcPdfDesigner extends StatefulWidget {
   final Uint8List pdf;
   final TcPdfLayout layout;
   final Future<bool> Function(TcPdfLayout layout) onSave;
   final Future<void> Function(TcPdfLayout layout) onTest;
+  final List<String>? keys;
+  final Map<String, String>? samples;
+  final String? listKey;
+  final String bookName;
 
-  const TcPdfDesigner({super.key, required this.pdf, required this.layout, required this.onSave, required this.onTest});
+  const TcPdfDesigner({
+    super.key,
+    required this.pdf,
+    required this.layout,
+    required this.onSave,
+    required this.onTest,
+    this.keys,
+    this.samples,
+    this.listKey,
+    this.bookName = 'TC books',
+  });
 
   @override
   State<TcPdfDesigner> createState() => _TcPdfDesignerState();
@@ -75,7 +92,16 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
     super.dispose();
   }
 
-  List<String> get _allKeys => [for (final f in kTcFields) f.key, ...kTcPrintTimeKeys];
+  List<String> get _allKeys => widget.keys ?? [for (final f in kTcFields) f.key, ...kTcPrintTimeKeys];
+  Map<String, String> get _samples => widget.samples ?? kTcPdfSamples;
+
+  /// Rows the designer shows for a list block.
+  List<String> _listRows(TcPdfField f) {
+    final r = (_samples[f.key] ?? '').split('\n').where((l) => l.trim().isNotEmpty).toList();
+    return r.isEmpty ? [f.key] : r;
+  }
+
+  double _boxH(TcPdfField f) => f.isList ? f.rowH * _listRows(f).length : f.size * 1.35;
 
   TcPdfField? get _selField => _sel == null || _sel! >= _layout.fields.length ? null : _layout.fields[_sel!];
 
@@ -94,7 +120,9 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
     final at = _marker ?? Offset(40, 40 + 18.0 * _layout.fields.where((f) => f.page == _page).length);
     final w = (p.wPt - at.dx - 20).clamp(40.0, 260.0);
     _change(() {
-      _layout.fields.add(TcPdfField(key: key, page: _page, x: at.dx, y: at.dy, w: w));
+      _layout.fields.add(key == widget.listKey
+          ? TcPdfField(key: key, page: _page, x: at.dx, y: at.dy, w: (p.wPt - at.dx - 20).clamp(80.0, 400.0), size: 10, rowH: 16, amtW: 80)
+          : TcPdfField(key: key, page: _page, x: at.dx, y: at.dy, w: w));
       _sel = _layout.fields.length - 1;
       _marker = null;
     }, moved: true);
@@ -283,7 +311,7 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                 onPanUpdate: (d) => _change(() => sel.w = (sel.w + d.delta.dx / s).clamp(20.0, p.wPt), moved: true),
                 child: Container(
                   width: 10,
-                  height: (sel.size * 1.35 * s).clamp(12.0, 200.0),
+                  height: (_boxH(sel) * s).clamp(12.0, 2000.0),
                   decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(3)),
                 ),
               ),
@@ -320,20 +348,25 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
             waitDuration: const Duration(milliseconds: 600),
             child: Container(
               width: f.w * s,
+              height: f.isList ? _boxH(f) * s : null,
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: on ? 0.16 : 0.07),
                 border: Border.all(color: AppColors.primary.withValues(alpha: on ? 1 : 0.45), width: on ? 1.5 : 1),
               ),
-              child: Text(
-                kTcPdfSamples[f.key] ?? f.key,
-                maxLines: 1,
-                overflow: TextOverflow.clip,
-                textAlign: f.align == 'center' ? TextAlign.center : (f.align == 'right' ? TextAlign.right : TextAlign.left),
-                style: TextStyle(
-                  fontSize: f.size * s,
-                  height: 1.2,
-                  fontWeight: f.bold ? FontWeight.w700 : FontWeight.w400,
-                  color: AppColors.textPrimary,
+              // A long value shrinks to the box width, as it prints.
+              child: f.isList ? _listPreview(f, s) : FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: f.align == 'center' ? Alignment.center : (f.align == 'right' ? Alignment.centerRight : Alignment.centerLeft),
+                child: Text(
+                  _samples[f.key] ?? f.key,
+                  maxLines: 1,
+                  textAlign: f.align == 'center' ? TextAlign.center : (f.align == 'right' ? TextAlign.right : TextAlign.left),
+                  style: TextStyle(
+                    fontSize: f.size * s,
+                    height: 1.2,
+                    fontWeight: f.bold ? FontWeight.w700 : FontWeight.w400,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
               ),
             ),
@@ -341,6 +374,30 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
         ),
       ),
     );
+  }
+
+  Widget _listPreview(TcPdfField f, double s) {
+    final st = TextStyle(fontSize: f.size * s, height: 1.2, fontWeight: f.bold ? FontWeight.w700 : FontWeight.w400, color: AppColors.textPrimary);
+    final amtW = f.amtW.clamp(0.0, f.w) * s;
+    // the box's border takes a pixel or two: the rows are clipped, not overflowed
+    return ClipRect(
+        child: OverflowBox(
+            alignment: Alignment.topLeft,
+            maxHeight: double.infinity,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      for (final l in _listRows(f))
+        SizedBox(
+          height: f.rowH * s,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: Text(l.split('\t').first, maxLines: 1, overflow: TextOverflow.clip, style: st)),
+            if (amtW > 0)
+              SizedBox(
+                width: amtW,
+                child: Text(l.contains('\t') ? l.split('\t').last : '', maxLines: 1, textAlign: TextAlign.right, overflow: TextOverflow.clip, style: st),
+              ),
+          ]),
+        ),
+    ])));
   }
 
   // ── the side panel ────────────────────────────────────────────────────
@@ -362,16 +419,63 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               style: AppUI.muted,
             ),
             const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: _addKey,
-              isExpanded: true,
-              decoration: AppUI.field(context, 'Select field', dense: true),
-              style: AppUI.fieldText(context),
-              items: [
-                for (final k in _allKeys) DropdownMenuItem(value: k, child: Text('{$k}', overflow: TextOverflow.ellipsis)),
-                const DropdownMenuItem(value: _custom, child: Text('Other field (type a name)...')),
-              ],
-              onChanged: (v) => setState(() => _addKey = v),
+            // TYPE TO FIND IT: the list runs to 70-odd fields, so a plain
+            // dropdown meant scrolling for each one. Matches the field name
+            // or its on-screen label ("Date of Birth" finds {DOB}).
+            LayoutBuilder(
+              builder: (context, box) => Autocomplete<String>(
+                initialValue: TextEditingValue(text: _addKey == null || _addKey == _custom ? '' : '{$_addKey}'),
+                displayStringForOption: (k) => k == _custom ? '' : '{$k}',
+                optionsBuilder: (v) {
+                  final q = v.text.trim().toLowerCase().replaceAll(RegExp(r'[{}]'), '');
+                  final hits = _allKeys.where((k) => q.isEmpty || k.toLowerCase().contains(q) || tcFieldLabel(k).toLowerCase().contains(q));
+                  return [...hits, if (widget.keys == null) _custom];
+                },
+                onSelected: (k) => setState(() => _addKey = k),
+                fieldViewBuilder: (context, ctl, focus, onSubmit) => TextField(
+                  controller: ctl,
+                  focusNode: focus,
+                  style: AppUI.fieldText(context),
+                  decoration: AppUI.field(context, 'Search field, e.g. name, date of birth', leadingIcon: 'search-normal', dense: true),
+                  // Typing over a chosen field un-chooses it until a new one is picked.
+                  onChanged: (t) {
+                    if (_addKey != null && _addKey != _custom && t != '{$_addKey}') setState(() => _addKey = null);
+                  },
+                  onSubmitted: (_) => onSubmit(),
+                ),
+                optionsViewBuilder: (context, onSelected, options) => Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 6,
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppUI.controlRadius),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: 320, maxWidth: box.maxWidth),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        shrinkWrap: true,
+                        itemCount: options.length,
+                        itemBuilder: (context, i) {
+                          final k = options.elementAt(i);
+                          final label = tcFieldLabel(k);
+                          return InkWell(
+                            onTap: () => onSelected(k),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              child: k == _custom
+                                  ? Text('Other field (type a name)...', style: AppUI.body.copyWith(color: AppColors.primary))
+                                  : Row(children: [
+                                      Expanded(child: Text('{$k}', style: AppUI.body, overflow: TextOverflow.ellipsis)),
+                                      if (label != k) Text(label, style: AppUI.muted, overflow: TextOverflow.ellipsis),
+                                    ]),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
             if (_addKey == _custom) ...[
               const SizedBox(height: 8),
@@ -402,6 +506,16 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                 const SizedBox(width: 8),
                 _num('Font Size', f.size, (v) => f.size = v.clamp(5, 48)),
               ]),
+              if (f.isList) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  _num('Line Gap (pt)', f.rowH, (v) => f.rowH = v.clamp(6, 100)),
+                  const SizedBox(width: 8),
+                  _num('Amount Width (pt)', f.amtW, (v) => f.amtW = v.clamp(0, f.w)),
+                ]),
+                const SizedBox(height: 6),
+                Text('One line per fee. The amount prints right-aligned in the last part of the box (0 = no amount).', style: AppUI.muted),
+              ],
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
@@ -470,8 +584,28 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
               value: _layout.background,
               onChanged: (v) => _change(() => _layout.background = v),
               title: Text('Print Form Background', style: AppUI.label),
-              subtitle: Text('Turn off for TC books that already have the form printed -- only the values print.', style: AppUI.muted),
+              subtitle: Text('Turn off for ${widget.bookName} that already have the form printed -- only the values print.', style: AppUI.muted),
             ),
+            const SizedBox(height: 8),
+            AppUI.fieldLabel('Paper Size'),
+            AppDropdownField<String>(
+              initialValue: _layout.paper,
+              isExpanded: true,
+              decoration: AppUI.field(context, '', dense: true),
+              style: AppUI.fieldText(context),
+              items: [for (final e in kTcPapers.entries) DropdownMenuItem(value: e.key, child: Text(e.value.$1))],
+              onChanged: (v) => _change(() => _layout.paper = v ?? 'FORMAT'),
+            ),
+            const SizedBox(height: 12),
+            AppUI.sectionLabel('Printer Adjustment (mm)'),
+            Row(children: [
+              _mm('Move Right', _layout.offX, (v) => _layout.offX = v),
+              const SizedBox(width: 8),
+              _mm('Move Down', _layout.offY, (v) => _layout.offY = v),
+            ]),
+            const SizedBox(height: 6),
+            Text('If every value prints a little off on the ${widget.bookName}, shift them all here: e.g. 3 = 3 mm right / down, '
+                '-2 = 2 mm left / up. Field places on the page above stay as they are.', style: AppUI.muted),
           ]),
         ),
         const Divider(height: 1),
@@ -493,6 +627,27 @@ class _TcPdfDesignerState extends State<TcPdfDesigner> {
                   : const Text('Save Layout'),
             ),
           ]),
+        ),
+      ]),
+    );
+  }
+
+  /// A signed mm box (the printer adjustment), -50..50.
+  Widget _mm(String label, double v, void Function(double) set) {
+    final txt = v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+    return Expanded(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        AppUI.fieldLabel(label),
+        TextFormField(
+          initialValue: txt,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^-?[0-9]*\.?[0-9]*'))],
+          decoration: AppUI.field(context, '0', dense: true),
+          style: AppUI.fieldText(context),
+          onChanged: (t) {
+            final d = t.trim().isEmpty || t.trim() == '-' ? 0.0 : double.tryParse(t);
+            if (d != null) _change(() => set(d.clamp(-50, 50).toDouble()));
+          },
         ),
       ]),
     );

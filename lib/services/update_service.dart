@@ -21,20 +21,18 @@ class UpdateInfo {
 /// Checks a hosted manifest for a newer app version. Never throws — a failed
 /// check simply returns null so the app is never blocked by the update system.
 class UpdateService {
-  /// Public Supabase Storage object. Bucket `app-updates`, file `latest.json`.
-  static const String manifestUrl =
-      'https://exasnbapvgfeooxyxjas.supabase.co/storage/v1/object/public/app-updates/latest.json';
+  /// One source for every school, one Supabase project per school: the app
+  /// reads the update manifest from the project IT IS CONNECTED TO (compiled
+  /// default or config.json) -- bucket `app-updates`, file
+  /// `latest-windows.json` (user, 2026-11-13). A school is offered an update
+  /// only when its own project holds a manifest AND the installer it names;
+  /// a school (or the test project) nobody uploaded to stays where it is.
+  static String get manifestUrl =>
+      '${_base()}/storage/v1/object/public/app-updates/latest-windows.json';
+
+  static String _base() => SupabaseConfig.url.replaceAll(RegExp(r'/+$'), '');
 
   static Future<UpdateInfo?> checkForUpdate() async {
-    // A build pointed at some project OTHER than production never updates
-    // itself. [manifestUrl] is a fixed LIVE address -- it does not follow
-    // config.json -- so without this a TEST machine would be offered, and
-    // with "mandatory" forced, the live installer. That is the opposite of
-    // what a test machine is for: it must stay on the build being tested.
-    //
-    // Same switch that gates the device-activation bypass, so "this build is
-    // not production" is decided in exactly one place.
-    if (!SupabaseConfig.isDefaultProject) return null;
     try {
       // Cache-bust so a freshly-published manifest is seen immediately.
       final uri = Uri.parse('$manifestUrl?t=${DateTime.now().millisecondsSinceEpoch}');
@@ -48,6 +46,10 @@ class UpdateService {
       final current = (await PackageInfo.fromPlatform()).version; // from pubspec version
       if (!_isNewer(latest, current)) return null;
 
+      // A valid installer for THIS school: an .exe on this school's own
+      // project that is really there. Anything else is not offered.
+      if (!await _installerExists(url)) return null;
+
       return UpdateInfo(
         version: latest,
         url: url,
@@ -56,6 +58,25 @@ class UpdateService {
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  /// [url] is an .exe on the connected project's own storage, and it exists.
+  static Future<bool> _installerExists(String url) async {
+    final u = Uri.tryParse(url);
+    final base = Uri.tryParse(_base());
+    if (u == null || base == null) return false;
+    if (u.scheme != 'https' || u.host.toLowerCase() != base.host.toLowerCase()) return false;
+    if (!u.path.toLowerCase().endsWith('.exe')) return false;
+    try {
+      final head = await http.head(u).timeout(const Duration(seconds: 8));
+      if (head.statusCode == 200) return true;
+      if (head.statusCode != 405) return false;
+      // No HEAD here: ask for the first byte instead of the whole installer.
+      final get = await http.get(u, headers: {'Range': 'bytes=0-0'}).timeout(const Duration(seconds: 8));
+      return get.statusCode == 200 || get.statusCode == 206;
+    } catch (_) {
+      return false;
     }
   }
 

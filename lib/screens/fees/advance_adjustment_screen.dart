@@ -12,6 +12,7 @@ import '../../utils/friendly_error.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../utils/school_terms.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Advance Adjustment (Fees → Advance Adjustment).
 ///
@@ -616,7 +617,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
             width: 210.w,
             child: _labeled(
                 schoolTerm('Course'),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   key: ValueKey('adjc-${_course ?? ''}'),
                   initialValue: _courseNames.contains(_course) ? _course : null,
                   isExpanded: true,
@@ -641,7 +642,7 @@ class _AdvanceAdjustmentScreenState extends State<AdvanceAdjustmentScreen> {
             width: 190.w,
             child: _labeled(
                 schoolTerm('Class'),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   key: ValueKey('adjcl-${_course ?? ''}-${_className ?? ''}'),
                   initialValue:
                       _classesFor(_course).contains(_className) ? _className : null,

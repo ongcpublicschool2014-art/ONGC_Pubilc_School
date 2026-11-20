@@ -54,8 +54,8 @@ class LedgerRow {
 ///   * `demfeeterm` (String) — semester / month label.
 ///   * `demfeetype` (String) — fee type label.
 ///   * `feeamount` (num) — debit amount.
-///   * `paidamount` (num) — collected amount.
-///   * `fineamount` (num) — fine portion of the payment.
+///   * `paidamount` (num) — FEE collected (the fine is not in it).
+///   * `fineamount` (num) — fine collected on top of the fee.
 ///   * `balancedue` (num) — pre-reconciliation outstanding.
 ///   * `reconbalancedue` (num) — post-reconciliation outstanding. When
 ///     present and `<= 0`, the row is treated as fully reconciled and a
@@ -103,7 +103,8 @@ List<LedgerRow> buildLedgerRows(List<Map<String, dynamic>> demands) {
         feetype: isPartial ? 'Partial Payment ($payMethod)' : 'Payment ($payMethod)',
         reference: d['demno']?.toString() ?? d['dem_id']?.toString() ?? '-',
         debit: balance,
-        credit: paidAmount - fine,
+        // paidamount is fee only (school_fine_model.sql, 2026-11-05).
+        credit: paidAmount,
         fine: fine,
         type: 'payment',
       ));
@@ -122,8 +123,8 @@ List<LedgerRow> buildLedgerRows(List<Map<String, dynamic>> demands) {
 }
 
 /// Aggregate totals matching the Demand / Paid / Pending cards in the
-/// Student Ledger header. Paid is the reconciled portion (paidamount-fineamount
-/// when reconbalancedue ≤ 0); Pending is reconbalancedue (or balancedue fallback).
+/// Student Ledger header. Paid is the reconciled portion (paidamount -- fee
+/// only -- when reconbalancedue ≤ 0); Pending is reconbalancedue (or balancedue fallback).
 class LedgerTotals {
   final double demand;
   final double paid;
@@ -148,7 +149,7 @@ LedgerTotals computeLedgerTotals(List<Map<String, dynamic>> demands) {
     final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
     final isReconciled = reconBal <= 0;
     demand += amt;
-    paid += isReconciled ? (pa - fa) : 0;
+    paid += isReconciled ? pa : 0;
     fine += isReconciled ? fa : 0;
     pending += reconBal;
   }

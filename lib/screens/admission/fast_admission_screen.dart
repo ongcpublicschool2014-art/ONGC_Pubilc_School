@@ -7,12 +7,15 @@ import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/mobile_rules.dart';
+import '../../utils/reg_sequence.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
 import '../../services/admission_service.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/focusable_tap.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Fast Admission — spreadsheet-style bulk entry. Each row is a quick admission
 /// captured into public.admission (PENDING); allocate classes later in the
@@ -67,6 +70,11 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   /// the sequence hands the column back for manual entry.
   bool get _regNoLocked => _selectedRegSeqId != null;
 
+  /// Sequences are kept division-wise: each row is numbered from the sequence
+  /// of its own standard's division, not from one sequence for the batch.
+  bool get _byDivision => isSchool && _regNoLocked && regSeqDivisionWise(_regSeqs);
+  RegSeqChoice _choiceFor(_FastRow r) => regSeqFor(_regSeqs, _divisionOfCourse(r.course) ?? r.division);
+
   /// Every row in THIS batch is a pre-admission: seat booked now, studies from
   /// next year.
   ///
@@ -79,6 +87,9 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   /// ignores case and spacing. CANCELLED admissions are excluded — their number
   /// is free to reuse, same rule as Admission Entry.
   Set<String> _takenRegNos = <String>{};
+  /// EMIS No. / APAAR ID already on an admission or a student of this year,
+  /// mapped to the admission no. holding it. One ID belongs to one child.
+  Map<String, String> _takenEmis = <String, String>{};
   // Single-letter flag, same style as the gender column.
   static const _parentOptions = {'F': 'Father', 'M': 'Mother', 'G': 'Guardian'};
 
@@ -98,7 +109,6 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   List<Map<String, dynamic>> _courseList = []; // {cour_id, courname}
   /// Division master (div_id -> name).
   Map<int, String> _divById = {};
-  List<String> get _divisions => (_divById.values.where((s) => s.isNotEmpty).toSet().toList()..sort());
   /// The division of a standard (course.div_id), or null.
   String? _divisionOfCourse(String? courname) {
     if (courname == null) return null;
@@ -137,13 +147,14 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   List<Map<String, dynamic>> _admTypes = [];
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _regSeqs = [];
+  Map<String, dynamic>? _generalCon; // GENERAL concession category, saved on every row
   String? _selectedYrLabel;
   String? _selectedRegSeqId;
   String? _lastRegNo; // last admission reg no — shown inline next to the label
   bool _loading = true;
   bool _saving = false;
 
-  static const _sexOptions = {'M': 'Male', 'F': 'Female', 'T': 'Other'};
+  static Map<String, String> get _sexOptions => {'M': kBoyLabel, 'F': kGirlLabel, 'T': 'Other'};
 
   @override
   void initState() {
@@ -232,10 +243,19 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         // there are already more than PostgREST's 1000-row page.
         SupabaseService.fetchAll(() => SupabaseService.client
             .from('admission')
-            .select('admno')
+            .select('admno, emisno')
             .eq('ins_id', insId)
             .neq('admstatus', 'CANCELLED')),
         SupabaseService.fromSchema('division').select('div_id, divname').eq('ins_id', insId).eq('activestatus', 1)
+            .then((v) => v, onError: (_) => <dynamic>[]),
+        // This year's students' EMIS / APAAR IDs (also edited on the EMIS /
+        // APAAR ID screen, so not only on the admission row).
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+                .select('stuadmno, emisno').eq('ins_id', insId).not('emisno', 'is', null))
+            .then((v) => v, onError: (_) => <Map<String, dynamic>>[]),
+        // The GENERAL concession category: every fast admission gets it
+        // (user, 2026-11-16) -- there is no concession field on this screen.
+        SupabaseService.fromSchema('concessioncategory').select('con_id, condesc').eq('ins_id', insId).eq('activestatus', 1)
             .then((v) => v, onError: (_) => <dynamic>[]),
       ]));
       if (!mounted) return;
@@ -245,6 +265,10 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         _admTypes = List<Map<String, dynamic>>.from(results[2] as List);
         _years = results[3] as List<Map<String, dynamic>>;
         _regSeqs = List<Map<String, dynamic>>.from(results[4] as List);
+        _generalCon = [
+          for (final c in (results[8] as List))
+            if ('${(c as Map)['condesc'] ?? ''}'.trim().toUpperCase() == 'GENERAL') Map<String, dynamic>.from(c),
+        ].firstOrNull;
         _divById = {
           for (final e in (results[6] as List))
             if ((e as Map)['div_id'] != null) (e['div_id'] as num).toInt(): '${e['divname'] ?? ''}'.trim(),
@@ -253,6 +277,13 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
             .map((e) => (e['admno']?.toString() ?? '').trim().toUpperCase())
             .where((e) => e.isNotEmpty)
             .toSet();
+        _takenEmis = {
+          for (final e in [
+            ...List<Map<String, dynamic>>.from(results[7] as List).map((r) => (r['emisno'], r['stuadmno'])),
+            ...List<Map<String, dynamic>>.from(results[5] as List).map((r) => (r['emisno'], r['admno'])),
+          ])
+            if ('${e.$1 ?? ''}'.trim().isNotEmpty) '${e.$1}'.trim(): '${e.$2 ?? ''}'.trim(),
+        };
         if (_years.isNotEmpty) {
           _selectedYrLabel = _years.first['yrlabel']?.toString();
         }
@@ -299,11 +330,12 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     return int.parse(m.group(2)!) <= int.parse(m.group(1)!);
   }
 
-  /// A mobile number is 10 digits exactly (the field already accepts digits
-  /// only, so this is purely a length rule).
+  /// The row's parent mobile is its Pay In Charge mobile, which links brothers
+  /// and sisters to one parent record -- so it must be a real number: 10
+  /// digits starting 6-9, not a placeholder such as 9999999999.
   bool _mobileBad(String v) {
     final t = v.trim();
-    return t.isNotEmpty && t.length != 10;
+    return t.isNotEmpty && !isRealMobile(t);
   }
 
   /// A typed register number must not belong to an existing admission, nor be
@@ -318,6 +350,18 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         !identical(o, row) && o.regNo.text.trim().toUpperCase() == v);
   }
 
+
+  /// An EMIS No. / APAAR ID identifies one child: it must not be on an
+  /// existing admission or student, nor repeated on another row of this grid.
+  /// Returns why (for the Save All message), or null when it is fine.
+  String? _emisDupe(_FastRow row) {
+    final v = row.emisNo.text.trim();
+    if (v.isEmpty) return null;
+    final owner = _takenEmis[v];
+    if (owner != null) return owner.isEmpty ? 'already used' : 'already used by $owner';
+    final other = _rows.indexWhere((o) => !identical(o, row) && o.emisNo.text.trim() == v);
+    return other < 0 ? null : 'repeated on row ${other + 1}';
+  }
 
   int _seqNext(Map<String, dynamic> seq) {
     final cur = (seq['seqcurno'] as num?)?.toInt() ?? 0;
@@ -408,7 +452,6 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       if (r.course == null) miss.add(schoolTerm('Course'));
       // School: optional -- Section Allocation places the student.
       if (!isSchool && r.cls == null) miss.add(schoolTerm('Class'));
-      if (isSchool && r.division == null) miss.add('Division');
       // A school has no admission type / batch.
       if (!isSchool && r.admType == null) miss.add('Admission Type');
       if (!isSchool && r.batch.text.trim().isEmpty) miss.add('Batch');
@@ -418,9 +461,14 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       // Same rules Admission Entry applies, checked here so a bad value is
       // caught before the batch is written rather than by the database.
       if (_regNoBad(r)) miss.add(schoolTerm('Register No (already used)'));
+      if (_byDivision && r.course != null && _choiceFor(r).blocked) miss.add(_choiceFor(r).notice!);
       if (!isSchool && _batchBad(r.batch.text)) miss.add('Batch (YYYY-YYYY)');
-      if (_mobileBad(r.parentMobile.text)) miss.add('Mobile (10 digits)');
+      if (_mobileBad(r.parentMobile.text)) {
+        miss.add('${_parentOptions[r.parentType] ?? 'Parent'} Mobile (a real 10-digit number starting 6-9, not 9999999999)');
+      }
       if (emisInvalid(r.emisNo.text)) miss.add('EMIS No. / APAAR ID (12 digits)');
+      final emisDupe = _emisDupe(r);
+      if (emisDupe != null) miss.add('EMIS No. / APAAR ID ($emisDupe)');
       if (miss.isNotEmpty) problems.add('Row ${_rows.indexOf(r) + 1}: ${miss.join(', ')}');
     }
     if (problems.isNotEmpty) {
@@ -437,20 +485,29 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     var seqN = seq.isEmpty ? 0 : _seqNext(seq); // running admission number, advanced per saved row
     var claimedAny = false; // any number handed out by claim_reg_no
     final failures = <String>[];
+    // Rows the server accepted. They leave the grid even when others fail:
+    // left in place, the next Save inserted them a second time (each with a
+    // fresh admission number, so nothing caught the duplicates).
+    final saved = <_FastRow>[];
+    // Rows numbered from the general sequence because their division has none.
+    final seqNotes = <String>{};
     for (final r in entries) {
       try {
+        // Division-wise: this row's own sequence.
+        final rowSeq = _byDivision ? (_choiceFor(r).seq ?? seq) : seq;
+        if (_byDivision && _choiceFor(r).notice != null) seqNotes.add(_choiceFor(r).notice!);
         // Manual register no overrides the auto sequence when entered.
         final manualRegNo = _regNoLocked ? '' : r.regNo.text.trim();
         // Each auto-numbered row claims its own number on the server, so a
         // batch and another operator's entry never collide.
         String? claimed;
         // School: the number is assigned inside save_admission (below).
-        final serverNumbers = isSchool && manualRegNo.isEmpty && seq.isNotEmpty;
+        final serverNumbers = isSchool && manualRegNo.isEmpty && rowSeq.isNotEmpty;
         if (!serverNumbers && manualRegNo.isEmpty && seq.isNotEmpty) {
           claimed = await AdmissionService.claimRegNo(int.parse(seq['seq_id'].toString()));
           if (claimed != null) claimedAny = true;
         }
-        var admno = manualRegNo.isNotEmpty ? manualRegNo : (claimed ?? _seqFormat(seq, seqN));
+        var admno = manualRegNo.isNotEmpty ? manualRegNo : (claimed ?? _seqFormat(rowSeq, seqN));
         final data = <String, dynamic>{
           'ins_id': auth.insId ?? 1,
           'inscode': auth.inscode ?? '',
@@ -461,6 +518,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           'preadmission': _preAdmission ? 1 : 0,
           'stuname': r.name.text.trim(),
           'stugender': r.sex,
+          if (_generalCon != null) 'con_id': _generalCon!['con_id'],
+          if (_generalCon != null) 'stucondesc': _generalCon!['condesc'],
           'studob': r.dob?.toIso8601String().split('T').first,
           'courname': r.course,
           'stuclass': r.cls,
@@ -482,7 +541,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         };
         final int admId;
         if (serverNumbers) {
-          final res = await AdmissionService.addAdmissionNumbered(data, int.parse(seq['seq_id'].toString()));
+          final res = await AdmissionService.addAdmissionNumbered(data, int.parse(rowSeq['seq_id'].toString()));
           admId = res.admId;
           admno = res.admno;
           claimedAny = true; // the server moved the counter: no end-of-batch bump
@@ -506,6 +565,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         }
         if (manualRegNo.isEmpty) seqN++; // advance sequence only when it was used
         done++;
+        saved.add(r);
       } catch (e) {
         failures.add('${r.name.text.trim()}: ${friendlyError(e)}');
       }
@@ -524,7 +584,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     _refreshLastRegNo();
 
     if (failures.isEmpty) {
-      _snack('$done ${done == 1 ? 'admission' : 'admissions'} saved.', AppColors.success);
+      _snack('$done ${done == 1 ? 'admission' : 'admissions'} saved.${seqNotes.isEmpty ? '' : ' ${seqNotes.first}'}',
+          seqNotes.isEmpty ? AppColors.success : AppColors.warning);
       // reset to fresh blank rows
       for (final r in _rows) {
         r.dispose();
@@ -536,6 +597,15 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       });
       _load();
     } else {
+      // Keep only the rows that did NOT save, so Save again sends just those.
+      setState(() {
+        for (final r in saved) {
+          _rows.remove(r);
+          r.dispose();
+        }
+        if (_rows.isEmpty) _rows.add(_FastRow());
+      });
+      if (done > 0) _load();
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -546,7 +616,15 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
-                children: [for (final f in failures) Padding(padding: EdgeInsets.only(bottom: 4.h), child: Text('• $f', style: TextStyle(fontSize: 12.sp, color: AppColors.error)))],
+                children: [
+                  if (done > 0)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: 8.h),
+                      child: Text('The $done saved ${done == 1 ? 'row has' : 'rows have'} been removed from the grid. '
+                          'Correct the rows still shown and press Save again.', style: AppUI.body),
+                    ),
+                  for (final f in failures) Padding(padding: EdgeInsets.only(bottom: 4.h), child: Text('• $f', style: TextStyle(fontSize: 12.sp, color: AppColors.error))),
+                ],
               ),
             ),
           ),
@@ -566,7 +644,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   static const _wCol = 130.0;
   static const _wRegNo = _wCol, _wName = _wCol, _wSex = _wCol, _wCourse = _wCol,
       _wClass = _wCol, _wType = _wCol, _wBatch = _wCol, _wDob = _wCol,
-      _wPtype = _wCol, _wFather = _wCol, _wFmob = _wCol, _wEmis = _wCol, _wDiv = _wCol;
+      _wPtype = _wCol, _wFather = _wCol, _wFmob = _wCol, _wEmis = _wCol;
 
   /// The trailing remove-row button. Narrow: it is an icon, not a field.
   static const _wKill = 46.0;
@@ -604,7 +682,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                               // the screen is very narrow do we stop shrinking
                               // and allow horizontal scroll (with a visible bar).
                               // School: no ADM TYPE / BATCH columns.
-                              final baseSum = _wRegNo + _wName + _wSex + _wCourse + _wClass + (isSchool ? _wDiv : _wType + _wBatch) + _wDob + _wPtype + _wFather + _wFmob + _wEmis + _wKill + 32;
+                              final baseSum = _wRegNo + _wName + _wSex + _wCourse + _wClass + (isSchool ? 0 : _wType + _wBatch) + _wDob + _wPtype + _wFather + _wFmob + _wEmis + _wKill + 32;
                               final viewport = constraints.maxWidth;
                               final ratio = viewport / baseSum;
                               final scale = ratio < 0.7 ? 0.7 : ratio;
@@ -707,11 +785,23 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     );
   }
 
-  Widget _regSeqDropdown() => Tooltip(
+  /// Division-wise there is nothing to pick: each row follows its standard.
+  Widget _regSeqDropdown() {
+    if (!_byDivision) return _regSeqPicker();
+    return Tooltip(
+      message: "Each row is numbered from the sequence of its standard's division",
+      child: InputDecorator(
+        decoration: _topBarDec(filled: true),
+        child: Text('By division', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)),
+      ),
+    );
+  }
+
+  Widget _regSeqPicker() => Tooltip(
       message: _seqPickerEnabled
           ? schoolTerm('Register numbers come from this sequence')
           : schoolTerm('Admission number mode is Manual in Utilities — type the Register No on each row'),
-      child: DropdownButtonFormField<String>(
+      child: AppDropdownField<String>(
         initialValue: _selectedRegSeqId,
         isExpanded: true,
         dropdownColor: Colors.white,
@@ -905,7 +995,6 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           // ' *' marks a column every filled row must have.
           c(schoolTerm('REGISTER NO'), _wRegNo), c('STUDENT NAME *', _wName), c('GENDER *', _wSex), c(schoolTerm('COURSE *'), _wCourse),
           c(schoolTerm(isSchool ? 'CLASS' : 'CLASS *'), _wClass),
-          if (isSchool) c('DIVISION *', _wDiv),
           if (!isSchool) ...[c('ADMISSION TYPE *', _wType), c('BATCH *', _wBatch)],
           c('DATE OF BIRTH *', _wDob),
           c('PARENT TYPE *', _wPtype),
@@ -937,22 +1026,24 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           _cell(
               w(_wRegNo),
               _textCell(r.regNo,
-                  hint: _regNoLocked ? AppText.autoFilled : 'Enter number',
+                  hint: !_regNoLocked
+                      ? 'Enter number'
+                      : (_byDivision && r.course != null)
+                          ? (_choiceFor(r).blocked ? 'No sequence' : '${_choiceFor(r).seq!['seqprefix']}...')
+                          : AppText.autoFilled,
                   locked: _regNoLocked,
-                  invalid: _regNoBad(r))),
+                  invalid: _regNoBad(r) || (_byDivision && r.course != null && _choiceFor(r).blocked))),
           _cell(w(_wName), _textCell(r.name, hint: 'Enter name', required: true)),
           _cell(w(_wSex), _dropCell(r.sex, _sexOptions.entries.map((e) => MapEntry(e.key, e.value)).toList(), (v) => setState(() => r.sex = v), hint: 'Select', required: true)),
           _cell(w(_wCourse), _dropCell(r.course, _courses.map((e) => MapEntry(e, e)).toList(), (v) => setState(() {
             r.course = v;
             // Drop a class that no longer belongs to the newly chosen course.
             if (r.cls != null && !_classNamesFor(v).contains(r.cls)) r.cls = null;
-            // the standard's division fills in (still changeable)
-            r.division = _divisionOfCourse(v) ?? r.division;
+            // the standard's division (Master Data > Standard); no column
+            // on a school (user, 2026-11-10)
+            r.division = _divisionOfCourse(v);
           }), hint: 'Select', required: true)),
           _cell(w(_wClass), _dropCell(r.cls, _classNamesFor(r.course).map((e) => MapEntry(e, e)).toList(), (v) => setState(() => r.cls = v), hint: 'Select', required: !isSchool)),
-          if (isSchool)
-            _cell(w(_wDiv), _dropCell(r.division, {..._divisions, if (r.division != null) r.division!}.map((e) => MapEntry(e, e)).toList(),
-                (v) => setState(() => r.division = v), hint: 'Select', required: true)),
           if (!isSchool) ...[
           _cell(w(_wType), _dropCell(r.admType, _admTypes.map((e) => MapEntry(e['admname'].toString(), e['admname'].toString())).toList(), (v) => setState(() => r.admType = v), hint: 'Select', required: true)),
           _cell(w(_wBatch), _textCell(r.batch, hint: 'YYYY-YYYY', required: true, invalid: _batchBad(r.batch.text))),
@@ -965,8 +1056,8 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
                   hint: 'Select', required: true)),
           _cell(w(_wFather), _textCell(r.parentName, hint: 'Enter name', required: true)),
           _cell(w(_wFmob), _textCell(r.parentMobile, hint: 'Enter mobile', required: true, digitsOnly: true, maxLen: 10, invalid: _mobileBad(r.parentMobile.text))),
-          _cell(w(_wEmis), _textCell(r.emisNo, hint: schoolTerm('Enter EMIS no.'), digitsOnly: true, maxLen: emisMaxLength,
-              invalid: emisInvalid(r.emisNo.text))),
+          _cell(w(_wEmis), _textCell(r.emisNo, hint: isSchool ? 'EMIS / APAAR ID' : 'Enter EMIS no.', digitsOnly: true, maxLen: emisMaxLength,
+              invalid: emisInvalid(r.emisNo.text) || _emisDupe(r) != null)),
           // Removing a row belongs ON the row -- a single button at the bottom
           // cannot say WHICH row, and this grid runs to dozens of them.
           SizedBox(
@@ -1026,13 +1117,19 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
     // padding plus an 11sp line comes to — identical for a TextField, a
     // DropdownButtonFormField and an InputDecorator, because all three are
     // given exactly this decoration and exactly that text style.
+    final hintStyle = TextStyle(color: AppColors.textLight, fontSize: 11.sp);
     final d = AppUI.field(context, hint ?? '', filled: filled, dense: true).copyWith(
       isDense: false,
       constraints: const BoxConstraints(),
       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
       fillColor: locked ? AppColors.surface : null,
+      // Same shrink-to-fit placeholder as AppUI.field, at the grid's 11sp
+      // (AppUI.field's own hint widget is drawn at the full field size).
+      hint: (hint ?? '').isEmpty
+          ? null
+          : AppFitText(hint!, style: hintStyle),
       hintMaxLines: 1,
-      hintStyle: TextStyle(color: AppColors.textLight, fontSize: 11.sp),
+      hintStyle: hintStyle,
     );
     if (!error) return d;
     OutlineInputBorder red(double w) => OutlineInputBorder(
@@ -1071,7 +1168,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
       {String? hint, bool required = false}) {
     final values = items.map((e) => e.key).toList();
     final bad = _showErrors && required && value == null;
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: values.contains(value) ? value : null,
       isExpanded: true,
       isDense: true,
@@ -1118,13 +1215,18 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         // Always a real line of text — an empty child would collapse this cell
         // shorter than its neighbours. The placeholder is drawn as the value so
         // the height is identical whether or not a date is set.
-        child: Text(
-          value == null ? AppText.dateHint : _fmt(value),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: filled
-              ? _cellText(true)
-              : TextStyle(color: AppColors.textLight, fontSize: 11.sp),
+        // Shrinks to fit a narrow column instead of ending in "DD-MM-YY…".
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value == null ? AppText.dateHint : _fmt(value),
+            maxLines: 1,
+            softWrap: false,
+            style: filled
+                ? _cellText(true)
+                : TextStyle(color: AppColors.textLight, fontSize: 11.sp),
+          ),
         ),
       ),
     );

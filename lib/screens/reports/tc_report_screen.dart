@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -15,6 +16,8 @@ import '../../utils/friendly_error.dart';
 import '../../utils/report_pdf_export.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// TRANSFER CERTIFICATE PROVIDED DETAILS REPORT — every TC issued in a date
 /// range: TC No, TC Date, Reg No, Student Name, Class and Join Date.
@@ -36,6 +39,12 @@ class TcReportScreen extends StatefulWidget {
 }
 
 String _s(Object? v) => (v ?? '').toString().trim();
+
+/// ordid as an int; blanks sort last.
+int _ord(Object? v) => v is num ? v.toInt() : (int.tryParse(_s(v)) ?? 9999);
+
+/// A numeric column as an int; blank is 0.
+int _num(Object? v) => v is num ? v.toInt() : (int.tryParse(_s(v)) ?? 0);
 
 /// 'yyyy-MM-dd...' -> 'dd-MM-yyyy'.
 String _d(Object? v) {
@@ -62,10 +71,9 @@ class _TcReportScreenState extends State<TcReportScreen> {
   String _insAddress = '';
   String _insCity = '';
 
-  /// The active academic year. The report is always this year's certificates,
-  /// so there is nothing to pick: tc_entry stamps the year on the row.
+  /// The logged-in academic year. tc_entry lives in that year's schema, so
+  /// every row read is already this year's -- the label is only for display.
   String _yearLabel = '';
-  int? _yearId;
 
   String? _course;
   String? _class;
@@ -100,21 +108,23 @@ class _TcReportScreenState extends State<TcReportScreen> {
             .eq('ins_id', insId)
             .eq('activestatus', 1),
         SupabaseService.getInstitutionInfo(insId),
-        SupabaseService.client
-            .from('institutionyear')
-            .select('iyr_id, yrlabel')
-            .eq('ins_id', insId)
-            .eq('activestatus', 1)
-            .order('iyr_id', ascending: false)
-            .limit(1),
       ]);
       if (!mounted) return;
       final info = res[2] as ({String? name, String? logo, String? address, String? mobile, String? email});
-      final years = res[3] as List;
       setState(() {
+        // Master-data order: standards by ordid, sections by (standard, section) ordid.
         _courseRows = List<Map<String, dynamic>>.from(res[0] as List)
-          ..sort((a, b) => _s(a['courname']).compareTo(_s(b['courname'])));
-        _classRows = List<Map<String, dynamic>>.from(res[1] as List);
+          ..sort((a, b) {
+            final c = _ord(a['ordid']).compareTo(_ord(b['ordid']));
+            return c != 0 ? c : _s(a['courname']).compareTo(_s(b['courname']));
+          });
+        final courOrd = {for (final c in _courseRows) c['cour_id']: _ord(c['ordid'])};
+        _classRows = List<Map<String, dynamic>>.from(res[1] as List)
+          ..sort((a, b) {
+            var c = (courOrd[a['cour_id']] ?? 9999).compareTo(courOrd[b['cour_id']] ?? 9999);
+            if (c == 0) c = _ord(a['ordid']).compareTo(_ord(b['ordid']));
+            return c != 0 ? c : _s(a['claname']).compareTo(_s(b['claname']));
+          });
         _insName = info.name ?? '';
         // Address comes back as one string; the printed report has always put
         // the city on its own line, so the last comma-separated part goes there.
@@ -131,10 +141,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
           _insAddress = parts.join(', ');
           _insCity = '';
         }
-        if (years.isNotEmpty) {
-          _yearLabel = _s(years.first['yrlabel']);
-          _yearId = (years.first['iyr_id'] as num?)?.toInt();
-        }
+        _yearLabel = _s(auth.yearLabel);
         _loading = false;
       });
       _refresh();
@@ -174,7 +181,6 @@ class _TcReportScreenState extends State<TcReportScreen> {
   /// Reload and show. A failed load leaves the last good list on screen and
   /// says what went wrong, rather than blanking it.
   Future<void> _refresh() async {
-    if (_yearId == null && _yearLabel.isEmpty) return;
     setState(() => _counting = true);
     try {
       final rows = await _load();
@@ -229,7 +235,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
             ],
         ],
         landscape: false,
-        footNote: 'Total: ${_rows.length} transfer certificate(s)',
+        footNote: 'Total: ${_rows.length} transfer certificate${_rows.length == 1 ? '' : 's'}',
       );
       if (ok) _snack('TC report saved as PDF (${_rows.length} certificates).', AppColors.success);
     } catch (e) {
@@ -239,7 +245,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
     }
   }
 
-  /// Every certificate issued in the active year, filtered and sorted.
+  /// Every certificate issued in the logged-in year, filtered and sorted.
   Future<List<Map<String, dynamic>>> _load() async {
       final insId = _insId;
       // fetchAll: a year of certificates can pass the 1000-row cap, and a
@@ -247,27 +253,30 @@ class _TcReportScreenState extends State<TcReportScreen> {
       final rows = List<Map<String, dynamic>>.from(
           await SupabaseService.fetchAll(() => SupabaseService
               .fromSchema('tc_entry')
-              .select('tc_id, tcno, tcdate, stuadmno, stuname, stuclass, joindate')
+              .select('tc_id, tcno, tcdate, stuadmno, stuname, stuclass, joindate, status')
               .eq('ins_id', insId)
-              .eq('activestatus', 1)
-              // Either stamp identifies the year: a row written by an older
-              // build may carry the label without the id, or the other way
-              // round, and missing certificates would be invisible.
-              .or([
-                if (_yearId != null) 'yr_id.eq.$_yearId',
-                if (_yearLabel.isNotEmpty) 'yrlabel.eq.$_yearLabel',
-              ].join(','))));
+              // No year filter: the schema is already the logged-in year's, and
+              // a yr_id / yrlabel stamp filter could only hide certificates.
+              .eq('activestatus', 1)));
 
-      // Only rows that actually carry a number. tc_entry is append-only, so
-      // re-activating a student appends a row with no tcno -- that is a
-      // cancellation, not a certificate, and it does not belong in a register
-      // of certificates issued.
-      var out = rows.where((r) => _s(r['tcno']).isNotEmpty).toList();
+      // The latest row per student decides. Re-activation appends a row with
+      // status 1 and no tcno, which cancels the earlier certificate.
+      final latest = <String, Map<String, dynamic>>{};
+      for (final r in rows) {
+        final k = _s(r['stuadmno']);
+        if (k.isEmpty) continue;
+        final prev = latest[k];
+        if (prev == null || _num(r['tc_id']) > _num(prev['tc_id'])) latest[k] = r;
+      }
+      var out = latest.values
+          .where((r) => _s(r['tcno']).isNotEmpty && _num(r['status']) != 1)
+          .toList();
 
       // Course narrows by the classes that belong to it: tc_entry records the
       // class, not the course.
       if (_s(_class).isNotEmpty) {
-        out = out.where((r) => _s(r['stuclass']) == _class).toList();
+        final want = _class!.toUpperCase();
+        out = out.where((r) => _s(r['stuclass']).toUpperCase() == want).toList();
       } else if (_s(_course).isNotEmpty) {
         final allowed = _classNames.map((c) => c.toUpperCase()).toSet();
         out = out.where((r) => allowed.contains(_s(r['stuclass']).toUpperCase())).toList();
@@ -314,7 +323,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
         : _s(_course).isNotEmpty
             ? safe(_course!)
             : 'All';
-    final path = await FilePicker.platform.saveFile(
+    final path = await pickSavePath(
       dialogTitle: 'Save TC Report',
       fileName: 'TC_Report_${scope}_${safe(_yearLabel)}.xlsx',
       type: FileType.custom,
@@ -330,7 +339,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
     final hdr = xl.CellStyle(
       bold: true,
       fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
@@ -363,7 +372,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
       put(5, r, _d(row['joindate']));
       r++;
     }
-    put(0, r + 1, 'Total: ${rows.length} transfer certificate(s)', bold);
+    put(0, r + 1, 'Total: ${rows.length} transfer certificate${rows.length == 1 ? '' : 's'}', bold);
 
     final bytes = book.encode();
     if (bytes == null) throw Exception('Could not build the Excel file');
@@ -429,7 +438,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
                 ),
                 SizedBox(width: 12.w),
                 Expanded(
-                  child: _labeled('Sort By', DropdownButtonFormField<String>(
+                  child: _labeled('Sort By', AppDropdownField<String>(
                     initialValue: _orderKey,
                     isExpanded: true,
                     isDense: true,
@@ -451,7 +460,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
               SizedBox(height: 10.h),
               Row(children: [
                 Expanded(
-                  child: _labeled(schoolTerm('Course'), DropdownButtonFormField<String?>(
+                  child: _labeled(schoolTerm('Course'), AppDropdownField<String?>(
                     key: ValueKey('tccourse-${_course ?? ''}'),
                     initialValue: _courseNames.contains(_course) ? _course : null,
                     isExpanded: true,
@@ -474,7 +483,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
                 ),
                 SizedBox(width: 12.w),
                 Expanded(
-                  child: _labeled(schoolTerm('Class'), DropdownButtonFormField<String?>(
+                  child: _labeled(schoolTerm('Class'), AppDropdownField<String?>(
                     key: ValueKey('tcclass-${_class ?? ''}-${_course ?? ''}'),
                     initialValue: _classNames.contains(_class) ? _class : null,
                     isExpanded: true,
@@ -590,7 +599,7 @@ class _TcReportScreenState extends State<TcReportScreen> {
         Container(
           color: AppColors.tableHeadBg,
           padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
-          child: Text('${_rows.length} transfer certificate(s)', style: AppUI.label),
+          child: Text('${_rows.length} transfer certificate${_rows.length == 1 ? '' : 's'}', style: AppUI.label),
         ),
       ]),
     );

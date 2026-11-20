@@ -238,17 +238,68 @@ class _FeeDemandApprovalScreenState extends State<FeeDemandApprovalScreen> {
         }
       }
 
+      // The server HOLDS a demand whose new amount is below what is already
+      // paid + concession (payments may have come in since the import was
+      // checked): it stays here, not approved, with the reason.
+      var held = <Map<String, dynamic>>[];
+      if (tempIds.isNotEmpty) {
+        try {
+          for (var i = 0; i < tempIds.length; i += 400) {
+            final chunk = tempIds.sublist(i, (i + 400).clamp(0, tempIds.length));
+            held.addAll(List<Map<String, dynamic>>.from(await SupabaseService.fromSchema('tempfeedemand')
+                .select('stuadmno, holdreason')
+                .inFilter('temp_id', chunk)
+                .eq('isapproved', false)
+                .not('holdreason', 'is', null) as List));
+          }
+        } catch (_) {
+          held = []; // older database without holdreason
+        }
+      }
+
       if (mounted) {
         setState(() {
           _selected.clear();
           _approving = false;
         });
+        final done = tempIds.length - held.length;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Fee demands approved successfully'),
-            backgroundColor: AppColors.success,
+          SnackBar(
+            content: Text(held.isEmpty
+                ? 'Fee demands approved successfully'
+                : '$done fee demand(s) approved. ${held.length} held -- see the list.'),
+            backgroundColor: held.isEmpty ? AppColors.success : AppColors.warning,
           ),
         );
+        if (held.isNotEmpty) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text('${held.length} Fee Demand(s) Not Approved'),
+              content: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('These are still waiting here. The new amount is less than the student has already paid '
+                          '(plus concession), so approving it would hide an over-payment.', style: AppUI.body),
+                      SizedBox(height: 10.h),
+                      for (final h in held)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: 4.h),
+                          child: Text('• ${h['stuadmno'] ?? ''}: ${h['holdreason'] ?? ''}',
+                              style: TextStyle(fontSize: 12.sp, color: AppColors.error)),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+            ),
+          );
+        }
         _loadDemands();
       }
     } catch (e) {

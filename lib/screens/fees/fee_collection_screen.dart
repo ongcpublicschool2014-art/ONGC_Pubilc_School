@@ -10,6 +10,7 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import '../../widgets/collection_charts.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -24,9 +25,11 @@ import '../../models/fee_model.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import '../../utils/formatters.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/save_path.dart';
 
 /// Signals when a drilldown view is active inside the Fee Collection tab.
 /// Parent screen listens to hide the tabs row while drilled in.
@@ -3547,7 +3550,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                           final pdf = await _buildReceiptPdf(receiptData);
                           final bytes = await pdf.save();
                           final defaultName = 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}.pdf';
-                          final result = await FilePicker.platform.saveFile(
+                          final result = await pickSavePath(
                             dialogTitle: 'Save Receipt PDF',
                             fileName: defaultName,
                             type: FileType.custom,
@@ -3574,7 +3577,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                             // Rebuild at the paper the printer actually reports
                             // so the receipt lands centred and unclipped; A5 is
                             // only the starting suggestion.
-                            format: a5PageFormat,
+                            format: await receiptPaper(),
                             onLayout: (PdfPageFormat format) async =>
                                 (await _buildReceiptPdf(receiptData, format)).save(),
                             name: 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}',
@@ -3603,7 +3606,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
                       decoration: BoxDecoration(
                         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 2))],
                       ),
-                      child: ReceiptWidget(data: receiptData),
+                      child: ReceiptPreview(data: receiptData),
                     ),
                   ),
                 ),
@@ -4184,7 +4187,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
       // Save
       final bytes = workbook.encode();
       if (bytes == null) return;
-      final result = await FilePicker.platform.saveFile(
+      final result = await pickSavePath(
         dialogTitle: 'Save Fee Collection Summary',
         fileName: 'fee_collection_summary_${_fromDate.year}${_fromDate.month.toString().padLeft(2, '0')}${_fromDate.day.toString().padLeft(2, '0')}.xlsx',
         type: FileType.custom,
@@ -4296,13 +4299,13 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     final labelStyle = xl.CellStyle(bold: true, fontSize: 13);
     final colHeaderStyle = xl.CellStyle(
       bold: true, fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
-    final totalStyle = xl.CellStyle(bold: true, fontSize: 13, backgroundColorHex: xl.ExcelColor.fromHexString('#E2E8F0'));
+    final totalStyle = xl.CellStyle(bold: true, fontSize: 13, backgroundColorHex: XlTheme.totalBg);
     final grandTotalStyle = xl.CellStyle(
       bold: true, fontSize: 13,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
@@ -4454,8 +4457,8 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
 
     final groupHeaderStyle = xl.CellStyle(
       bold: true, fontSize: 12,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#E8EAF6'),
-      fontColorHex: xl.ExcelColor.fromHexString('#1A237E'),
+      backgroundColorHex: XlTheme.totalBg,
+      fontColorHex: XlTheme.accentFg,
     );
 
     for (var i = 0; i < studentRows.length; i++) {
@@ -4545,7 +4548,7 @@ class _FeeCollectionTabState extends State<_FeeCollectionTab> with AutomaticKeep
     sheet.setColumnWidth(4 + termCols.length + 1, 25);
 
     // Save
-    final result = await FilePicker.platform.saveFile(
+    final result = await pickSavePath(
       dialogTitle: 'Save Pending Fee Report',
       fileName: 'Pending_Fee_Report_${DateTime.now().millisecondsSinceEpoch}.xlsx',
       type: FileType.custom,
@@ -7062,14 +7065,14 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     final labelStyle = xl.CellStyle(bold: true, fontSize: 13);
     final colHeaderStyle = xl.CellStyle(
       bold: true, fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
-    final dateHeaderStyle = xl.CellStyle(bold: true, fontSize: 13, fontColorHex: xl.ExcelColor.fromHexString('#2563EB'));
-    final subTotalStyle = xl.CellStyle(bold: true, fontSize: 13, backgroundColorHex: xl.ExcelColor.fromHexString('#E2E8F0'));
+    final dateHeaderStyle = xl.CellStyle(bold: true, fontSize: 13, fontColorHex: XlTheme.accentFg);
+    final subTotalStyle = xl.CellStyle(bold: true, fontSize: 13, backgroundColorHex: XlTheme.totalBg);
     final totalRowStyle = xl.CellStyle(
       bold: true, fontSize: 13,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
@@ -7210,7 +7213,7 @@ class _DateWiseTabState extends State<_DateWiseTab> with AutomaticKeepAliveClien
     sheet.setColumnWidth(7 + activeFeeTypes.length, 12);
 
     // Save
-    final result = await FilePicker.platform.saveFile(
+    final result = await pickSavePath(
       dialogTitle: 'Save Date-wise Collection',
       fileName: 'DateWise_Collection_${DateTime.now().millisecondsSinceEpoch}.xlsx',
       type: FileType.custom,

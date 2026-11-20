@@ -45,6 +45,57 @@ class TcDocx {
     return out;
   }
 
+  /// The format's items in reading order: (its own wording, its fields), for
+  /// TC Details to show the certificate the way it prints. In a table row,
+  /// each cell with {placeholders} is an item worded by the text cells before
+  /// it ("2." + "Name of the Pupil (IN BLOCK LETTERS)"); a paragraph outside
+  /// a table is worded by its text before the first placeholder.
+  static List<(String, List<String>)> items(List<int> docx) {
+    final zip = ZipDecoder().decodeBytes(docx);
+    final f = zip.files.where((f) => f.name == 'word/document.xml').firstOrNull;
+    if (f == null) return const [];
+    final xml = utf8.decode(f.content as List<int>, allowMalformed: true);
+    String text(String p) => _wt.allMatches(p).map((m) => _unesc(m.group(1) ?? '')).join();
+    List<String> keys(String t) => [for (final m in _ph.allMatches(t)) m.group(1)!.trim()];
+    String tidy(String s) => s.replaceAll(RegExp(r'\s+'), ' ').replaceAll(RegExp(r'[\s:]+$'), '').trim();
+    final out = <(String, List<String>)>[];
+
+    void paragraph(String p) {
+      final t = text(p);
+      final k = keys(t);
+      if (k.isEmpty) return;
+      out.add((tidy(t.substring(0, t.indexOf('{'))), k));
+    }
+
+    final tables = RegExp(r'<w:tbl>[\s\S]*?</w:tbl>');
+    final rowRe = RegExp(r'<w:tr[ >][\s\S]*?</w:tr>');
+    final cellRe = RegExp(r'<w:tc[ >][\s\S]*?</w:tc>');
+    var pos = 0;
+    for (final t in tables.allMatches(xml)) {
+      for (final p in _para.allMatches(xml.substring(pos, t.start))) {
+        paragraph(p.group(0)!);
+      }
+      for (final r in rowRe.allMatches(t.group(0)!)) {
+        final words = <String>[];
+        for (final c in cellRe.allMatches(r.group(0)!)) {
+          final ct = [for (final p in _para.allMatches(c.group(0)!)) text(p.group(0)!)].join('\n');
+          final k = keys(ct);
+          if (k.isEmpty) {
+            if (ct.trim().isNotEmpty) words.add(ct.trim());
+          } else {
+            out.add((tidy(words.join(' ')), k));
+            words.clear();
+          }
+        }
+      }
+      pos = t.end;
+    }
+    for (final p in _para.allMatches(xml.substring(pos))) {
+      paragraph(p.group(0)!);
+    }
+    return out;
+  }
+
   /// Replace the placeholders of one paragraph's runs with [values] (unknown
   /// names become empty). The text of a placeholder split across runs goes
   /// into the run it starts in; the runs it spilled into lose those chars.
@@ -124,13 +175,17 @@ class TcDocx {
   }
 
   // ── sample templates ─────────────────────────────────────────────────
-  static String _p(String text, {bool bold = false, String align = '', int size = 22, int after = 80}) =>
+  static String _p(String text,
+          {bool bold = false, String align = '', int size = 22, int after = 80, bool underline = false, String font = ''}) =>
       '<w:p><w:pPr>${align.isEmpty ? '' : '<w:jc w:val="$align"/>'}<w:spacing w:before="0" w:after="$after" w:line="240" w:lineRule="auto"/></w:pPr>'
-      '<w:r><w:rPr>${bold ? '<w:b/>' : ''}<w:sz w:val="$size"/></w:rPr><w:t xml:space="preserve">${_esc(text)}</w:t></w:r></w:p>';
+      '<w:r><w:rPr>${font.isEmpty ? '' : '<w:rFonts w:ascii="$font" w:hAnsi="$font" w:cs="$font"/>'}'
+      '${bold ? '<w:b/>' : ''}${underline ? '<w:u w:val="single"/>' : ''}<w:sz w:val="$size"/></w:rPr>'
+      '<w:t xml:space="preserve">${_esc(text)}</w:t></w:r></w:p>';
 
   /// A table: [rows] of cells (a cell's '\n' = a new paragraph, a leading '*'
   /// = bold); [widths] in twentieths of a point.
-  static String _table(List<List<String>> rows, List<int> widths, {bool borders = false, int size = 20, int after = 40}) {
+  static String _table(List<List<String>> rows, List<int> widths,
+      {bool borders = false, int size = 20, int after = 40, String font = ''}) {
     final edge = borders ? 'w:val="single" w:sz="4" w:space="0" w:color="000000"' : 'w:val="nil"';
     final b = StringBuffer('<w:tbl><w:tblPr><w:tblW w:w="${widths.fold<int>(0, (a, w) => a + w)}" w:type="dxa"/>'
         '<w:tblBorders><w:top $edge/><w:left $edge/><w:bottom $edge/><w:right $edge/><w:insideH $edge/><w:insideV $edge/></w:tblBorders>'
@@ -142,11 +197,14 @@ class TcDocx {
     for (final r in rows) {
       b.write('<w:tr><w:trPr><w:cantSplit/></w:trPr>');
       for (var i = 0; i < widths.length; i++) {
-        final cell = i < r.length ? r[i] : '';
+        var cell = i < r.length ? r[i] : '';
+        // A leading '#' = Tamil text: Arial has no Tamil letters.
+        final tamil = cell.startsWith('#');
+        if (tamil) cell = cell.substring(1);
         final bold = cell.startsWith('*');
         b.write('<w:tc><w:tcPr><w:tcW w:w="${widths[i]}" w:type="dxa"/></w:tcPr>');
         for (final line in (bold ? cell.substring(1) : cell).split('\n')) {
-          b.write(_p(line, bold: bold, size: size, after: after));
+          b.write(_p(line, bold: bold, size: size, after: after, font: tamil ? 'Nirmala UI' : font));
         }
         b.write('</w:tc>');
       }
@@ -269,6 +327,155 @@ class TcDocx {
   }
 }
 
+/// The client schools' own TC layouts (C:/pg_backups/TC samples), as Word
+/// formats. [blank] leaves out every {placeholder} (values become ":"), for
+/// uploading with "Place Fields": Word turns it into the PDF and the fields
+/// are placed next to their labels.
+class TcClientFormats {
+  TcClientFormats._();
+
+  static const _font = 'Arial';
+  static String _p(String t, {bool bold = false, String align = '', int size = 20, int after = 40, bool underline = false}) =>
+      TcDocx._p(t, bold: bold, align: align, size: size, after: after, underline: underline, font: _font);
+  static String _t(List<List<String>> rows, List<int> widths, {bool borders = false, int size = 19, int after = 24}) =>
+      TcDocx._table(rows, widths, borders: borders, size: size, after: after, font: _font);
+
+  /// Immaculate Heart of Mary GHSS, Puducherry -- state-board TC.
+  /// [higherSecondary]: the XII format (items 11 a-e, fees paid, 20 items).
+  static List<int> immaculate({required bool higherSecondary, bool blank = false}) {
+    String v(String ph) => blank ? ':' : ':  $ph';
+    final items = <List<String>>[
+      ['1.', '(a) Name of the School', v('{School Name}')],
+      ['', '(b) Name of the Educational District / Revenue District', v('{Educational District}')],
+      ['2.', 'Name of the Pupil (IN BLOCK LETTERS)', v('{Student Name (Block Letters)}')],
+      ['', '#மாணவியின் பெயர் (தமிழில்)', '#${v('{Student Name (Tamil)}')}'],
+      ['3.', 'Name of the Father', v('{Father Name}')],
+      ['4.', 'Name of the Mother', v('{Mother Name}')],
+      ['5.', 'Nationality, Religion & Caste', v('{Nationality, Religion and Caste}')],
+      ['6.', 'Community', v('{Community}')],
+      ['7.', 'Gender', v('{Gender}')],
+      ['8.', 'Date of Birth as entered in the Admission Register (in figures and words)', v('{DOB}  {DOB in Words}')],
+      ['9.', 'Personal Marks of Identification',
+        blank ? ':  a)\n:  b)' : ':  a) {Identification Mark 1}\n:  b) {Identification Mark 2}'],
+      ['10.', 'Date of Admission and Standard in which admitted (the year to be entered in words)',
+        blank ? ':' : ':  {Date of Admission} ({Admission Year in Words})\n    {Admission Class}-STD'],
+      ['11.', 'Standard in which the Pupil was studying at the time of Leaving (in words)', v('{Standard Ordinal} STANDARD')],
+      if (higherSecondary) ...[
+        ['', 'a) The Course i.e, General Education or Vocational Education', v('{Course Offered}')],
+        ['', 'b) In the case of General Education the Subjects offered under Part III, Group -A and Medium of Instruction',
+          v('{Part III Group A Subjects}')],
+        ['', "c) In the case of Vocational Education, the Vocational subject under Part III, Group – 'B' and the related "
+            "subject offered under Part - III Group 'A'", v('{Part III Group B Subjects}')],
+        ['', 'd) Language offered under Part-I', v('{Part I Language}')],
+        ['', 'e) Medium of Study', v('{Medium}')],
+      ],
+    ];
+    var n = 12;
+    String no() => '${n++}.';
+    items.addAll([
+      [no(), higherSecondary
+          ? 'Whether qualified for promotion to Higher Standard? under Higher Secondary Education rules'
+          : 'Whether qualified for promotion to Higher Standard?', v('{Qualified for Promotion}')],
+      if (higherSecondary) [no(), 'Whether the pupil has paid all the fees due to the school', v('{All Fees Paid}')],
+      [no(), higherSecondary
+          ? 'Whether the Pupil was in receipt of any Scholarship (Nature of Scholarship to be specified) or any Educational concession'
+          : 'Whether the Pupil was in receipt of any Scholarship? (Nature of Scholarship to be specified)', v('{Scholarship}')],
+      [no(), 'Whether the Pupil has undergone medical inspection during the academic year?', v('{Medical Inspection}')],
+      [no(), 'Date on which the pupil actually left the school', v('{Leaving Date}')],
+      [no(), "The Pupil's Conduct and Character", v('{General Conduct}')],
+      [no(), 'Date on which application for Transfer Certificate was made on behalf of the Pupil by the Parent or Guardian',
+        v('{Date of Application}')],
+      [no(), 'Date of the Transfer Certificate', v('{TC Date}')],
+    ]);
+    final studyNo = no();
+    const cols = [('School', 'Name of the School'), ('Years', 'Academic year(s)'), ('Standard', 'Standard(s) Studied'),
+      ('Language', 'First Language'), ('Medium', 'Medium of Instruction')];
+    final study = <List<String>>[
+      [for (final c in cols) '*${c.$2}'],
+      for (var r = 1; r <= 2; r++) [for (final c in cols) blank ? '' : '{Study $r ${c.$1}}'],
+    ];
+    String hv(String ph) => blank ? ':' : ':  $ph';
+    final body = StringBuffer()
+      ..write(_p("IMMACULATE HEART OF MARY GIRLS' HR. SEC. SCHOOL", bold: true, align: 'center', size: 30, after: 0))
+      ..write(_p('(Recognised by Director of School Education)', align: 'center', size: 20, after: 0))
+      ..write(_p('Puducherry - 1', align: 'center', size: 20, after: 0))
+      ..write(_p('_' * 86, align: 'center', size: 20, after: 40))
+      ..write(_p('TRANSFER CERTIFICATE', bold: true, align: 'center', size: 26, after: 60, underline: true))
+      ..write(_t([
+        ['*Serial No.', hv('{TC No}'), '*Admission No.', hv('{Admission No}')],
+        ['*Student PEN', hv('{Student PEN}'), '*Aadhar No', hv('{Aadhar No}')],
+        ['*APAAR ID', hv('{EMIS No}'), '*Cert. Sl.No', hv('{Cert Sl No}')],
+      ], const [1500, 3450, 1600, 3350], size: 19, after: 10))
+      ..write(_p('_' * 86, align: 'center', size: 20, after: 60))
+      ..write(_t(items, const [450, 5000, 4450], size: higherSecondary ? 18 : 19, after: higherSecondary ? 14 : 24))
+      ..write(_p('$studyNo Previous Year(s) and Course of studies', size: 19, after: 40))
+      ..write(_t(study, const [3300, 1700, 1500, 1600, 1800], borders: true, size: 18, after: 10))
+      ..write(_p('', after: higherSecondary ? 400 : 600))
+      ..write(_p('Signature of the Principal', bold: true, align: 'right', size: 19, after: higherSecondary ? 160 : 300))
+      ..write(_p('DECLARATION BY THE PARENT OR GUARDIAN', bold: true, align: 'center', size: 19, after: 40, underline: true))
+      ..write(_p('        I hereby declare that the particulars recorded against items 2 to 7 are correct and that no change '
+          'will be demanded by me in future.', size: 19, after: higherSecondary ? 200 : 300))
+      ..write(_p('Signature of the Parent / Guardian', bold: true, align: 'right', size: 19));
+    return TcDocx._pack(body.toString());
+  }
+
+  /// VES -- CBSE-style TC, 25 items. The top of the page is left empty for
+  /// the school's pre-printed letterhead.
+  static List<int> ves({bool blank = false}) {
+    String v(String ph) => blank ? ':' : ':  $ph';
+    var n = 1;
+    List<String> it(String label, String value) => ['${n++}.', label, value];
+    final items = <List<String>>[
+      it('Name of the Student (in BLOCK LETTERS)', v('{Student Name (Block Letters)}')),
+      it("Mother's Name", v('{Mother Name}')),
+      it("Father's / Guardian Name", v('{Father Name}')),
+      it('Date of Birth (in Christian Era) according to Admission & Withdrawal in figures and in words', v('{DOB}  {DOB in Words}')),
+      it('Proof for Date of Birth submitted at the time of admission', v('{Proof of DOB}')),
+      it('Nationality / Religion', v('{Nationality and Religion}')),
+      it('Whether the candidate belongs to Schedule Caste or Schedule Tribe or OBC', v('{Community Category}')),
+      it('Date of first admission in the School with class', v('{Date of Admission}  {Admission Class}')),
+      it('Class in which the Pupil last studied (In figures)',
+        blank ? ':                    (Class In words) :' : ':  {Standard}          (Class In words) :  {Standard Ordinal} STD'),
+      it('School / Board Annual Examination last taken with result', v('{Last Exam Result}')),
+      it('Whether failed, if so once / twice in the same class', v('{Whether Failed}')),
+      it('Subject studied', v('{Subjects Studied}')),
+      it('Whether qualified for promotion to the higher class. If so, to which class (In figures)',
+        blank ? ':\n:                    (In words) :' : ':  {Qualified for Promotion}\n:  {Promoted Class}          (In words) :  {Promoted Class in Words}'),
+      it('No. of working days present / Total no. of working days', blank ? ':' : ':  {Days Present} / {Total Working Days}'),
+      it('Month upto which the pupil has paid school dues', v('{Fees Paid Up To}')),
+      it('Any fee concession availed of; If so, the nature of such Concession', v('{Fee Concession}')),
+      it('Whether NCC Cadet / Boy Scout / Girl Guide (details may be given)', v('{NCC / Scout / Guide}')),
+      it('Whether school is under Govt./Minority/ Independent Category', v('{School Category}')),
+      it('Games played or extra-curricular activities in which the Pupil usually took part (Mention achievement level therein)',
+        v('{Extra Curricular Activities}')),
+      it('General conduct', v('{General Conduct}')),
+      it('Date of application for certificate', v('{Date of Application}')),
+      it("Date on which pupil's name was struck off the rolls of the school", v('{Date Struck Off}')),
+      it('Date of issue of certificate', v('{TC Date}')),
+      it('Reason for leaving the school', v('{Reason for Leaving}')),
+      it('Any other remarks', v('{Remarks}')),
+    ];
+    String hv(String ph) => blank ? ':' : ':  $ph';
+    final body = StringBuffer();
+    for (var i = 0; i < 6; i++) {
+      body.write(_p('', size: 22, after: 120)); // room for the pre-printed letterhead
+    }
+    body
+      ..write(_t([
+        ['*T.C. No.', hv('{TC No}'), '*EMIS No', hv('{EMIS No}'), '*Admission No', hv('{Admission No}')],
+      ], const [1100, 2200, 1100, 2300, 1400, 1800], size: 21, after: 10))
+      ..write(_p('', after: 80))
+      ..write(_t(items, const [450, 4750, 4700], after: 50))
+      ..write(_p('', after: 200))
+      ..write(_p('        I hereby declare that the above information including Name of the Candidate, Father\'s Name, '
+          'Mother\'s Name and date of Birth furnished above is correct as per school records', size: 19, after: 700))
+      ..write(_t([
+        [blank ? 'Date :' : 'Date :  {Print Date}', 'Signature of the Principal'],
+      ], const [4950, 4950], size: 19));
+    return TcDocx._pack(body.toString());
+  }
+}
+
 /// Numbers and dates in words, for {DOB in Words} / {Standard in Words}.
 class InWords {
   InWords._();
@@ -313,6 +520,14 @@ class InWords {
   static const _roman = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10, 'XI': 11, 'XII': 12};
 
   /// "II" -> "Two", "LKG" -> "LKG" (standards that are not numerals stay).
+  /// "Twelfth" for XII / 12 -- as the TCs write it ("TWELFTH STANDARD",
+  /// "TENTH STD"). LKG / UKG / anything else is returned as it is.
+  static String standardOrdinal(String std) {
+    final s = std.trim().toUpperCase();
+    final n = _roman[s] ?? int.tryParse(s);
+    return n != null && n > 0 && n < _ordinals.length ? _ordinals[n] : std.trim();
+  }
+
   static String standard(String std) {
     final s = std.trim().toUpperCase();
     final r = _roman[s];

@@ -6,6 +6,7 @@ import '../../services/supabase_service.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/peacock_backdrop.dart';
 
 /// Clean message out of a FunctionException (or any other failure).
 String _friendlyError(Object e) {
@@ -175,41 +176,18 @@ class _SuperAdminRegistrationScreenState
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage(
-                'assets/images/vimal-s-J69ERsG93hI-unsplash.jpg'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            child: Container(
-              width: 480.w,
-              padding: EdgeInsets.all(36.w),
-              margin: EdgeInsets.symmetric(horizontal: 24.w, vertical: 24.h),
-              decoration: AppUI.card(),
+    // The sign-in screen's Peacock background and card (peacock_backdrop.dart).
+    return PeacockBackdrop(
+      child: PeacockCard(
+        width: 480.w,
+        icon: Icons.admin_panel_settings_rounded,
+        title: 'Set Up Super Admin',
+        subtitle: 'This is a one-time setup. Create the office master account that manages all institutions.',
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(Icons.admin_panel_settings_rounded,
-                      size: 52.sp, color: AppColors.primary),
-                  SizedBox(height: 14.h),
-                  Text(
-                    'Set Up Super Admin',
-                    textAlign: TextAlign.center,
-                    style: AppUI.pageTitle,
-                  ),
-                  SizedBox(height: 6.h),
-                  Text(
-                    'This is a one-time setup. Create the office master account that manages all institutions.',
-                    textAlign: TextAlign.center,
-                    style: AppUI.muted,
-                  ),
-                  SizedBox(height: 24.h),
+                  SizedBox(height: 8.h),
                   _field(_trustNameController, 'Trust Name *',
                       Icons.account_balance_outlined,
                       hint: 'Enter trust name'),
@@ -355,9 +333,6 @@ class _SuperAdminRegistrationScreenState
                   Center(child: AppUI.requiredNote()),
                 ],
               ),
-            ),
-          ),
-        ),
       ),
     );
   }

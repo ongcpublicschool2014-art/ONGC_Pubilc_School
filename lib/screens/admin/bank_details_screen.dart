@@ -11,6 +11,9 @@ import '../../utils/friendly_error.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/card_title_block.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../config/supabase_config.dart';
+import '../../utils/payment_gateways.dart';
 
 /// Bank account master for the active institution. Each row represents a
 /// beneficiary account a fee group can route to (school's main account,
@@ -18,7 +21,12 @@ import '../../widgets/app_ui.dart';
 /// screen: flex 3/7 with a stacked single-column form on the left and the
 /// assignments + list (or drilldown) on the right.
 class BankDetailsScreen extends StatefulWidget {
-  const BankDetailsScreen({super.key});
+  /// Off by default: a fee group picks its bank in Fee Master -> Fee Group
+  /// (user, 2026-11-14), so the old assignment box is not shown.
+  final bool showAssignments;
+  /// false inside the Manage Bank Accounts pop-up (it has its own title bar).
+  final bool showHeader;
+  const BankDetailsScreen({super.key, this.showAssignments = false, this.showHeader = true});
 
   @override
   State<BankDetailsScreen> createState() => _BankDetailsScreenState();
@@ -45,6 +53,21 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   final _paytmMidController = TextEditingController();
 
   int? _editingBanId;
+
+  // A bank that is its OWN merchant at the school's gateway (e.g. the hostel's
+  // Paytm MID with its own key). Its fees are paid under that merchant.
+  Map<String, dynamic>? _gw; // the school's gateway, if any
+  Map<int, Map<String, dynamic>> _bankMerchants = {};
+  /// How this bank takes online payments: MAIN = the gateway's main account,
+  /// SUB = a sub-account under it, OWN = a separate merchant with its own key.
+  String _settle = 'MAIN';
+  bool get _ownMerchant => _settle == 'OWN';
+  bool _ownHasSecret = false;
+  bool _ownTesting = false;
+  final Map<String, TextEditingController> _ownCtl = {};
+  TextEditingController _own(String k) => _ownCtl.putIfAbsent(k, () => TextEditingController());
+  PgProvider? get _gwProv => _gw == null ? null : pgProvider('${_gw!['provider']}');
+  bool get _canOwn => _gwProv != null && _gwProv!.code != 'PHONEPE';
   // When non-null, the right column shows the bank detail drilldown
   // (back button + breadcrumb + detail rows) instead of the
   // assignments + list.
@@ -55,6 +78,27 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     super.initState();
     _fetchBanks();
     _fetchFeeGroups();
+    _fetchGateway();
+  }
+
+  Future<void> _fetchGateway() async {
+    try {
+      final l = await PaymentGatewayService.list();
+      final gws = (l['gateways'] as List? ?? const []);
+      Map<int, Map<String, dynamic>> bm = {};
+      try {
+        bm = await PaymentGatewayService.bankMerchants();
+      } catch (_) {
+        // database not updated yet: no per-bank merchants
+      }
+      if (!mounted) return;
+      setState(() {
+        _gw = gws.isEmpty ? null : Map<String, dynamic>.from(gws.first as Map);
+        _bankMerchants = bm;
+      });
+    } catch (e) {
+      debugPrint('bank screen: gateway lookup failed: $e');
+    }
   }
 
   Future<void> _fetchFeeGroups() async {
@@ -98,6 +142,9 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _accNoController.dispose();
     _accHolderController.dispose();
     _paytmMidController.dispose();
+    for (final c in _ownCtl.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -129,7 +176,14 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _accNoController.clear();
     _accHolderController.clear();
     _paytmMidController.clear();
-    setState(() => _editingBanId = null);
+    for (final c in _ownCtl.values) {
+      c.clear();
+    }
+    setState(() {
+      _editingBanId = null;
+      _settle = 'MAIN';
+      _ownHasSecret = false;
+    });
     // reset() restores each field to the value it was last BUILT with, so it
     // must run after the rebuild with the cleared controllers -- calling it
     // straight away put the typed text back and Clear appeared to do nothing.
@@ -150,7 +204,21 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     _accNoController.text = b['banaccno']?.toString() ?? '';
     _accHolderController.text = b['banaccholder']?.toString() ?? '';
     _paytmMidController.text = b['paytm_mid']?.toString() ?? '';
-    setState(() => _editingBanId = b['ban_id'] as int?);
+    final m = _bankMerchants[(b['ban_id'] as num?)?.toInt() ?? -1];
+    for (final c in _ownCtl.values) {
+      c.clear();
+    }
+    _own('website').text = '${(m?['config'] as Map?)?['website'] ?? ''}';
+    setState(() {
+      _editingBanId = b['ban_id'] as int?;
+      final mid = _paytmMidController.text.trim();
+      _settle = m != null
+          ? 'OWN'
+          : (mid.isEmpty || _gw == null || _gwProv?.code == 'PHONEPE' || pgIsMainMerchantId(_gw!, mid))
+              ? 'MAIN'
+              : 'SUB';
+      _ownHasSecret = m?['has_secret'] == true;
+    });
   }
 
   Future<void> _save() async {
@@ -184,7 +252,58 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       return;
     }
 
+    // Own merchant account: it needs the bank's ID, and its key the first time.
+    final ownSecret = <String, String>{
+      if (_ownMerchant && _gwProv != null)
+        for (final f in _gwProv!.secretFields)
+          if (_own(f.key).text.trim().isNotEmpty) f.key: _own(f.key).text.trim(),
+    };
+    if (_ownMerchant) {
+      if (_paytmMidController.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Enter the Merchant / Settlement ID of this separate merchant account.'),
+            backgroundColor: AppColors.warning));
+        return;
+      }
+      final need = _gwProv!.secretFields.where((f) => f.required && !ownSecret.containsKey(f.key));
+      if (!_ownHasSecret && need.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Enter the ${need.first.label} of this merchant account.'), backgroundColor: AppColors.warning));
+        return;
+      }
+    }
+
     setState(() => _isSaving = true);
+
+    // Leaving "Separate merchant" is refused while one of its payments is still
+    // open. Ask FIRST: saving the bank and then being refused left the bank and
+    // its merchant saying different things.
+    if (_editingBanId != null && _canOwn && !_ownMerchant && _bankMerchants.containsKey(_editingBanId)) {
+      try {
+        await PaymentGatewayService.deleteBankMerchant(_editingBanId!);
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _isSaving = false);
+        final open = '$e'.contains('still being confirmed');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(open
+                ? 'Nothing was changed. An online payment through this merchant is still being confirmed. '
+                    'Change it after that payment is settled (Setup → Payment Gateways → Payments Needing Attention).'
+                : 'Nothing was changed. ${friendlyError(e)}'),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 8)));
+        return;
+      }
+    }
+
+    // The ID only means something for the choice made in the form. A row that
+    // already names the main merchant keeps it.
+    final typedMid = _paytmMidController.text.trim();
+    final String? midToSave = typedMid.isEmpty
+        ? null
+        : (_gw == null || _settle != 'MAIN' || pgIsMainMerchantId(_gw!, typedMid))
+            ? typedMid
+            : null;
 
     final data = <String, dynamic>{
       'banname': _nameController.text.trim(),
@@ -197,15 +316,39 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
       'banemail': _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
       'banaccno': _accNoController.text.trim(),
       'banaccholder': _accHolderController.text.trim(),
-      'paytm_mid': _paytmMidController.text.trim().isEmpty ? null : _paytmMidController.text.trim(),
+      'paytm_mid': midToSave,
       'activestatus': 1,
     };
 
     bool ok;
+    int? banId = _editingBanId;
     if (_editingBanId != null) {
       ok = await SupabaseService.updateBank(_editingBanId!, data);
     } else {
-      ok = (await SupabaseService.addBank(data)) != null;
+      banId = await SupabaseService.addBank(data);
+      ok = banId != null;
+    }
+
+    // The bank's own merchant keys (encrypted on the server).
+    String? ownError;
+    if (ok && banId != null && _canOwn) {
+      try {
+        if (_ownMerchant) {
+          final website = _own('website').text.trim();
+          await PaymentGatewayService.saveBankMerchant(
+              banId,
+              {if (_gwProv!.code == 'PAYTM' && website.isNotEmpty) 'website': website.toUpperCase()},
+              ownSecret.isEmpty ? null : ownSecret);
+        }
+      } catch (e) {
+        ownError = friendlyError(e);
+      }
+      await _fetchGateway();
+    }
+    if (ownError != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Bank saved, but its merchant account was not: $ownError'),
+          backgroundColor: AppColors.error, duration: const Duration(seconds: 7)));
     }
 
     if (!mounted) return;
@@ -253,10 +396,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Cannot Delete This Bank Account'),
           content: Text(
-              '"${b['banname']}" (${b['banaccno']}) carries a Paytm merchant ID, '
+              '"${b['banname']}" (${b['banaccno']}) carries a merchant ID, '
               'so online payments are collected through it.\n\n'
               'Every online payment ever made to this account is matched back to '
-              'Paytm using this record. Removing it would leave any payment still '
+              'the gateway using this record. Removing it would leave any payment still '
               'being confirmed with no way to be traced, and the money would not '
               'reach a receipt.\n\n'
               'An account that has collected online payments stays on the list.'),
@@ -339,13 +482,16 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: EdgeInsets.zero,
+      // room for the scrollbar, so it never sits over the cards' right edge
+      padding: const EdgeInsets.only(right: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Page header - matches the User Creation screen.
-          AppUI.cardHeader(icon: 'bank', title: 'Bank Accounts'),
-          SizedBox(height: AppUI.gap),
+          if (widget.showHeader) ...[
+            AppUI.cardHeader(icon: 'bank', title: 'Bank Accounts'),
+            SizedBox(height: AppUI.gap),
+          ],
           // Form + right column side by side (flex 3/7 like User Creation).
           LayoutBuilder(builder: (context, constraints) {
             return Row(
@@ -363,8 +509,10 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _buildAssignmentsPanel(),
-                            SizedBox(height: AppUI.gap),
+                            if (widget.showAssignments) ...[
+                              _buildAssignmentsPanel(),
+                              SizedBox(height: AppUI.gap),
+                            ],
                             _buildList(),
                           ],
                         ),
@@ -445,19 +593,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               Expanded(child: _labelledField('Address Line 3', _addr3Controller, validator: _vAddrOpt)),
             ]),
             SizedBox(height: 16.h),
-            // Paytm MID: the online-payment merchant that settles to THIS bank
-            // account. Fee groups mapped to this bank route their Paytm payment
-            // to this MID. Leave blank to use the app's default MID.
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: _labelledField('Paytm Merchant ID', _paytmMidController,
-                hint: 'Leave blank to use the default merchant ID',
-                inputFormatters: [
-                  LengthLimitingTextInputFormatter(40),
-                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
-                ])),
-              SizedBox(width: 16.w),
-              const Expanded(child: SizedBox.shrink()),
-            ]),
+            _onlineSection(),
             SizedBox(height: 16.h),
             AppUI.requiredNote(),
             SizedBox(height: 12.h),
@@ -498,10 +634,149 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
     );
   }
 
+  /// One choice of how this bank takes online payments.
+  Widget _settleOption(String value, String title, String sub) {
+    final on = _settle == value;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppUI.controlRadius),
+      onTap: () => setState(() => _settle = value),
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: 5.h),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(on ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              size: 18.sp, color: on ? AppColors.primary : AppColors.textLight),
+          SizedBox(width: 8.w),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: AppUI.label),
+              Text(sub, style: AppUI.muted),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// Online payments for this bank: one question, with only the fields the
+  /// answer needs, worded for the school's own gateway (user, 2026-11-18).
+  Widget _onlineSection() {
+    final idFormat = [
+      LengthLimitingTextInputFormatter(60),
+      FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_-]')),
+    ];
+    final prov = _gwProv;
+    if (prov == null) {
+      // No gateway yet: nothing to choose from.
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: _labelledField('Merchant / Settlement ID', _paytmMidController,
+            hint: 'Optional',
+            helper: 'Only for online payments. It can be added after the payment gateway is set up.',
+            inputFormatters: idFormat)),
+        SizedBox(width: 16.w),
+        const Expanded(child: SizedBox.shrink()),
+      ]);
+    }
+    if (prov.code == 'PHONEPE') {
+      return Text('PhonePe pays all online money into its main account, so nothing is needed here.', style: AppUI.muted);
+    }
+    final label = pgSplitLabel(prov.code) ?? 'Merchant ID';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      AppUI.fieldLabel('Online payments for this bank'),
+      _settleOption('MAIN', 'Main ${prov.name} account', 'Online money goes to the main account. No ID is needed.'),
+      _settleOption('SUB', '${prov.name} sub-account', 'The payment is split to this bank using its $label.'),
+      _settleOption('OWN', 'Separate ${prov.name} merchant',
+          'Its own merchant account and key, for example a hostel MID. Paid separately from other fee groups.'),
+      if (_settle == 'SUB') ...[
+        SizedBox(height: 8.h),
+        _labelledField(label, _paytmMidController, required: true, inputFormatters: idFormat, validator: (v) {
+          final s = (v ?? '').trim();
+          return s.isEmpty ? 'Enter the $label' : pgMerchantIdError(_gw!, s);
+        }),
+      ],
+      if (_settle == 'OWN') ...[
+        SizedBox(height: 8.h),
+        _labelledField('Merchant ID', _paytmMidController, required: true, inputFormatters: idFormat),
+        _ownMerchantSection(),
+      ],
+    ]);
+  }
+
+  /// "Separate merchant account": this bank's ID is its own merchant at the
+  /// school's gateway (own key), not a sub-account under the main merchant.
+  Widget _ownMerchantSection() {
+    final prov = _gwProv!;
+    final pgId = (_gw!['pg_id'] as num).toInt();
+    final saved = _editingBanId != null && _bankMerchants.containsKey(_editingBanId);
+    final webhook = _editingBanId == null
+        ? ''
+        : '${SupabaseConfig.url}/functions/v1/pay-webhook?pg=$pgId&ban=$_editingBanId';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_ownMerchant) ...[        SizedBox(height: 10.h),
+        Wrap(spacing: 16.w, runSpacing: 10.h, children: [
+          for (final f in prov.secretFields)
+            SizedBox(
+              width: 300.w,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                AppUI.fieldLabel(f.label, required: f.required && !_ownHasSecret, optional: !f.required),
+                TextField(
+                  controller: _own(f.key),
+                  obscureText: true,
+                  style: AppUI.fieldText(context),
+                  decoration: AppUI.field(context, _ownHasSecret ? 'Saved ••••••  (type to replace)' : f.hint),
+                ),
+              ]),
+            ),
+          if (prov.code == 'PAYTM')
+            SizedBox(
+              width: 300.w,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                AppUI.fieldLabel('Website Name', optional: true),
+                TextField(
+                  controller: _own('website'),
+                  style: AppUI.fieldText(context),
+                  decoration: AppUI.field(context, 'Blank = same as the gateway'),
+                ),
+              ]),
+            ),
+        ]),
+        if (saved) ...[
+          SizedBox(height: 10.h),
+          Row(children: [
+            OutlinedButton.icon(
+              onPressed: _ownTesting
+                  ? null
+                  : () async {
+                      setState(() => _ownTesting = true);
+                      final r = await PaymentGatewayService.test(pgId, banId: _editingBanId);
+                      if (!mounted) return;
+                      setState(() => _ownTesting = false);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(r.ok ? 'Connected: ${r.message}' : r.message),
+                          backgroundColor: r.ok ? AppColors.success : AppColors.error));
+                    },
+              icon: _ownTesting
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.wifi_tethering, size: 16),
+              label: const Text('Test Connection'),
+            ),
+            SizedBox(width: 12.w),
+            Expanded(child: SelectableText('Webhook: $webhook', style: AppUI.muted)),
+            IconButton(
+              tooltip: 'Copy webhook URL',
+              icon: const Icon(Icons.copy, size: 16),
+              onPressed: () => Clipboard.setData(ClipboardData(text: webhook)),
+            ),
+          ]),
+        ],
+      ],
+    ]);
+  }
+
   Widget _labelledField(
     String label,
     TextEditingController controller, {
     String? hint,
+    String? helper,
     bool required = false,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
@@ -517,7 +792,14 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
           inputFormatters: inputFormatters,
           autovalidateMode: AutovalidateMode.onUserInteraction,
           onChanged: (_) => setState(() {}),
-          decoration: _inputDecoration(context, hint ?? '', filled: controller.text.trim().isNotEmpty).copyWith(errorMaxLines: 3),
+          decoration: _inputDecoration(context, hint ?? '', filled: controller.text.trim().isNotEmpty).copyWith(
+            errorMaxLines: 3,
+            // [helper] explains the field in a caption under it, so the
+            // placeholder itself can stay short.
+            helperText: helper,
+            helperMaxLines: 2,
+            helperStyle: helper == null ? null : AppUI.muted,
+          ),
           style: _inputTextStyle(context, filled: controller.text.trim().isNotEmpty),
           validator: validator ?? (required ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null : null),
         ),
@@ -594,7 +876,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               children: [
                 const CardTitleBlock(icon: 'category-2', title: 'Fee Group Assignments', subtitle: 'map fee groups to their collection bank'),
                 const Spacer(),
-                AppUI.chip('${_feeGroups.length} groups', AppStatus.info),
+                AppUI.chip('${_feeGroups.length} group${_feeGroups.length == 1 ? '' : 's'}', AppStatus.info),
               ],
             ),
           ),
@@ -661,7 +943,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
                           ),
                           Expanded(
                             flex: 4,
-                            child: DropdownButtonFormField<int?>(
+                            child: AppDropdownField<int?>(
                               value: currentBanId,
                               icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                               isExpanded: true,
@@ -718,7 +1000,7 @@ class _BankDetailsScreenState extends State<BankDetailsScreen> {
               children: [
                 const CardTitleBlock(icon: 'bank', title: 'Bank Accounts', subtitle: 'all bank accounts in this institution'),
                 const Spacer(),
-                AppUI.chip('${_banks.length} accounts', AppStatus.info),
+                AppUI.chip('${_banks.length} account${_banks.length == 1 ? '' : 's'}', AppStatus.info),
                 SizedBox(width: 8.w),
                 ElevatedButton.icon(
                   onPressed: _fetchBanks,

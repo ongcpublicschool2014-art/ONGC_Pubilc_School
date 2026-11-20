@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -16,6 +17,7 @@ import '../../utils/report_pdf_export.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../utils/save_path.dart';
 
 /// FEE COLLECTION - DIVISION SUMMARY ON <date> -- the old product's
 /// "FeeCollection - Division Summary" (PsFees, Division Summary.xlsx):
@@ -61,7 +63,7 @@ class _Row {
 }
 
 class _DivisionSummaryScreenState extends State<DivisionSummaryScreen> {
-  static const _sections = [('REGULAR', 'Regular'), ('ARREAR', 'Arrear'), ('ADVANCE', 'Advance')];
+  static const _sections = [('REGULAR', 'Regular'), ('ARREAR', 'Arrear'), ('ADVANCE', 'Advance'), ('REFUND', 'Refund')];
 
   late DateTime _from, _to;
   bool _withAdvance = true;
@@ -276,7 +278,7 @@ class _DivisionSummaryScreenState extends State<DivisionSummaryScreen> {
     if (rows.isEmpty) return _snack('Nothing to export yet.', AppColors.warning);
     setState(() => _exporting = true);
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Division Summary',
         fileName: '$_fileStem.xlsx',
         type: FileType.custom,
@@ -294,7 +296,7 @@ class _DivisionSummaryScreenState extends State<DivisionSummaryScreen> {
         fontSize: 10,
         horizontalAlign: xl.HorizontalAlign.Center,
         verticalAlign: xl.VerticalAlign.Center,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#F2F4F7'),
+        backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg,
       );
       final bold = xl.CellStyle(bold: true, fontSize: 10);
       final boldNum = xl.CellStyle(bold: true, fontSize: 10, horizontalAlign: xl.HorizontalAlign.Right);

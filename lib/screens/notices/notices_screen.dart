@@ -194,7 +194,11 @@ class _NoticesScreenState extends State<NoticesScreen> {
     return AppMasterDetail(
       listTitle: 'Notices',
       listIcon: 'volume-high',
-      listSubtitle: 'Announcements  ·  ${_notices.length} notices',
+      listSubtitle: 'Announcements  ·  ${_notices.length} notice${_notices.length == 1 ? '' : 's'}',
+      // A little wider than the default 380: beside the Create Notice button
+      // the title column was narrower than "Announcements", which then broke
+      // mid-word.
+      listWidth: 420,
       listActions: [
         ElevatedButton.icon(
           onPressed: _openCreate,

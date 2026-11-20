@@ -8,6 +8,8 @@ import '../../utils/formatters.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
+import 'next_year_card.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Year End Process (school) -- the old product's "Year End Processing":
 /// opened in the year that is ending, into the next registered year.
@@ -165,6 +167,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
       final na = Map<String, dynamic>.from(m['new_arrears'] as Map? ?? const {});
       final nd = Map<String, dynamic>.from(m['new_demands'] as Map? ?? const {});
       final adv = Map<String, dynamic>.from(m['advances'] as Map? ?? const {});
+      final tr = Map<String, dynamic>.from(m['transport'] as Map? ?? const {});
       if (!mounted) return;
       await showDialog<void>(
         context: context,
@@ -176,6 +179,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
             '${_id(nd['count']) ?? 0} new demand(s) from advance demands (₹${_money(_num(nd['amount']))}).',
             '${_id(adv['added']) ?? 0} advance line(s) added, ${_id(adv['updated']) ?? 0} changed, ${_id(adv['removed']) ?? 0} removed.',
             if ((_id(adv['reversed']) ?? 0) > 0) '${adv['reversed']} advance reconciliation(s) reversed because the advance was cancelled.',
+            '${_id(tr['students']) ?? 0} transport student(s) and ${_id(tr['charges']) ?? 0} transport charge(s) carried.',
             if ((_id(m['overpaid']) ?? 0) > 0)
               '${m['overpaid']} arrear(s) were paid in both years. Check whether a refund is due.',
           ].join('\n')),
@@ -242,7 +246,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
         Text('To Academic Year  ', style: AppUI.label),
         SizedBox(
           width: 150.w,
-          child: DropdownButtonFormField<String>(
+          child: AppDropdownField<String>(
             initialValue: next.contains(_target) ? _target : null,
             isExpanded: true,
             decoration: AppUI.field(context, '', filled: _target != null),
@@ -310,15 +314,8 @@ class _YearEndScreenState extends State<YearEndScreen> {
     }
     final next = st['next_years'] as List? ?? const [];
     if (next.isEmpty) {
-      return Container(
-        decoration: _cardDec,
-        alignment: Alignment.center,
-        child: AppUI.empty(
-          title: 'No next academic year registered',
-          why: 'Register the next year with its licence key first; then run Year End Process here.',
-          icon: 'calendar-1',
-        ),
-      );
+      // the next year is created here, with an activation code from the office
+      return NextYearCard(currentYear: '${st['year'] ?? ''}', onCreated: _loadStatus);
     }
     final p = _preview;
     if (p == null) {
@@ -388,6 +385,8 @@ class _YearEndScreenState extends State<YearEndScreen> {
       _tile('Pre-admissions', '${c['preadmission'] ?? 0}'),
       _tile('Passing out', '${c['passout'] ?? 0}', color: AppColors.textSecondary),
       _tile('No next ${schoolTerm('class')}', '${c['no_section'] ?? 0}', color: AppColors.error, sub: 'not carried'),
+      if ((_id(c['unallotted']) ?? 0) > 0)
+        _tile('No ${schoolTerm('section')} allotted', '${c['unallotted']}', color: AppColors.error, sub: 'allot before Year End'),
       _tile('Arrears', '₹${_money(_num(arr['amount']))}', color: AppColors.warning, sub: '${arr['students'] ?? 0} students'),
       _tile("Next year's demands", '₹${_money(_num(p['advance_demand_amount']))}', sub: "${p['advance_demands'] ?? 0} from advance demands"),
       _tile('Advance receipts', '${p['advance_receipts'] ?? 0}', sub: 'carried for reconciliation'),
@@ -416,7 +415,13 @@ class _YearEndScreenState extends State<YearEndScreen> {
       if ((_id(c['no_section']) ?? 0) > 0)
         warn(
             '${c['no_section']} students have no ${schoolTerm('section')} in the next ${schoolTerm('standard')} and will not be carried. '
-            'Add the ${schoolTerm('sections')} (e.g. "III A") in Master Data, or set Section Matching, then click Refresh Preview.',
+            'Add the ${schoolTerm('sections')} (e.g. "III A") in Master Data, or set Section Mapping, then click Refresh Preview.',
+            AppColors.error),
+      if ((_id(c['unallotted']) ?? 0) > 0)
+        warn(
+            '${c['unallotted']} ${(_id(c['unallotted']) ?? 0) == 1 ? 'student was' : 'students were'} placed in a ${schoolTerm('standard')} only and never '
+            'allotted a ${schoolTerm('section')}. Year End will not run until the principal allots ${(_id(c['unallotted']) ?? 0) == 1 ? 'it' : 'them'} '
+            'in Admission > Section Allocation > Section pending; then click Refresh Preview.',
             AppColors.error),
       if ((_id(left['students']) ?? 0) > 0)
         warn('${left['students']} students who are not carried still owe ₹${_money(_num(left['amount']))} -- collect it in ${p['from']}.', AppColors.warning),
@@ -465,13 +470,14 @@ class _YearEndScreenState extends State<YearEndScreen> {
     'PREADMISSION': 'Pre-admission',
     'PASSOUT': 'Passing out',
     'NO_SECTION': 'No next section',
+    'UNALLOTTED': 'No section allotted',
     'EXISTS': 'Already there',
   };
 
   AppStatus _actionStatus(String a) => switch (a) {
         'PROMOTE' => AppStatus.success,
         'DETAIN' => AppStatus.warning,
-        'NO_SECTION' => AppStatus.danger,
+        'NO_SECTION' || 'UNALLOTTED' => AppStatus.danger,
         'PASSOUT' || 'EXISTS' => AppStatus.neutral,
         _ => AppStatus.info,
       };
@@ -497,7 +503,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
             const Spacer(),
             SizedBox(
               width: 160.w,
-              child: DropdownButtonFormField<String?>(
+              child: AppDropdownField<String?>(
                 initialValue: _filterSection,
                 isExpanded: true,
                 style: AppUI.fieldText(context, filled: _filterSection != null),
@@ -588,6 +594,7 @@ class _YearEndScreenState extends State<YearEndScreen> {
   Widget _summaryGrid(Map<String, dynamic> m) {
     final arr = Map<String, dynamic>.from(m['arrears'] as Map? ?? const {});
     final adv = Map<String, dynamic>.from(m['advances'] as Map? ?? const {});
+    final tr = Map<String, dynamic>.from(m['transport'] as Map? ?? const {});
     final items = <(String, String)>[
       ('Students carried', '${m['students'] ?? 0}'),
       ('Promoted / detained / pre-admission', '${m['promoted'] ?? 0} / ${m['detained'] ?? 0} / ${m['preadmissions'] ?? 0}'),
@@ -597,6 +604,9 @@ class _YearEndScreenState extends State<YearEndScreen> {
       ("Demands from the new year's Section Fee Demand", '${m['demands'] ?? 0}'),
       ('Arrears carried', '${arr['count'] ?? 0}  (₹${_money(_num(arr['amount']))})'),
       ('Advance lines carried', '${adv['added'] ?? 0}'),
+      // students on school transport keep their pickup / drop point and bus
+      ('Transport students carried', '${tr['students'] ?? 0}'),
+      ('Transport charges copied', '${tr['charges'] ?? 0}'),
       ('Receipt / number series created', '${m['sequences'] ?? 0}'),
     ];
     return Column(children: [

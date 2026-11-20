@@ -154,30 +154,35 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
   /// visible: it gets no check, and that is a decision rather than an
   /// oversight. The id is listed before the name deliberately -- see
   /// countReferencing.
-  static const _usage = <String, (String, String, String, String, String)>{
+  static const _usage = <String, List<(String, String, String, String, String)>>{
     // table              refs table   id col    name col        noun       what to do
-    'admissiontype':     ('students', 'adm_id', 'admname',      'student', 'Change their admission type first.'),
-    'quota':             ('students', 'quo_id', 'quoname',      'student', 'Change their quota first.'),
-    'concessioncategory':('students', 'con_id', 'stucondesc',   'student', 'Remove the concession from them first.'),
-    'community':         ('students', '',       'community',    'student', 'Change their community first.'),
+    'admissiontype':     [('students', 'adm_id', 'admname',      'student', 'Change their admission type first.')],
+    'quota':             [('students', 'quo_id', 'quoname',      'student', 'Change their quota first.')],
+    'concessioncategory':[('students', 'con_id', 'stucondesc',   'student', 'Remove the concession from them first.')],
+    'community':         [('students', '',       'community',    'student', 'Change their community first.')],
+    // Division: set on a standard (course.div_id) and copied to students by name.
+    'division':          [('course',   'div_id', '',             'standard', 'Set another division (or None) on those standards first.'),
+                          ('students', '',       'division',     'student',  'Change their division first.')],
   };
 
   /// Refused before the confirmation dialog: being asked "are you sure?" and
   /// only then told it was never allowed is worse than not being asked.
   Future<bool> _blockedByUsage(int id, String name) async {
-    final u = _usage[widget.table];
-    if (u == null) return false;
-    final (refTable, idCol, nameCol, noun, fix) = u;
-    final n = await countReferencing(refTable, [
-      if (idCol.isNotEmpty) (idCol, id),
-      (nameCol, name),
-    ]);
-    if (n == 0) return false;
-    if (mounted) {
-      await showMasterInUseDialog(context,
-          name: name, count: n, noun: noun, fix: fix);
+    final refs = _usage[widget.table];
+    if (refs == null) return false;
+    for (final (refTable, idCol, nameCol, noun, fix) in refs) {
+      final n = await countReferencing(refTable, [
+        if (idCol.isNotEmpty) (idCol, id),
+        if (nameCol.isNotEmpty) (nameCol, name),
+      ]);
+      if (n == 0) continue;
+      if (mounted) {
+        await showMasterInUseDialog(context,
+            name: name, count: n, noun: noun, fix: fix);
+      }
+      return true;
     }
-    return true;
+    return false;
   }
 
   Future<void> _delete(int id, String name) async {
@@ -453,7 +458,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
             child: Row(children: [
               CardTitleBlock(icon: widget.icon, title: _pluralTitle, subtitle: 'all ${widget.title.toLowerCase()} records'),
               SizedBox(width: 10.w),
-              AppUI.chip('${_rows.length} $countLabel', AppStatus.info),
+              AppUI.chip('${_rows.length} ${_rows.length == 1 ? _singular(countLabel) : countLabel}', AppStatus.info),
               const Spacer(),
               if (!widget.hideImport)
                 (widget.importTabIndex != null ? _importButton() : _bulkImportButton()),
@@ -475,7 +480,7 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                       children: [
                         SizedBox(width: 50.w, child: Text('S NO.', style: _hStyle())),
                         Expanded(child: Text(widget.title.toUpperCase(), style: _hStyle())),
-                        SizedBox(width: 90.w, child: Text('ACTIONS', textAlign: TextAlign.center, style: _hStyle())),
+                        SizedBox(width: 90.w, child: Text('ACTION', textAlign: TextAlign.center, style: _hStyle())),
                       ],
                     ),
                   ),
@@ -497,7 +502,8 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
                                       : int.tryParse(r[widget.idCol].toString()) ?? 0;
                                   final name = r[widget.nameCol]?.toString() ?? '';
                                   return Container(
-                                    color: Colors.white,
+                                    // Alternate rows, like every other master list.
+                                    color: i.isEven ? Colors.white : AppColors.surface,
                                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
                                     child: Row(
                                       children: [
@@ -542,4 +548,13 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
       ),
     );
   }
+}
+
+/// "divisions" -> "division", "communities" -> "community", "matches" -> "match"
+/// for a count of 1.
+String _singular(String plural) {
+  if (plural.endsWith('ies')) return '${plural.substring(0, plural.length - 3)}y';
+  if (RegExp(r'(ches|shes|sses|xes)$').hasMatch(plural)) return plural.substring(0, plural.length - 2);
+  if (plural.endsWith('s')) return plural.substring(0, plural.length - 1);
+  return plural;
 }

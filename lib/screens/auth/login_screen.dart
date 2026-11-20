@@ -9,6 +9,7 @@ import '../../utils/auth_provider.dart';
 
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -114,7 +115,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final result = await SupabaseService.client
           .from('institutionyear')
-          .select('yrlabel, iyrstadate, iyrenddate')
+          .select('yrlabel, iyrstadate, iyrenddate, yearend_to')
           .eq('ins_id', insId)
           .eq('activestatus', 1)
           .order('yrlabel', ascending: false);
@@ -145,6 +146,17 @@ class _LoginScreenState extends State<LoginScreen> {
           currentYearLabel = y['yrlabel']?.toString();
           break;
         }
+      }
+      // Year End already moved this year on (it is closed for collection and
+      // admission): open the year it moved to, even before that year's start
+      // date -- the old year would only refuse the cashier.
+      final yearEndTo = years
+          .where((y) => y['yrlabel']?.toString() == currentYearLabel)
+          .map((y) => y['yearend_to']?.toString() ?? '')
+          .firstOrNull;
+      if (yearEndTo != null && yearEndTo.isNotEmpty &&
+          years.any((y) => y['yrlabel']?.toString() == yearEndTo)) {
+        currentYearLabel = yearEndTo;
       }
       if (mounted) {
         setState(() {
@@ -280,7 +292,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: Colors.white,
                         padding: EdgeInsets.all(compact ? 6 : 8),
                         child: Image.asset(
-                          'assets/images/educore360_logo.png',
+                          'assets/images/app_logo_mark.png',
                           fit: BoxFit.contain,
                           errorBuilder: (_, __, ___) => AppIcon('teacher',
                             size: compact ? 30 : 40,
@@ -294,7 +306,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   FadeInLeft(
                     delay: const Duration(milliseconds: 200),
                     child: Text(
-                      'Welcome to\nEduCore360',
+                      'Welcome to\nFIT School',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.displayMedium?.copyWith(
                             color: Colors.white,
@@ -510,7 +522,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                             orElse: () => null,
                                           );
                                   final selectedLogo = (selected?['inslogo'] as String?)?.trim() ?? '';
-                                  return DropdownButtonFormField<int>(
+                                  return AppDropdownField<int>(
                                     value: _selectedInsId,
                                     isExpanded: true,
                                     dropdownColor: Colors.white,
@@ -624,7 +636,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             AppUI.fieldLabel('Academic Year'),
                             _loadingYears
                                 ? const LinearProgressIndicator()
-                                : DropdownButtonFormField<String>(
+                                : AppDropdownField<String>(
                                     value: _selectedYear,
                                     isExpanded: true,
                                     dropdownColor: Colors.white,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../utils/app_theme.dart';
 import '../services/maintenance_service.dart';
 
 /// Wraps the whole app and, when the hosted maintenance flag is on, covers
@@ -106,8 +107,8 @@ class _MaintenanceScreenState extends State<_MaintenanceScreen>
 
 // ── Shared maintenance visual (identical across desktop / mobile / web) ──────
 
-const Color _mAccent = Color(0xFFC9971C); // light-blue accents
-const Color _mAccentStrong = Color(0xFFE0B54A);
+const Color _mAccent = AppColors.gold; // marigold accents
+const Color _mAccentStrong = AppColors.goldMuted;
 
 /// Builds the maintenance card. Kept as a top-level function so the exact same
 /// layout can be pasted into each app (they can't share a Dart library).
@@ -127,13 +128,13 @@ Widget maintenanceScreenBody(
   final hasNotice = notice.isNotEmpty;
 
   return Material(
-    color: const Color(0xFF3D0F17), // opaque base — hides the app behind it
+    color: AppColors.sideBg, // opaque base — hides the app behind it
     child: DecoratedBox(
       decoration: const BoxDecoration(
         gradient: RadialGradient(
           center: Alignment(0, -0.35),
           radius: 1.1,
-          colors: [Color(0xFF7A1F2B), Color(0xFF571520)],
+          colors: [AppColors.primary, AppColors.primaryDark],
         ),
       ),
       child: Center(
@@ -231,10 +232,10 @@ Widget _maintenanceIllustration(Animation<double> spin) {
         Container(
           width: 120,
           height: 120,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: RadialGradient(
-              colors: [Color(0x55C9971C), Color(0x00571520)],
+              colors: [AppColors.gold.withValues(alpha: 0.33), AppColors.primaryDark.withValues(alpha: 0)],
             ),
           ),
         ),
@@ -247,7 +248,7 @@ Widget _maintenanceIllustration(Animation<double> spin) {
           child: RotationTransition(
             turns: spin,
             child: const Icon(Icons.settings,
-                size: 34, color: Color(0xFFE7B9BF)),
+                size: 34, color: AppColors.onPrimaryMuted),
           ),
         ),
         // Decorative sparkles.

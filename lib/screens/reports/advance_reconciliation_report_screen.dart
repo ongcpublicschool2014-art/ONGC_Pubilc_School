@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -18,6 +19,8 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// ADVANCE FEE RECONCILIATION REPORT -- the old product's "ADVANCE FEE
 /// RECONCILATION REPORT" (PsFees, over Advfeerecon):
@@ -193,7 +196,8 @@ class _AdvanceReconciliationReportScreenState extends State<AdvanceReconciliatio
   }
 
   // ── rows ─────────────────────────────────────────────────────────────────
-  static String _termLabel(String t) => t.isEmpty ? '-' : t;
+  /// An advance taken for a fee type has no term until it is reconciled.
+  static String _termLabel(String t) => t.isEmpty ? 'Any term' : t;
   static String _feeLabel(String f) => f.isEmpty ? 'General Advance' : f;
 
   /// The report rows in print order: per section its students (or fee types)
@@ -366,7 +370,7 @@ class _AdvanceReconciliationReportScreenState extends State<AdvanceReconciliatio
     if (rows.isEmpty) return _snack('Nothing to export yet.', AppColors.warning);
     setState(() => _exporting = true);
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Advance Reconciliation Report',
         fileName: '$_fileName.xlsx',
         type: FileType.custom,
@@ -379,7 +383,7 @@ class _AdvanceReconciliationReportScreenState extends State<AdvanceReconciliatio
       book.delete('Sheet1');
       final bold = xl.CellStyle(bold: true, fontSize: 11);
       final center = xl.CellStyle(bold: true, fontSize: 11, horizontalAlign: xl.HorizontalAlign.Center);
-      final hdr = xl.CellStyle(bold: true, fontSize: 11, backgroundColorHex: xl.ExcelColor.fromHexString('#F2F4F7'));
+      final hdr = xl.CellStyle(bold: true, fontSize: 11, backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg);
       void put(int c, int r, String v, [xl.CellStyle? st, bool number = false]) {
         final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
         final n = number ? double.tryParse(v.replaceAll(',', '')) : null;
@@ -422,7 +426,7 @@ class _AdvanceReconciliationReportScreenState extends State<AdvanceReconciliatio
 
   // ── UI ───────────────────────────────────────────────────────────────────
   Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?> onChanged, {String? icon, String allLabel = 'All'}) {
-    return DropdownButtonFormField<T?>(
+    return AppDropdownField<T?>(
       key: ValueKey('$hint-$value-${items.length}'),
       initialValue: value,
       isExpanded: true,
@@ -538,8 +542,9 @@ class _AdvanceReconciliationReportScreenState extends State<AdvanceReconciliatio
           ),
           SizedBox(width: 6.w),
           Text('Only Not Reconciled', style: AppUI.label),
-          const Spacer(),
-          Flexible(child: Text(_what, style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          SizedBox(width: 16.w),
+          // Wraps to a second line in a small window rather than "reconciled i…".
+          Expanded(child: Text(_what, style: AppUI.muted, maxLines: 2, textAlign: TextAlign.right, overflow: TextOverflow.ellipsis)),
         ]),
         SizedBox(height: 16.h),
         // KPI tiles

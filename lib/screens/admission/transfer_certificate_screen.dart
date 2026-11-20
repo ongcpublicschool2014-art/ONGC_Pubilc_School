@@ -12,6 +12,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/form_section_panel.dart';
 import '../../widgets/pill_tab.dart';
 import '../../widgets/student_avatar.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Transfer Certificate module (Admission → Transfer Certificate).
 /// Two tabs — Individual (one student) and Whole Class (bulk). Issuing a TC sets
@@ -160,11 +161,13 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       // re-activating a student appends a row with no tcno; letting that win
       // would hide the number that was issued.
       final lastTc = <String, Map<String, dynamic>>{};
+      final latest = <String, Map<String, dynamic>>{};
       final tcRows = List<Map<String, dynamic>>.from(res[4] as List)
         ..sort((a, b) => ((a['tc_id'] as num?) ?? 0).compareTo((b['tc_id'] as num?) ?? 0));
       for (final r in tcRows) {
         final k = r['stuadmno']?.toString() ?? '';
         if (k.isEmpty) continue;
+        latest[k] = Map<String, dynamic>.from(r);
         if ((r['tcno'] ?? '').toString().trim().isEmpty) continue;
         lastTc[k] = Map<String, dynamic>.from(r);
       }
@@ -181,6 +184,9 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
         _lastTc
           ..clear()
           ..addAll(lastTc);
+        _latestTc
+          ..clear()
+          ..addAll(latest);
         _loading = false;
       });
     } catch (e) {
@@ -253,6 +259,13 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
 
   String _nextSeqNo(Map s) => _seqNoFor(s, _nextSeqNum(s));
 
+  /// Is the Individual tab's Doc No the one its register would give next
+  /// (not typed over by hand)?
+  bool _indDocNoFromSeq() {
+    final seq = _sequences.firstWhere((e) => (e['seq_id'] as num).toInt() == _indSeqId, orElse: () => const {});
+    return seq.isNotEmpty && _indDocNo.text.trim() == _nextSeqNo(seq);
+  }
+
   void _indPick(Map<String, dynamic>? s) {
     setState(() {
       _indStudent = s;
@@ -265,13 +278,25 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       _indRemarks.clear();
       // Only a student who has LEFT carries a current TC. Once re-activated the
       // form goes blank again, even though the history row survives.
-      final prev = (s == null || _indStatus == 1)
-          ? null
-          : _lastTc[s['stuadmno']?.toString() ?? ''];
+      // A TC saved but not yet approved and printed: open THAT entry, so
+      // saving updates it instead of issuing a second TC.
+      final pending = _pendingTc(s);
+      if (pending != null) {
+        _indStatus = (pending['status'] as num?)?.toInt() ?? _indStatus;
+        _indEditingTcId = (pending['tc_id'] as num?)?.toInt();
+        _indDocNo.text = (pending['docno'] ?? '').toString();
+      }
+      final prev = pending ??
+          ((s == null || _indStatus == 1) ? null : _lastTc[s['stuadmno']?.toString() ?? '']);
       _indTcNo.text = (prev?['tcno'] ?? '').toString();
       _indTcDate = _parseDate(prev?['tcdate']);
       _indEffectFrom = _parseDate(prev?['effectfrom']);
     });
+    final pending = _pendingTc(s);
+    if (pending != null) {
+      _snack('This student already has a TC waiting for approval / printing (TC No ${pending['tcno'] ?? '-'}). '
+          'Saving now updates that TC.', AppColors.warning);
+    }
   }
 
   void _indNew() {
@@ -322,7 +347,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
     if (_indStatus != 1) {
       final pending = await _pendingFees(s['stuadmno'].toString());
       if (!mounted) return;
-      if (pending > 0.005) {
+      if (pending == null || pending > 0.005) {
         final ok = await _confirmPending(pending);
         if (ok != true) return;
       }
@@ -346,21 +371,14 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
         'docdate': _ymd(_indDocDate),
         'remarks': _indRemarks.text.trim(),
         'createdby': auth.userName,
+        // Doc No still the register's next number: the server claims it under
+        // a lock (it moves the counter; two clerks no longer get the same one).
+        if (_indSeqId != null && _indEditingTcId == null && _indDocNoFromSeq()) 'seq_id': _indSeqId,
       }, tcId: _indEditingTcId);
-      // Bump the doc-number sequence so the next TC gets the next number (only
-      // when a sequence was used and the Doc No still matches what it generated).
-      if (_indSeqId != null) {
-        final seq = _sequences.firstWhere((e) => (e['seq_id'] as num).toInt() == _indSeqId, orElse: () => const {});
-        if (seq.isNotEmpty && _indDocNo.text.trim() == _nextSeqNo(seq)) {
-          try {
-            await SupabaseService.fromSchema('sequence').update({'seqcurno': _nextSeqNum(seq)}).eq('seq_id', _indSeqId!);
-          } catch (_) {/* non-fatal */}
-        }
-      }
       _snack(
           _indStatus == 1
               ? 'Student re-activated. Status changed to ${_statusLabel(_indStatus)}.'
-              : 'Transfer certificate saved. Status changed to ${_statusLabel(_indStatus)}.',
+              : 'Transfer certificate saved. The student becomes ${_statusLabel(_indStatus)} once the certificate is approved in TC Approval and printed.',
           AppColors.success);
       await _load();
       _indNew();
@@ -371,8 +389,10 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
     }
   }
 
-  // Sum of outstanding fee balances for a student (by admission no).
-  Future<double> _pendingFees(String admno) async {
+  // Sum of outstanding fee balances for a student (by admission no). Null when
+  // it could not be read -- that used to come back as 0, so the warning
+  // silently never showed.
+  Future<double?> _pendingFees(String admno) async {
     try {
       final res = await SupabaseService.fromSchema('feedemand')
           .select('balancedue')
@@ -386,15 +406,17 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       }
       return sum;
     } catch (_) {
-      return 0;
+      return null;
     }
   }
 
-  Future<bool?> _confirmPending(double amount) => showDialog<bool>(
+  Future<bool?> _confirmPending(double? amount) => showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Pending Fees'),
-          content: Text('This student has pending fees of ₹${amount.toStringAsFixed(2)}.\n\nDo you want to issue the transfer certificate anyway?'),
+          title: Text(amount == null ? 'Fees Not Checked' : 'Pending Fees'),
+          content: Text(amount == null
+              ? 'The pending fees could not be checked just now.\n\nDo you want to issue the transfer certificate anyway?'
+              : 'This student has pending fees of ₹${amount.toStringAsFixed(2)}.\n\nDo you want to issue the transfer certificate anyway?'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
             ElevatedButton(
@@ -414,6 +436,18 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
   /// Latest tc_entry per student (stuadmno -> row). Lets an already-issued TC
   /// show its number/date instead of a blank, editable cell.
   final Map<String, Map<String, dynamic>> _lastTc = {};
+  /// The very latest tc_entry per student, re-activation rows included.
+  final Map<String, Map<String, dynamic>> _latestTc = {};
+
+  /// A TC saved but not yet in force: the student stays active until the
+  /// approved certificate is printed, so without this they looked like any
+  /// active student -- and a second TC could be issued over the first.
+  Map<String, dynamic>? _pendingTc(Map<String, dynamic>? s) {
+    if (s == null || ((s['activestatus'] as num?)?.toInt() ?? 1) != 1) return null;
+    final last = _latestTc[s['stuadmno']?.toString() ?? ''];
+    if (last == null || ((last['status'] as num?)?.toInt() ?? 1) == 1) return null;
+    return last;
+  }
 
   final _wcSearch = TextEditingController();
   int _wcPage = 0;
@@ -481,7 +515,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
   ({String no, DateTime? date}) _wcTcFor(Map<String, dynamic> s) {
     final admno = s['stuadmno'].toString();
     final isActive = ((s['activestatus'] as num?)?.toInt() ?? 1) == 1;
-    final issued = isActive ? null : _lastTc[admno];
+    final issued = isActive ? _pendingTc(s) : _lastTc[admno];
     final issuedNo = (issued?['tcno'] ?? '').toString().trim();
     if (issuedNo.isNotEmpty) {
       return (no: issuedNo, date: _parseDate(issued?['tcdate']));
@@ -514,12 +548,13 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
       }
     }
     // Warn about total outstanding fees across the selected students.
-    double pending = 0;
+    double? pending = 0;
     for (final admno in _wcSelected) {
-      pending += await _pendingFees(admno);
+      final p = await _pendingFees(admno);
+      pending = (p == null || pending == null) ? null : pending + p;
     }
     if (!mounted) return;
-    if (pending > 0.005) {
+    if (pending == null || pending > 0.005) {
       final ok = await _confirmPending(pending);
       if (ok != true) return;
     }
@@ -531,17 +566,17 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
     setState(() => _wcSaving = true);
     final auth = context.read<AuthProvider>();
     int saved = 0;
-    // Doc numbers come from the TC sequence, one per student. The counter is
-    // advanced locally through the batch and written back ONCE at the end, so a
-    // 30-student class consumes 30 numbers instead of reusing one.
-    final Map<String, dynamic>? seq = isActivate ? null : _sequences.first;
-    var seqNum = seq == null ? 0 : _nextSeqNum(seq);
+    // Doc numbers come from the TC register, one per student, claimed by the
+    // server for each save (no client-side counter to race).
+    final Map<String, dynamic>? seq = isActivate || _sequences.isEmpty ? null : _sequences.first;
     final today = _ymd(DateTime.now());
     try {
       for (final s in _wcStudents.where((s) => _wcSelected.contains(s['stuadmno'].toString()))) {
         final admno = s['stuadmno'].toString();
         final row = _wcRows[admno]!;
         final tc = _wcTcFor(s);
+        // A TC already waiting for approval is updated, not issued twice.
+        final pendingId = (_pendingTc(s)?['tc_id'] as num?)?.toInt();
         await SupabaseService.saveTcEntry({
           'stuadmno': admno,
           'stuname': s['stuname'],
@@ -557,26 +592,18 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           // its TC carries, so it follows the TC date rather than costing the
           // user a second picker on every row. The Individual tab still asks.
           'effectfrom': isActivate ? null : _ymd(tc.date),
-          'docno': seq == null ? '' : _seqNoFor(seq, seqNum),
+          'docno': pendingId == null ? '' : (_pendingTc(s)?['docno'] ?? '').toString(),
           'docdate': isActivate ? null : today,
           'remarks': row.remarks.text.trim(),
           'createdby': auth.userName,
-        });
-        if (seq != null) seqNum++;
+          if (seq != null && pendingId == null) 'seq_id': (seq['seq_id'] as num).toInt(),
+        }, tcId: isActivate ? null : pendingId);
         saved++;
-      }
-      // Write the counter back once — seqNum has run one past the last used.
-      if (seq != null && saved > 0) {
-        try {
-          await SupabaseService.fromSchema('sequence')
-              .update({'seqcurno': seqNum - 1})
-              .eq('seq_id', (seq['seq_id'] as num).toInt());
-        } catch (_) {/* non-fatal: the TCs are already saved */}
       }
       _snack(
           isActivate
               ? 'Re-activated $saved student(s). Their TCs are cancelled.'
-              : 'TC issued for $saved student(s). Status changed to ${_statusLabel(_wcBulkStatus!)}.',
+              : 'TC issued for $saved student(s). They become ${_statusLabel(_wcBulkStatus!)} once their certificates are approved in TC Approval and printed.',
           AppColors.success);
       await _load();
       _wcSelectClass(_wcClass);
@@ -641,7 +668,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           _twoUpPanels(
             left: _sectionCard('Student Details', 'user', [
             _rowFields([
-              _labeled('TC Sequence *', DropdownButtonFormField<int>(
+              _labeled('TC Sequence *', AppDropdownField<int>(
                 key: ValueKey('tcseq-${_indSeqId ?? 0}'),
                 initialValue: _indSeqId,
                 isExpanded: true,
@@ -668,7 +695,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
               _labeled('Document Date *', _dateField(_indDocDate, (d) => setState(() => _indDocDate = d), hint: 'Select document date'), icon: 'calendar-1'),
             ]),
             _rowFields([
-              _labeled(schoolTerm('Course'), DropdownButtonFormField<String>(
+              _labeled(schoolTerm('Course'), AppDropdownField<String>(
                 key: ValueKey('tccourse-${_indCourse ?? ''}'),
                 initialValue: _indCourse,
                 isExpanded: true,
@@ -677,7 +704,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
                 items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('Select course (optional)'))), ..._courses.map((e) => DropdownMenuItem(value: e['courname'].toString(), child: Text(e['courname'].toString(), overflow: TextOverflow.ellipsis)))],
                 onChanged: (v) => setState(() { _indCourse = v; _indClass = null; _indStudent = null; }),
               ), icon: 'ranking'),
-              _labeled(schoolTerm('Class'), DropdownButtonFormField<String>(
+              _labeled(schoolTerm('Class'), AppDropdownField<String>(
                 key: ValueKey('tcfclass-${_indClass ?? ''}-${_indCourse ?? ''}'),
                 initialValue: _indClass,
                 isExpanded: true,
@@ -707,7 +734,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           ]),
             right: _sectionCard('Transfer Certificate Details', 'document-text', [
             _rowFields([
-              _labeled('Status *', DropdownButtonFormField<int>(
+              _labeled('Status *', AppDropdownField<int>(
                 key: ValueKey('tcstatus-$_indStatus'),
                 initialValue: _indStatus,
                 isExpanded: true,
@@ -817,8 +844,8 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
 
   String _genderLabel(dynamic g) {
     switch (g?.toString().toUpperCase()) {
-      case 'M': return 'Male';
-      case 'F': return 'Female';
+      case 'M': return kBoyLabel;
+      case 'F': return kGirlLabel;
       case 'T': return 'Other';
       default: return '';
     }
@@ -846,7 +873,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           Row(children: [
             SizedBox(
               width: 280.w,
-              child: DropdownButtonFormField<int>(
+              child: AppDropdownField<int>(
                 key: ValueKey('wcbulk-${_wcBulkStatus ?? 0}'),
                 initialValue: _wcBulkStatus,
                 isExpanded: true,
@@ -876,7 +903,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
           SizedBox(height: 12.h),
           // Course + Class filters + search.
           Row(children: [
-            SizedBox(width: 220.w, child: DropdownButtonFormField<String>(
+            SizedBox(width: 220.w, child: AppDropdownField<String>(
               key: ValueKey('wccourse-${_wcCourse ?? ''}'),
               initialValue: _wcCourse,
               isExpanded: true,
@@ -886,7 +913,7 @@ class _TransferCertificateScreenState extends State<TransferCertificateScreen>
               onChanged: _wcSelectCourse,
             )),
             SizedBox(width: 12.w),
-            SizedBox(width: 220.w, child: DropdownButtonFormField<String>(
+            SizedBox(width: 220.w, child: AppDropdownField<String>(
               key: ValueKey('wcclass-${_wcClass ?? ''}-${_wcCourse ?? ''}'),
               initialValue: _wcClass,
               isExpanded: true,

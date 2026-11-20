@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
@@ -7,7 +10,10 @@ import '../../services/tc_service.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/school_terms.dart';
+import '../../utils/tc_docx.dart';
 import '../../utils/tc_fields.dart';
+import '../../utils/tc_pdf.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
@@ -18,7 +24,10 @@ import '../../widgets/student_avatar.dart';
 /// Saving stores the whole set, so an approved certificate prints exactly
 /// what was approved. Approved = read-only (cancel the approval to edit).
 class TcCertificateScreen extends StatefulWidget {
-  const TcCertificateScreen({super.key});
+  /// Set: open just this student's certificate (TC Approval > Edit), without
+  /// the student list; Close returns to the caller.
+  final int? stuId;
+  const TcCertificateScreen({super.key, this.stuId});
   @override
   State<TcCertificateScreen> createState() => _TcCertificateScreenState();
 }
@@ -28,11 +37,22 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
   List<Map<String, dynamic>> _items = [];
   List<String> _templateKeys = []; // placeholders in the uploaded format
   String _schoolName = '', _schoolAddress = '';
+  int _yearStartMonth = 4; // the school's academic year start (institutionyear)
+  String _schoolPhone = '', _schoolEmail = '', _affNo = '';
   final _search = TextEditingController();
   String _filter = 'ALL'; // ALL | NEW | DRAFT | APPROVED
   Map<String, dynamic>? _sel;
   final _serial = TextEditingController();
   final Map<String, TextEditingController> _ctl = {};
+
+  // The certificate is shown the way it prints: the items of the student's
+  // own TC format (by standard), in its order and wording. "Show all fields"
+  // brings back the full grouped list.
+  List<Map<String, dynamic>> _formats = [];
+  final Map<int, List<(String, List<String>)>> _itemsCache = {};
+  List<(String, List<String>)>? _formItems;
+  String _formName = '';
+  bool _showAll = false;
 
   int get _insId => context.read<AuthProvider>().insId ?? 1;
   String get _year => context.read<AuthProvider>().yearLabel ?? '';
@@ -40,7 +60,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load(keepStu: widget.stuId);
   }
 
   @override
@@ -65,17 +85,30 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
     try {
       final r = await Future.wait<dynamic>([
         TcService.list(),
-        TcService.format(),
+        TcService.formats(),
         SupabaseService.getInstitutionInfo(_insId),
+        SupabaseService.client.from('institution').select('insaffno').eq('ins_id', _insId).maybeSingle()
+            .then<Map<String, dynamic>?>((v) => v, onError: (_) => null),
+        SupabaseService.client.from('institutionyear').select('iyrstadate').eq('ins_id', _insId).eq('yrlabel', _year).maybeSingle()
+            .then<Map<String, dynamic>?>((v) => v, onError: (_) => null),
       ]);
       if (!mounted) return;
       final info = r[2] as ({String? name, String? logo, String? address, String? mobile, String? email});
       setState(() {
         _items = r[0] as List<Map<String, dynamic>>;
-        final f = r[1] as Map<String, dynamic>?;
-        _templateKeys = [for (final x in (f?['placeholders'] as List? ?? const [])) '$x'];
+        _formats = r[1] as List<Map<String, dynamic>>;
+        _itemsCache.clear();
+        // every format's fields (a school may have one per standard)
+        _templateKeys = {
+          for (final f in r[1] as List<Map<String, dynamic>>)
+            for (final x in (f['placeholders'] as List? ?? const [])) '$x',
+        }.toList();
         _schoolName = info.name ?? '';
         _schoolAddress = (info.address ?? '').replaceAll('\n', ', ');
+        _schoolPhone = (info.mobile ?? '').trim();
+        _schoolEmail = (info.email ?? '').trim();
+        _affNo = '${(r[3] as Map<String, dynamic>?)?['insaffno'] ?? ''}'.trim();
+        _yearStartMonth = DateTime.tryParse('${(r[4] as Map<String, dynamic>?)?['iyrstadate'] ?? ''}')?.month ?? 4;
         _loading = false;
       });
       if (keepStu != null) {
@@ -116,12 +149,15 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
   TextEditingController _c(String k) => _ctl.putIfAbsent(k, () => TextEditingController());
 
   void _open(Map<String, dynamic> i) {
-    final auto = TcService.autoValues(i, schoolName: _schoolName, schoolAddress: _schoolAddress, yearLabel: _year);
+    final auto = TcService.autoValues(i, schoolName: _schoolName, schoolAddress: _schoolAddress, yearLabel: _year,
+        schoolPhone: _schoolPhone, schoolEmail: _schoolEmail, affiliationNo: _affNo, yearStartMonth: _yearStartMonth);
     final cert = i['cert'] as Map?;
     final saved = Map<String, dynamic>.from((cert?['fields'] as Map?) ?? const {});
     // a new certificate starts the district fields from the last saved one
     if (cert == null) {
       for (final k in kTcCarryKeys) {
+        // the institution record wins; carry over only what it lacks
+        if ((auto[k] ?? '').trim().isNotEmpty) continue;
         for (final o in _items) {
           final v = '${((o['cert'] as Map?)?['fields'] as Map?)?[k] ?? ''}'.trim();
           if (v.isNotEmpty) {
@@ -131,6 +167,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
         }
       }
     }
+    _loadFormItems(auto['Standard'] ?? '');
     setState(() {
       _sel = i;
       _serial.text = '${cert?['tcserial'] ?? (i['tc'] as Map?)?['tcno'] ?? ''}';
@@ -140,10 +177,39 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
     });
   }
 
+  /// The items of the format a student of [standard] prints on: from a Word
+  /// format's own rows, or a placed (PDF) format's fields top to bottom.
+  Future<void> _loadFormItems(String standard) async {
+    final f = TcService.formatFor(_formats, standard);
+    final id = TcService.fmtId(f);
+    setState(() {
+      _formItems = id == null ? null : _itemsCache[id];
+      _formName = '${f?['name'] ?? ''}';
+    });
+    if (f == null || id == null || _itemsCache.containsKey(id)) return;
+    List<(String, List<String>)> items;
+    try {
+      if (TcService.isPdf(f)) {
+        final fields = TcPdfLayout.fromJson(f['layout']).fields.where((x) => !x.isList).toList()
+          ..sort((a, b) => a.page != b.page ? a.page.compareTo(b.page) : (a.y - b.y).abs() > 3 ? a.y.compareTo(b.y) : a.x.compareTo(b.x));
+        items = [for (final x in fields) (x.label.isNotEmpty ? x.label : tcFieldLabel(x.key), [x.key])];
+      } else {
+        final full = await TcService.format(withContent: true, tcfId: id);
+        final b64 = '${full?['content_b64'] ?? ''}';
+        items = b64.isEmpty ? const [] : TcDocx.items(base64Decode(b64));
+      }
+    } catch (_) {
+      items = const [];
+    }
+    _itemsCache[id] = items;
+    if (mounted && TcService.fmtId(TcService.formatFor(_formats, standard)) == id) setState(() => _formItems = items);
+  }
+
   /// Refill the auto fields from the current student / admission data.
   void _refill() {
     if (_sel == null) return;
-    final auto = TcService.autoValues(_sel!, schoolName: _schoolName, schoolAddress: _schoolAddress, yearLabel: _year);
+    final auto = TcService.autoValues(_sel!, schoolName: _schoolName, schoolAddress: _schoolAddress, yearLabel: _year,
+        schoolPhone: _schoolPhone, schoolEmail: _schoolEmail, affiliationNo: _affNo, yearStartMonth: _yearStartMonth);
     setState(() {
       for (final f in kTcFields) {
         if (f.auto != null) _c(f.key).text = auto[f.key] ?? '';
@@ -155,6 +221,10 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
   Future<void> _save() async {
     final i = _sel;
     if (i == null) return;
+    for (final k in const ['Aadhar No', 'EMIS No']) {
+      final err = _fieldError(k);
+      if (err != null) return _snack('$err. Correct it, then save.', AppColors.error);
+    }
     setState(() => _saving = true);
     try {
       final fields = {
@@ -209,6 +279,13 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading && _items.isEmpty) return const Center(child: CircularProgressIndicator());
+    // One certificate only (opened from TC Approval).
+    if (widget.stuId != null) {
+      if (_sel == null) {
+        return AppUI.empty(title: 'Certificate not found', why: 'Refresh TC Approval and try again.', icon: 'document-text');
+      }
+      return Container(decoration: AppUI.card(), clipBehavior: Clip.antiAlias, child: _detail());
+    }
     final rows = _visible;
     return AppMasterDetail(
       listTitle: 'TC Details',
@@ -247,7 +324,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text('${i['stuname'] ?? ''}', style: AppUI.label.copyWith(color: on ? AppColors.primary : null), overflow: TextOverflow.ellipsis),
                           Text('${i['stuadmno'] ?? ''} · ${i['stuclass'] ?? ''} · ${(i['tc'] as Map?)?['statustype'] ?? ''}',
-                              style: AppUI.muted, overflow: TextOverflow.ellipsis),
+                              style: AppUI.muted, maxLines: 2, overflow: TextOverflow.ellipsis),
                         ]),
                       ),
                       _statusChip(_status(i)),
@@ -266,6 +343,87 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
 
   /// Course of study: one row per school (row 1 = this school, row 2 = the
   /// previous school from the admission), as on the state-board TC.
+  /// The certificate as the format prints it: each item's own wording, its
+  /// box(es) beside it. The course-of-study rows show as the study table.
+  List<Widget> _formView() {
+    final out = <Widget>[];
+    var studyShown = false;
+    for (final (label, keys) in _formItems!) {
+      final ks = keys.where((k) => k != 'TC No' && !kTcPrintTimeKeys.contains(k)).toList();
+      if (ks.isEmpty) continue;
+      if (ks.every((k) => k.startsWith('Study '))) {
+        if (!studyShown) {
+          studyShown = true;
+          out
+            ..add(AppUI.sectionLabel('Previous year(s) and course of studies'))
+            ..add(_studyGrid())
+            ..add(SizedBox(height: 12.h));
+        }
+        continue;
+      }
+      out.add(Container(
+        padding: EdgeInsets.symmetric(vertical: 6.h),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider))),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            flex: 5,
+            child: Padding(
+              padding: EdgeInsets.only(top: 10.h, right: 12.w),
+              child: Text(label.isEmpty ? ks.map(tcFieldLabel).join(' / ') : label, style: AppUI.body),
+            ),
+          ),
+          Expanded(
+            flex: 6,
+            child: Column(children: [
+              for (final k in ks)
+                Padding(
+                  padding: EdgeInsets.only(bottom: k == ks.last ? 0 : 6.h),
+                  child: _input(k, ks.length > 1 ? tcFieldLabel(k) : null),
+                ),
+            ]),
+          ),
+        ]),
+      ));
+    }
+    return out;
+  }
+
+  /// Why the value of field [k] is not acceptable, or null. Aadhaar and
+  /// EMIS / APAAR are 12-digit numbers (Aadhaar may be written in groups,
+  /// "5334 4134 2021").
+  String? _fieldError(String k) {
+    final v = _c(k).text.trim();
+    if (v.isEmpty) return null;
+    if (k == 'Aadhar No') {
+      if (!RegExp(r'^[0-9 ]+$').hasMatch(v) || v.replaceAll(' ', '').length != 12) {
+        return 'Aadhaar No. must be exactly 12 digits';
+      }
+    }
+    if (k == 'EMIS No' && emisInvalid(v)) return kEmisRuleMsg;
+    return null;
+  }
+
+  /// One certificate field's box, with the checks above.
+  Widget _input(String k, String? hint) {
+    final digits = k == 'Aadhar No' || k == 'EMIS No';
+    return TextField(
+      controller: _c(k),
+      style: AppUI.fieldText(context, filled: _c(k).text.isNotEmpty),
+      keyboardType: digits ? TextInputType.number : null,
+      inputFormatters: [
+        if (k == 'Aadhar No') ...[FilteringTextInputFormatter.allow(RegExp(r'[0-9 ]')), LengthLimitingTextInputFormatter(14)],
+        if (k == 'EMIS No') ...[FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(emisMaxLength)],
+      ],
+      decoration: AppUI.field(context, hint ?? (kTcFields.where((f) => f.key == k).map((f) => f.hint).firstOrNull ?? ''))
+          .copyWith(errorText: _fieldError(k)),
+      onChanged: (_) => setState(() {}),
+    );
+  }
+
+  /// Approved certificates: fields shown dimmed and not editable.
+  Widget _readOnly(Widget child) =>
+      AbsorbPointer(absorbing: _locked, child: Opacity(opacity: _locked ? 0.8 : 1, child: child));
+
   Widget _studyGrid() {
     Widget cell(Widget child, int flex) => Expanded(flex: flex, child: Padding(padding: EdgeInsets.only(right: 8.w), child: child));
     const flex = [5, 3, 3, 3, 3];
@@ -337,20 +495,37 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
               style: AppUI.label.copyWith(color: AppColors.warning)),
         ),
       const Divider(height: 24),
+      // Read-only when approved: the FIELDS ignore input, the list itself does
+      // not. (Wrapping the whole ListView also swallowed the scroll wheel and
+      // the scrollbar, so an approved certificate could not be scrolled.)
       Expanded(
-        child: AbsorbPointer(
-          absorbing: _locked,
-          child: Opacity(
-            opacity: _locked ? 0.8 : 1,
-            child: ListView(
-              padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 4.h),
-              children: [
-                AppUI.sectionLabel('TC serial number'),
-                SizedBox(
-                  width: 320.w,
-                  child: TextField(controller: _serial, style: AppUI.fieldText(context, filled: true), decoration: AppUI.field(context, 'Enter TC number', filled: true)),
+        child: ListView(
+          padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 4.h),
+          children: [
+            _readOnly(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              AppUI.sectionLabel('TC serial number'),
+              SizedBox(
+                width: 320.w,
+                child: TextField(controller: _serial, style: AppUI.fieldText(context, filled: true), decoration: AppUI.field(context, 'Enter TC number', filled: true)),
+              ),
+              SizedBox(height: 14.h),
+            ])),
+            // Only changes what is shown, so it works on approved ones too.
+            if (_formItems != null && _formItems!.isNotEmpty) ...[
+              Row(children: [
+                Expanded(
+                  child: Text(_showAll ? 'All fields' : 'As printed on the TC format: $_formName',
+                      style: AppUI.label.copyWith(color: AppColors.primary)),
                 ),
-                SizedBox(height: 14.h),
+                Text('Show all fields', style: AppUI.muted),
+                Switch(value: _showAll, onChanged: (v) => setState(() => _showAll = v)),
+              ]),
+              SizedBox(height: 8.h),
+            ],
+            _readOnly(Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (_formItems != null && _formItems!.isNotEmpty && !_showAll)
+                ..._formView()
+              else
                 for (final g in groups.entries) ...[
                   AppUI.sectionLabel(g.key),
                   if (g.key == kTcStudyGroup) ...[
@@ -366,12 +541,7 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
                             width: w,
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               AppUI.fieldLabel(tcFieldLabel(k), optional: false),
-                              TextField(
-                                controller: _c(k),
-                                style: AppUI.fieldText(context, filled: _c(k).text.isNotEmpty),
-                                decoration: AppUI.field(context, kTcFields.where((f) => f.key == k).map((f) => f.hint).firstOrNull ?? ''),
-                                onChanged: (_) => setState(() {}),
-                              ),
+                              _input(k, null),
                             ]),
                           ),
                       ]);
@@ -379,14 +549,13 @@ class _TcCertificateScreenState extends State<TcCertificateScreen> {
                     SizedBox(height: 16.h),
                   ],
                 ],
-              ],
-            ),
-          ),
+            ])),
+          ],
         ),
       ),
       AppFormFooter(
         note: _locked ? 'Approved certificates are read-only.' : 'The TC prints these values exactly. Save, then approve the certificate in TC Approval.',
-        onCancel: () => setState(() => _sel = null),
+        onCancel: () => widget.stuId != null ? Navigator.of(context).maybePop() : setState(() => _sel = null),
         cancelLabel: 'Close',
         actions: [
           if (!_locked && cert != null)

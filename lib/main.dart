@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -22,7 +23,7 @@ void main() async {
     debugPrint = (String? message, {int? wrapWidth}) {};
   }
 
-  // Load an optional config.json (next to the .exe or in %APPDATA%\EduCore360)
+  // Load an optional config.json (next to the .exe or in %APPDATA%\FITSchool)
   // so the SAME build can point at a different Supabase project without a
   // rebuild. Falls back to the compiled-in defaults when no file is present.
   await SupabaseConfig.load();
@@ -61,7 +62,7 @@ class SchoolAdminApp extends StatelessWidget {
       minTextAdapt: true,
       builder: (context, child) {
         return MaterialApp(
-          title: 'EduCore360 - School Administration',
+          title: 'FIT School - School Administration',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
@@ -69,7 +70,10 @@ class SchoolAdminApp extends StatelessWidget {
           scrollBehavior: const _AppScrollBehavior(),
           initialRoute: AppRoutes.splash,
           routes: AppRoutes.routes,
-          builder: (context, child) {
+          // _FitToWindow first, so everything below (ScreenUtil, the compact
+          // tier, every screen and dialog) sees the scaled-up window size.
+          builder: (context, child) => _FitToWindow(
+            child: Builder(builder: (context) {
             // Apply project-wide compact button styling at <= 1366 only.
             // Inline ElevatedButton.styleFrom() calls in screens still win
             // (they don't inherit theme), but every "stock" button picks
@@ -89,6 +93,10 @@ class SchoolAdminApp extends StatelessWidget {
               // 1366 / 1607 ≈ 0.85. The outer ScreenUtilInit(1750, 984) keeps
               // applying at 1920+, so this only affects 1366.
               ScreenUtil.init(context, designSize: const Size(1607, 904), minTextAdapt: true);
+            } else {
+              // Same baseline as ScreenUtilInit above, but measured on the
+              // (possibly scaled-up) size _FitToWindow hands down.
+              ScreenUtil.init(context, designSize: const Size(1750, 984), minTextAdapt: true);
             }
             // Gate the entire app behind the hosted maintenance flag so all
             // clients can be blocked from one place during live DB work.
@@ -100,9 +108,52 @@ class SchoolAdminApp extends StatelessWidget {
               data: AppTheme.compactButtons(Theme.of(context)),
               child: gated,
             );
-          },
+          }),
+          ),
         );
       },
+    );
+  }
+}
+
+/// Desktop: a window smaller than 1280 x 720 is laid out as if it were at
+/// least that big (keeping its shape) and scaled down evenly, so no screen is
+/// cut off or crammed in a small window or on a small laptop. Dialogs, menus
+/// and tooltips live inside the Navigator below, so they scale with it.
+/// The widget tree is the same at every size (scale 1 when the window is big
+/// enough), so resizing never resets the screen the user is on.
+class _FitToWindow extends StatelessWidget {
+  const _FitToWindow({required this.child});
+  final Widget child;
+
+  static const double _minW = 1280;
+  static const double _minH = 720;
+
+  static bool get _desktop =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final real = mq.size;
+    var scale = 1.0;
+    if (_desktop && real.width > 0 && real.height > 0) {
+      scale = math.min(1.0, math.min(real.width / _minW, real.height / _minH));
+    }
+    final canvas = Size(real.width / scale, real.height / scale);
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.fill,
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: canvas.width,
+          height: canvas.height,
+          child: MediaQuery(data: mq.copyWith(size: canvas), child: child),
+        ),
+      ),
     );
   }
 }

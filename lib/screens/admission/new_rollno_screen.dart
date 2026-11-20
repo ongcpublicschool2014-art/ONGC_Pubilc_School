@@ -17,6 +17,8 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/form_section_panel.dart';
 import '../../widgets/validation_dialog.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// New Roll Number (Admission → New Roll Number).
 /// Pick a class, type each student's new register number, Save. The
@@ -281,7 +283,7 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
 
       final bytes = excel.encode();
       if (bytes == null) return;
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: schoolTerm('Export students for new roll numbers'),
         fileName: 'New_Roll_Numbers_${_class ?? _course ?? 'All'}.xlsx',
         type: FileType.custom,
@@ -899,8 +901,11 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
           Container(
             padding: EdgeInsets.all(AppUI.cardPad),
             decoration: AppUI.card(),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(flex: 3, child: _labeled('Effective Date', InkWell(
+            // One row on a wide window; in a small one the buttons move to a
+            // second row so the filters keep room for their text.
+            child: LayoutBuilder(builder: (context, box) {
+              final fields = <Widget>[
+              Expanded(flex: 4, child: _labeled('Effective Date', InkWell(
                 onTap: () async {
                   final d = await showDatePicker(
                     context: context,
@@ -914,11 +919,13 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                   decoration: _dec('Select effective date').copyWith(
                     suffixIcon: Icon(Icons.calendar_today_outlined, size: 15.sp, color: AppColors.textSecondary),
                   ),
-                  child: Text(_fmt(_effectDate), style: AppUI.fieldText(context)),
+                  // One line: the date shrinks rather than wrapping.
+                  child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+                      child: Text(_fmt(_effectDate), style: AppUI.fieldText(context), maxLines: 1, softWrap: false)),
                 ),
               ), icon: 'calendar')),
               SizedBox(width: 12.w),
-              Expanded(flex: 4, child: _labeled(schoolTerm('Course'), DropdownButtonFormField<String>(
+              Expanded(flex: 4, child: _labeled(schoolTerm('Course'), AppDropdownField<String>(
                 key: ValueKey('rncourse-${_course ?? ''}'),
                 initialValue: _course,
                 isExpanded: true,
@@ -930,10 +937,15 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                       value: e['courname'].toString(),
                       child: Text(e['courname'].toString(), overflow: TextOverflow.ellipsis))),
                 ],
+                // The shown choice stays on one line ("All standards" wrapped
+                // and lost its second line in a narrow window).
+                selectedItemBuilder: (_) => [schoolTerm('All courses'), ..._courses.map((e) => e['courname'].toString())]
+                    .map((t) => AppFitText(t))
+                    .toList(),
                 onChanged: (v) { _course = v; _selectClass(null); },
               ), icon: 'teacher')),
               SizedBox(width: 12.w),
-              Expanded(flex: 4, child: _labeled(schoolTerm('Class'), DropdownButtonFormField<String>(
+              Expanded(flex: 4, child: _labeled(schoolTerm('Class'), AppDropdownField<String>(
                 key: ValueKey('rnclass-${_class ?? ''}-${_course ?? ''}'),
                 initialValue: _class,
                 isExpanded: true,
@@ -945,10 +957,13 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                       value: e['claname'].toString(),
                       child: Text(e['claname'].toString(), overflow: TextOverflow.ellipsis))),
                 ],
+                selectedItemBuilder: (_) => [schoolTerm('All classes'), ..._classOptions.map((e) => e['claname'].toString())]
+                    .map((t) => AppFitText(t))
+                    .toList(),
                 onChanged: _selectClass,
               ), icon: 'book')),
               SizedBox(width: 12.w),
-              Expanded(flex: 3, child: _labeled('Sort By', DropdownButtonFormField<String>(
+              Expanded(flex: 4, child: _labeled('Sort By', AppDropdownField<String>(
                 key: ValueKey('rnord-$_order'),
                 initialValue: _order,
                 isExpanded: true,
@@ -958,8 +973,13 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                   DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Register No.'))),
                   const DropdownMenuItem(value: 'name', child: Text('Name')),
                 ],
+                // The shown choice stays on one line and shrinks to fit.
+                selectedItemBuilder: (_) => [schoolTerm('Register No.'), 'Name']
+                    .map((t) => AppFitText(t))
+                    .toList(),
                 onChanged: (v) => setState(() => _order = v ?? 'regno'),
               ), icon: 'sort')),
+              SizedBox(width: 12.w),
               Expanded(flex: 4, child: _labeled(AppText.search, TextField(
                 controller: _search,
                 decoration: _dec(schoolTerm('Search by register no. or name')).copyWith(
@@ -975,7 +995,8 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                 style: AppUI.fieldText(context),
                 onChanged: (_) => setState(() {}),
               ), icon: 'hashtag')),
-              SizedBox(width: 14.w),
+              ];
+              final buttons = <Widget>[
               // Export the filtered list, fill the New Reg No column in Excel,
               // import it back. Import only fills the grid — Save still commits.
               OutlinedButton.icon(
@@ -999,7 +1020,16 @@ class _NewRollNoScreenState extends State<NewRollNoScreen> {
                     : const Icon(Icons.save, size: 16),
                 label: Text(filled > 0 ? 'Save ($filled)' : 'Save'),
               ),
-            ]),
+              ];
+              if (box.maxWidth >= 1300) {
+                return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [...fields, SizedBox(width: 14.w), ...buttons]);
+              }
+              return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: fields),
+                SizedBox(height: 12.h),
+                Row(children: [const Spacer(), ...buttons]),
+              ]);
+            }),
           ),
           // ── Counts sit under the toolbar, so a new chip never squeezes the
           // fields or pushes the buttons off the edge.

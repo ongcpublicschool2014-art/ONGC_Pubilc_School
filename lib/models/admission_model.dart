@@ -1,3 +1,5 @@
+import '../utils/school_terms.dart' show genderLabelOf;
+
 /// Admission model — matches the PUBLIC-schema `admission` staging table
 /// (see migrations/admission_public_module.sql). A row stays here as PENDING
 /// until a class is allocated, after which it is moved into the institution
@@ -22,6 +24,8 @@ class AdmissionModel {
   final String? allocatedby;
   final DateTime? allocateddate;
   final String? admremarks;
+  /// Personal marks of identification (printed on the TC).
+  final String? idmark1, idmark2;
 
   // student fields
   final String stuname;
@@ -106,6 +110,8 @@ class AdmissionModel {
     this.allocatedby,
     this.allocateddate,
     this.admremarks,
+    this.idmark1,
+    this.idmark2,
     required this.stuname,
     required this.stugender,
     this.studob,
@@ -183,6 +189,8 @@ class AdmissionModel {
       allocatedby: j['allocatedby']?.toString(),
       allocateddate: _date(j['allocateddate']),
       admremarks: j['admremarks']?.toString(),
+      idmark1: j['idmark1']?.toString(),
+      idmark2: j['idmark2']?.toString(),
       stuname: j['stuname']?.toString() ?? '',
       stugender: j['stugender']?.toString() ?? 'M',
       studob: _date(j['studob']),
@@ -238,8 +246,8 @@ class AdmissionModel {
     );
   }
 
-  String get genderLabel =>
-      stugender == 'M' ? 'Male' : stugender == 'F' ? 'Female' : 'Other';
+  /// Boy / Girl / Other (school), Male / Female / Other (college).
+  String get genderLabel => stugender == 'M' || stugender == 'F' ? genderLabelOf(stugender) : 'Other';
   bool get isAllocated => admstatus == 'ALLOCATED' || stuId != null;
   bool get isPending => admstatus == 'PENDING';
   /// A TC has been issued (leaving status 2/3/4/5/9) → the record is view-only.

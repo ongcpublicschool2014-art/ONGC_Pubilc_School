@@ -4,22 +4,25 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../utils/app_text.dart';
 import '../utils/app_theme.dart';
 import 'app_icon.dart';
+import 'app_fit_text.dart';
+
+export 'app_fit_text.dart';
 
 /// The design system in one place: every screen builds its fields, buttons,
 /// cards, headers, tables, chips, KPI tiles and empty states from here so no
 /// two screens differ.
 ///
-///   "Royal" theme (colours in AppColors, fonts in AppFonts): paper page,
-///   cream cards with a 1px line border and soft shadow, radius 10 (controls
-///   8), inputs 42px / buttons 40px, maroon primary, gold accent, Playfair
-///   Display headings with a short gold underline, Source Sans 3 body, IBM
-///   Plex Mono for admission numbers and table amounts, stamp-style status.
+///   "Peacock" theme (colours in AppColors, fonts in AppFonts): paper page,
+///   cream cards with a 1px line border and soft shadow, radius 14 (controls
+///   10), inputs 42px / buttons 40px, teal primary, marigold accent, Fraunces
+///   headings with a short marigold underline, Plus Jakarta Sans body,
+///   JetBrains Mono for admission numbers and table amounts, stamp-style status.
 class AppUI {
   AppUI._();
 
   // ── spacing / radius ───────────────────────────────────────────────────
-  static const double cardRadius = 10;
-  static const double controlRadius = 8;
+  static const double cardRadius = 14;
+  static const double controlRadius = 10;
   static double get gap => 20.w; // between cards
   static double get pagePad => 32.w;
   static double get cardPad => 20.w;
@@ -30,20 +33,21 @@ class AppUI {
 
   // ── type scale ─────────────────────────────────────────────────────────
   static TextStyle get pageTitle => AppFonts.heading(size: 25.sp, height: 1.15);
-  static TextStyle get cardTitle => AppFonts.heading(size: 19.sp, height: 1.2);
+  static TextStyle get cardTitle => AppFonts.body(size: 19.sp, weight: FontWeight.w700).copyWith(height: 1.2);
   static TextStyle get body => TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary);
   static TextStyle get muted => TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w500, color: AppColors.ink3);
   static TextStyle get label => TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary);
   /// Eyebrow: 10.5 / 800 / uppercase / 0.15em.
-  static TextStyle get caps => TextStyle(fontSize: 10.5.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 1.6);
-  static TextStyle get tableHead => TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 1.2);
+  static TextStyle get caps => TextStyle(fontSize: 10.5.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 0.9);
+  static TextStyle get tableHead => TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w800, color: AppColors.ink3, letterSpacing: 0.5);
   static TextStyle get cell => TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500, color: AppColors.textPrimary);
-  /// Amounts in tables -- IBM Plex Mono.
+  /// Amounts in tables -- JetBrains Mono.
   static TextStyle get money => AppFonts.mono(size: 13.5.sp, weight: FontWeight.w600);
-  /// Admission numbers / IDs -- IBM Plex Mono.
+  /// Admission numbers / IDs -- JetBrains Mono.
   static TextStyle get mono => AppFonts.mono(size: 13.sp, weight: FontWeight.w500);
-  /// Big figures (KPIs, totals) -- Playfair with lining numerals.
-  static TextStyle bigNumber({double size = 30, Color color = AppColors.ink}) => AppFonts.heading(size: size.sp, color: color, height: 1.1);
+  /// Big figures (KPIs, totals) -- Fraunces with lining numerals.
+  static TextStyle bigNumber({double size = 30, Color color = AppColors.ink}) =>
+      AppFonts.body(size: size.sp, weight: FontWeight.w800, color: color).copyWith(height: 1.1);
 
   // ── surfaces ───────────────────────────────────────────────────────────
   static BoxDecoration card({Color? color, double? radius}) => AppCard.decoration(color: color, borderRadius: radius ?? cardRadius);
@@ -51,7 +55,7 @@ class AppUI {
   /// The tinted bar above a table / card section.
   static BoxDecoration get tableHeadBar => const BoxDecoration(color: AppColors.tableHeader);
 
-  /// Read-only field background: diagonal Royal stripes (e.g. the auto
+  /// Read-only field background: diagonal stripes (e.g. the auto
   /// Admission No.). Put it behind a field whose fillColor is transparent.
   static BoxDecoration readOnly({double? radius}) => BoxDecoration(
         borderRadius: BorderRadius.circular(radius ?? controlRadius),
@@ -80,10 +84,15 @@ class AppUI {
     final rest = filled ? AppColors.lineStrong : AppColors.fieldBorder;
     OutlineInputBorder b(Color col, double w) =>
         OutlineInputBorder(borderRadius: BorderRadius.circular(controlRadius), borderSide: BorderSide(color: col, width: w));
+    final hintStyle = TextStyle(fontSize: c ? 12.5 : 14, fontWeight: FontWeight.w500, color: AppColors.ink3);
     return InputDecoration(
-      hintText: hint.isEmpty ? null : hint,
+      // A placeholder longer than the field shrinks a little to fit instead of
+      // ending in "..." (e.g. "Enter account holder n...").
+      hint: hint.isEmpty
+          ? null
+          : AppFitText(hint, style: hintStyle),
       labelText: label,
-      hintStyle: TextStyle(fontSize: c ? 12.5 : 14, fontWeight: FontWeight.w500, color: AppColors.ink3),
+      hintStyle: hintStyle,
       isDense: true,
       filled: true,
       fillColor: AppColors.fieldBg,
@@ -154,14 +163,14 @@ class AppUI {
       ]));
 
   // ── page / card headers ────────────────────────────────────────────────
-  /// Icon tile + Playfair title with its short gold underline + optional
+  /// Icon tile + Fraunces title with its short marigold underline + optional
   /// muted subtitle + trailing widgets.
-  static Widget cardHeader({required String icon, required String title, String? subtitle, List<Widget> trailing = const []}) => Row(children: [
+  static Widget cardHeader({required String icon, required String title, String? subtitle, List<Widget> trailing = const [], TextStyle? titleStyle}) => Row(children: [
         iconTile(icon),
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(title, style: cardTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+            Text(title, style: titleStyle ?? cardTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
             titleRule(),
             if (subtitle != null) ...[SizedBox(height: 2.h), Text(subtitle, style: muted, maxLines: 2, overflow: TextOverflow.ellipsis)],
           ]),
@@ -169,7 +178,7 @@ class AppUI {
         for (final w in trailing) ...[SizedBox(width: 10.w), w],
       ]);
 
-  /// The short 28 x 3 gold underline under a card title.
+  /// The short 28 x 3 marigold underline under a card title.
   static Widget titleRule() => Container(
         width: 28,
         height: 3,
@@ -195,9 +204,9 @@ class AppUI {
       );
 
   // ── status stamp (colour + text, never colour alone) ────────────────────
-  /// A Royal status stamp: uppercase 10px / 800 / 0.12em in a double outline
+  /// A status stamp: uppercase 10px / 800 / 0.12em in a double outline
   /// (1.5px border, a hairline gap, an inner line) in the status colour.
-  /// Saved = maroon, Pending = gold-dark, Error = burnt orange, Ready = teal.
+  /// Saved = teal, Pending = marigold-dark, Error = coral, Ready = blue.
   static Widget chip(String text, AppStatus status) {
     final fg = switch (status) {
       AppStatus.success => AppColors.primary, // saved / settled
@@ -222,12 +231,13 @@ class AppUI {
         child: Text(text.toUpperCase(),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w800, color: fg, letterSpacing: 1.2, height: 1.2)),
+            // never below 9.5px, so counts stay readable in a small window
+            style: TextStyle(fontSize: 10.sp < 9.5 ? 9.5 : 10.sp, fontWeight: FontWeight.w800, color: fg, letterSpacing: 1.2, height: 1.2)),
       ),
     );
   }
 
-  /// Signature admission-number tag: mono text on a pale gold tag with a
+  /// Signature admission-number tag: mono text on a pale cream tag with a
   /// dashed border and a punched hole. [fresh] = a new / unsaved number.
   static Widget admTag(String no, {bool fresh = false, double? size}) => CustomPaint(
         painter: _DashedTagPainter(color: fresh ? AppColors.goldLine : AppColors.tagBorder),
@@ -258,15 +268,17 @@ class AppUI {
           SizedBox(width: 12.w),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(label.toUpperCase(), style: caps, maxLines: 1, overflow: TextOverflow.ellipsis),
+              // a long label wraps to a second line rather than end in "..."
+              Text(label.toUpperCase(), style: caps, maxLines: 2, overflow: TextOverflow.ellipsis),
               SizedBox(height: 4.h),
               // long rupee figures shrink rather than get cut off
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
-                child: Text(value, style: AppFonts.heading(size: 24.sp, height: 1.15), maxLines: 1),
+                child: Text(value, style: AppFonts.figure(size: 24.sp, height: 1.15), maxLines: 1),
               ),
-              if (sub != null) ...[SizedBox(height: 2.h), Text(sub, style: muted, maxLines: 1, overflow: TextOverflow.ellipsis)],
+              // a subtitle wraps to a second line rather than end in "..."
+              if (sub != null) ...[SizedBox(height: 2.h), Text(sub, style: muted, maxLines: 2, overflow: TextOverflow.ellipsis)],
             ]),
           ),
         ]),
@@ -292,7 +304,7 @@ class AppUI {
               child: AppIcon.linear(icon, size: 28, color: AppColors.primary),
             ),
             SizedBox(height: 14.h),
-            Text(title, textAlign: TextAlign.center, style: AppFonts.heading(size: 17.sp)),
+            Text(title, textAlign: TextAlign.center, style: AppFonts.body(size: 17.sp, weight: FontWeight.w700)),
             if (why != null) ...[SizedBox(height: 6.h), Text(why, textAlign: TextAlign.center, style: muted)],
             if (action != null) ...[SizedBox(height: 16.h), action],
           ]),
@@ -462,7 +474,7 @@ class AppStepper extends StatelessWidget {
               ),
               child: i < current
                   ? const Icon(Icons.check, size: 16, color: AppColors.onPrimary)
-                  : Text('${i + 1}', style: AppFonts.heading(size: 13, color: i == current ? AppColors.onPrimary : AppColors.faint)),
+                  : Text('${i + 1}', style: AppFonts.body(size: 13, weight: FontWeight.w800, color: i == current ? AppColors.onPrimary : AppColors.faint)),
             ),
             SizedBox(width: 8.w),
             Text(steps[i], style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: i <= current ? AppColors.textPrimary : AppColors.textLight)),

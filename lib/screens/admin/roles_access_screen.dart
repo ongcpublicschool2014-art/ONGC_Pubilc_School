@@ -3,6 +3,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_menu.dart';
+import '../../utils/module_control.dart';
 import '../../utils/dashboard_tiles.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
@@ -11,6 +12,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/pill_tab.dart';
 import '../../widgets/app_ui.dart';
 import 'custom_roles_screen.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Roles & Access — Admin-only. Two tabs:
 ///   * Roles       — create/rename the institution's roles (custuserroles).
@@ -105,6 +107,10 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
   Map<int, Set<String>> _access = {};
   int? _urId;
   Set<String> _selected = {};
+  /// Menus switched off for this institution by the vendor (Module
+  /// Control): not offered here. A grant already saved for one is kept, so
+  /// switching the module back on restores it.
+  Set<String> _disabled = {};
   bool _loading = true, _saving = false;
 
   @override
@@ -126,6 +132,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
       final results = await Future.wait([
         SupabaseService.getUserRoles(_insId),
         SupabaseService.getRoleMenuAccess(_insId),
+        loadDisabledMenus(_insId),
       ]);
       if (!mounted) return;
       final roles = results[0] as List<Map<String, dynamic>>;
@@ -133,6 +140,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
       setState(() {
         _roles = roles;
         _access = access;
+        _disabled = results[2] as Set<String>;
         _loading = false;
       });
       if (roles.isNotEmpty) _pickRole((roles.first['ur_id'] as num).toInt());
@@ -228,7 +236,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
 
     // Group the assignable menus by their sidebar section.
     final sections = <String, List<AppNavItem>>{};
-    for (final i in kAssignableNavItems) {
+    for (final i in kAssignableNavItems.where((i) => !_disabled.contains(i.label))) {
       sections.putIfAbsent(i.section, () => []).add(i);
     }
 
@@ -246,7 +254,7 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
               trailing: [
               SizedBox(
                 width: 220.w,
-                child: DropdownButtonFormField<int>(
+                child: AppDropdownField<int>(
                   initialValue: _urId,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -295,39 +303,23 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final entry in sections.entries) ...[
-                    _accessCard(
-                      name: entry.key,
-                      icon: kSectionMeta[entry.key]?[0] ?? 'element-3',
-                      tint: _sectionTint(entry.key),
-                      granted: entry.value
-                          .where((i) => _selected.contains(i.label))
-                          .length,
-                      total: entry.value.length,
-                      toggle: _sectionToggle(entry.value),
-                      children: [for (final i in entry.value) _menuChip(i)],
-                    ),
-                    // The dashboard's own cards and panels belong WITH the
-                    // Dashboard menu that opens them, not at the far end of the
-                    // page: granting the menu and then scrolling past every
-                    // other section to choose what it shows is two halves of
-                    // one decision.
+                  for (final entry in sections.entries)
+                    // The Dashboard menu and the cards / panels it shows are
+                    // one decision, so they share one card (user, 2026-11-13).
                     if (entry.value.any((i) => i.label == 'Dashboard'))
-                      for (final tiles in kDashboardTileSections.entries)
-                        _accessCard(
-                          name: tiles.key,
-                          icon: 'element-3',
-                          tint: AppColors.demand,
-                          granted: tiles.value
-                              .where((d) => _selected.contains(d.key))
-                              .length,
-                          total: tiles.value.length,
-                          toggle: _tileSectionToggle(tiles.value),
-                          children: [
-                            for (final d in tiles.value) _tileChip(d)
-                          ],
-                        ),
-                  ],
+                      _dashboardCard(entry.value)
+                    else
+                      _accessCard(
+                        name: entry.key,
+                        icon: kSectionMeta[entry.key]?[0] ?? 'element-3',
+                        tint: _sectionTint(entry.key),
+                        granted: entry.value
+                            .where((i) => _selected.contains(i.label))
+                            .length,
+                        total: entry.value.length,
+                        toggle: _sectionToggle(entry.value),
+                        children: [for (final i in entry.value) _menuChip(i)],
+                      ),
                 ],
               ),
             ),
@@ -435,16 +427,48 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
     );
   }
 
-  /// "All / None" toggle for a whole section.
-  Widget _sectionToggle(List<AppNavItem> items) {
-    final all = items.every((i) => _selected.contains(i.label));
+  /// DASHBOARD: the Dashboard menu, then its cards and its charts & panels
+  /// under small headings -- one card, one Select All / Clear.
+  Widget _dashboardCard(List<AppNavItem> items) {
+    final tiles = [for (final t in kDashboardTileSections.values) ...t];
+    Widget heading(String t) => SizedBox(
+          width: double.infinity,
+          child: Padding(
+            padding: EdgeInsets.only(top: 6.h),
+            child: Text(t, style: AppUI.caps.copyWith(color: AppColors.textSecondary)),
+          ),
+        );
+    return _accessCard(
+      name: 'DASHBOARD',
+      icon: 'element-3',
+      tint: AppColors.demand,
+      granted: items.where((i) => _selected.contains(i.label)).length +
+          tiles.where((d) => _selected.contains(d.key)).length,
+      total: items.length + tiles.length,
+      toggle: _sectionToggle(items, tiles: tiles),
+      children: [
+        for (final i in items) _menuChip(i),
+        for (final sec in kDashboardTileSections.entries) ...[
+          heading(sec.key.replaceFirst('DASHBOARD · ', '')),
+          for (final d in sec.value) _tileChip(d),
+        ],
+      ],
+    );
+  }
+
+  /// "All / None" toggle for a whole section ([tiles]: the Dashboard's
+  /// cards and panels, toggled with it).
+  Widget _sectionToggle(List<AppNavItem> items, {List<DashboardTile> tiles = const []}) {
+    final all = items.every((i) => _selected.contains(i.label)) && tiles.every((d) => _selected.contains(d.key));
     return InkWell(
       onTap: () => setState(() {
         if (all) {
           // Never clear a locked menu (Admin's Users / Roles & Access).
           _selected.removeAll(items.where((i) => !_isLocked(i)).map((i) => i.label));
+          _selected.removeAll(tiles.map((d) => d.key));
         } else {
           _selected.addAll(items.map((i) => i.label));
+          _selected.addAll(tiles.map((d) => d.key));
         }
       }),
       borderRadius: BorderRadius.circular(AppUI.controlRadius),
@@ -474,40 +498,10 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
   /// Menu grants only -- the tile keys share _selected but are counted apart,
   /// so "12 of 37 menus" does not silently include dashboard tiles.
   int get _menuCount =>
-      _selected.where((s) => !s.startsWith(kDashboardTilePrefix)).length;
+      kAssignableNavItems.where((i) => _selected.contains(i.label)).length;
 
   int get _tileCount =>
       kAllDashboardTiles.where((d) => _selected.contains(d.key)).length;
-
-  /// "All / None" for a dashboard section.
-  Widget _tileSectionToggle(List<DashboardTile> tiles) {
-    final all = tiles.every((d) => _selected.contains(d.key));
-    return InkWell(
-      onTap: () => setState(() {
-        if (all) {
-          _selected.removeAll(tiles.map((d) => d.key));
-        } else {
-          _selected.addAll(tiles.map((d) => d.key));
-        }
-      }),
-      borderRadius: BorderRadius.circular(AppUI.controlRadius),
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(AppUI.controlRadius),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(all ? Icons.remove_done : Icons.done_all,
-              size: 13.sp, color: AppColors.demand),
-          SizedBox(width: 5.w),
-          Text(all ? 'Clear' : 'Select All',
-              style: AppUI.label.copyWith(fontSize: 12.sp, color: AppColors.demand)),
-        ]),
-      ),
-    );
-  }
 
   /// One dashboard card or panel. Nothing here is ever locked: hiding every
   /// tile leaves the dashboard empty but still reachable, and Menu Access

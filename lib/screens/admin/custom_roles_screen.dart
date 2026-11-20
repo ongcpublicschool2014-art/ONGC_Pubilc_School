@@ -220,7 +220,7 @@ class _CustomRolesScreenState extends State<CustomRolesScreen> {
                       children: [
                         const CardTitleBlock(icon: 'security-user', title: 'Custom Roles', subtitle: 'all custom roles in this institution'),
                         const Spacer(),
-                        AppUI.chip('${_roles.length} roles', AppStatus.info),
+                        AppUI.chip('${_roles.length} role${_roles.length == 1 ? '' : 's'}', AppStatus.info),
                         SizedBox(width: 12.w),
                         ElevatedButton.icon(
                           onPressed: _fetchRoles,

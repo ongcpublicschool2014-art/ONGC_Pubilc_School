@@ -7,9 +7,9 @@ import '../../widgets/app_icon.dart';
 import '../../utils/school_terms.dart';
 
 class _TealPalette {
-  static const Color deep = Color(0xFF571520);
-  static const Color amber = Color(0xFFC9971C);
-  static const Color amberPale = Color(0xFFF3D58A);
+  static const Color deep = AppColors.primaryDark;
+  static const Color amber = AppColors.gold;
+  static const Color amberPale = AppColors.onPrimaryAccent;
 
   // Diagonal three-stop gradient (matches the welcome panel) so the bg
   // reads as a gradient rather than a flat navy.
@@ -17,9 +17,9 @@ class _TealPalette {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [
-      Color(0xFF7A1F2B),
-      Color(0xFF571520),
-      Color(0xFF2A0910),
+      AppColors.primary,
+      AppColors.primaryDark,
+      AppColors.sidebarBorder,
     ],
     stops: [0.0, 0.55, 1.0],
   );
@@ -27,7 +27,7 @@ class _TealPalette {
   static const LinearGradient buttonGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFD9AC3C), Color(0xFF8F6A0E)],
+    colors: [AppColors.goldMuted, AppColors.goldDark],
   );
 }
 
@@ -78,7 +78,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   // Three thematic onboarding pages, each with five project modules.
   static const List<_OnboardingPage> _pages = [
     _OnboardingPage(
-      pill: 'Welcome to EduCore360',
+      pill: 'Welcome to FIT School',
       title: 'Building blocks for institution\nadministration.',
       subtitle:
           'Manage students, fees, staff, and reporting from one secure\ndashboard. Designed for principals, accountants, and admin teams.',
@@ -86,31 +86,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Students',
           icon: 'profile-2user',
-          tint: Color(0xFF9AA6E0),
+          tint: AppColors.infoBg,
           previewLabels: ['Roll No.', 'Class', 'Year'],
         ),
         _ModuleCard(
           label: 'Fee Collection',
           icon: 'wallet-1',
-          tint: Color(0xFFD9AC3C),
+          tint: AppColors.goldMuted,
           previewLabels: ['Term I', 'Term II', 'Paid'],
         ),
         _ModuleCard(
           label: 'Reports',
           icon: 'chart-2',
-          tint: Color(0xFF7CC4C4),
+          tint: AppColors.primaryMuted,
           previewLabels: ['Daily', 'Pending', 'Ledger'],
         ),
         _ModuleCard(
           label: 'Notices',
           icon: 'notification',
-          tint: Color(0xFFE7B9BF),
+          tint: AppColors.onPrimaryMuted,
           previewLabels: ['Exam', 'Holiday', 'Fee'],
         ),
         _ModuleCard(
           label: 'Staff',
           icon: 'teacher',
-          tint: Color(0xFFF3D58A),
+          tint: AppColors.onPrimaryAccent,
           previewLabels: ['Roles', 'Duty', 'Leave'],
         ),
       ],
@@ -124,31 +124,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Fee Demand',
           icon: 'wallet-1',
-          tint: Color(0xFFD9AC3C),
+          tint: AppColors.goldMuted,
           previewLabels: ['Course', 'Term', 'Due'],
         ),
         _ModuleCard(
           label: 'Counter',
           icon: 'tick-circle',
-          tint: Color(0xFF7CC4C4),
+          tint: AppColors.primaryMuted,
           previewLabels: ['Cash', 'UPI', 'Receipt'],
         ),
         _ModuleCard(
           label: 'Bank Reconciliation',
           icon: 'bank',
-          tint: Color(0xFF9AA6E0),
+          tint: AppColors.infoBg,
           previewLabels: ['Match', 'Auto', 'Diff'],
         ),
         _ModuleCard(
           label: 'Approvals',
           icon: 'timer',
-          tint: Color(0xFFF3D58A),
+          tint: AppColors.onPrimaryAccent,
           previewLabels: ['Pending', 'Today', 'Verify'],
         ),
         _ModuleCard(
           label: 'Pending',
           icon: 'clock',
-          tint: Color(0xFFE7B9BF),
+          tint: AppColors.onPrimaryMuted,
           previewLabels: ['Course', 'Class', 'Total'],
         ),
       ],
@@ -162,31 +162,31 @@ class _OnboardingScreenState extends State<OnboardingScreen>
         _ModuleCard(
           label: 'Daily',
           icon: 'calendar-1',
-          tint: Color(0xFF7CC4C4),
+          tint: AppColors.primaryMuted,
           previewLabels: ['Today', 'Mode', 'Total'],
         ),
         _ModuleCard(
           label: 'Ledger',
           icon: 'book-1',
-          tint: Color(0xFF9AA6E0),
+          tint: AppColors.infoBg,
           previewLabels: ['Roll No.', 'Term', 'Balance'],
         ),
         _ModuleCard(
           label: 'Pending',
           icon: 'clock',
-          tint: Color(0xFFE7B9BF),
+          tint: AppColors.onPrimaryMuted,
           previewLabels: ['Class', 'Days', 'Owed'],
         ),
         _ModuleCard(
           label: 'Consolidated',
           icon: 'chart-2',
-          tint: Color(0xFFD9AC3C),
+          tint: AppColors.goldMuted,
           previewLabels: ['Course', 'Net', 'Paid'],
         ),
         _ModuleCard(
           label: 'Settings',
           icon: 'setting-2',
-          tint: Color(0xFFF3D58A),
+          tint: AppColors.onPrimaryAccent,
           previewLabels: ['Roles', 'Fines', 'Year'],
         ),
       ],
@@ -311,7 +311,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   color: Colors.white,
                   padding: const EdgeInsets.all(4),
                   child: Image.asset(
-                    'assets/images/educore360_logo.png',
+                    'assets/images/app_logo_mark.png',
                     fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) => const Icon(
                       Icons.school_rounded,
@@ -323,7 +323,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ),
               const SizedBox(width: 10),
               const Text(
-                'EduCore360',
+                'FIT School',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 16,
@@ -367,8 +367,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                           colors: [
-                            Color(0xFFD9AC3C),
-                            Color(0xFF8F6A0E),
+                            AppColors.goldMuted,
+                            AppColors.goldDark,
                           ],
                         ),
                         shape: BoxShape.circle,
@@ -818,7 +818,7 @@ class _RippleGridPainter extends CustomPainter {
   final double t; // 0..1, repeats forever
   _RippleGridPainter(this.t);
 
-  static const Color _amber = Color(0xFFC9971C);
+  static const Color _amber = AppColors.gold;
 
   static const double _step = 40;
   static const double _wavelength = 200;

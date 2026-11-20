@@ -85,3 +85,11 @@ installer/dist/config.json
 
 # Integration tests: kept locally, not tracked
 integration_test/
+
+# Release builds and signing files: kept locally, never committed
+installer/dist/upload/
+release/
+# Scratch files and backups
+scratchpad/
+*.bak
+*.bak_*

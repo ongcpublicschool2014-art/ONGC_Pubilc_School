@@ -9,6 +9,8 @@ import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/mobile_rules.dart';
+import '../../utils/reg_sequence.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
 import '../../services/admission_service.dart';
@@ -17,6 +19,7 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/focusable_tap.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Admission module — master/detail.
 /// New admissions are captured into the PUBLIC `admission` table. An admin
@@ -63,6 +66,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   final _motherOccController = TextEditingController();
   final _guardianOccController = TextEditingController();
   final _payNameController = TextEditingController();
+  final _idMark1Controller = TextEditingController();
+  final _idMark2Controller = TextEditingController();
   final _payMobileController = TextEditingController();
   final _casteController = TextEditingController();
   final _religionController = TextEditingController();
@@ -90,6 +95,11 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _selectedAdmName;
   String? _selectedQuoName;
   String? _selectedConId;
+  /// The GENERAL concession category -- a new admission starts with it
+  /// (user, 2026-11-16); still changeable.
+  String? get _generalConId => _concessions
+      .firstWhere((c) => '${c['condesc'] ?? ''}'.trim().toUpperCase() == 'GENERAL', orElse: () => const {})['con_id']
+      ?.toString();
   String? _transportMode; // 'Own' | 'College' (school: 'Institution')
   String? _hostel;        // 'Yes' | 'No'
   /// Government scholarship eligibility, 'Yes' | 'No' | null (not answered).
@@ -118,7 +128,16 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   static const _yesNoOptions = ['Yes', 'No'];
 
   // ── data ──────────────────────────────────────────────────────────
+  /// Shown in the list: admissions whose student is in the current year's
+  /// schema, plus PENDING ones (no student yet, waiting for a section).
   List<AdmissionModel> _admissions = [];
+  /// Every admission of the institution, all years. Used for the Admission
+  /// No. duplicate check and field suggestions, so an older year's number is
+  /// never reused.
+  List<AdmissionModel> _allAdmissions = [];
+  // New admission started with Add Sibling: the brother / sister whose family
+  // details were copied (shown as a note; cleared on a fresh form).
+  AdmissionModel? _siblingOf;
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _courseList = []; // {cour_id, courname}
   List<Map<String, dynamic>> _classList = [];  // {claname, cour_id}
@@ -138,7 +157,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// already loaded, so it costs no query and grows as new values are entered.
   List<String> _optionsOf(String? Function(AdmissionModel) pick) {
     final seen = <String, String>{};
-    for (final a in _admissions) {
+    for (final a in _allAdmissions) {
       final v = (pick(a) ?? '').trim();
       if (v.isEmpty) continue;
       seen.putIfAbsent(v.toLowerCase(), () => v);
@@ -160,7 +179,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// in that list, which is deliberate — their number is free to reuse.
   Set<String> get _takenRegNos {
     final own = (_selected?.admno ?? '').trim().toUpperCase();
-    return _admissions
+    return _allAdmissions
         .map((a) => a.admno.trim().toUpperCase())
         .where((n) => n.isNotEmpty && n != own)
         .toSet();
@@ -169,6 +188,24 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// True when the typed Register No already belongs to another admission.
   /// Only meaningful in Manual: in Auto the field is filled from the sequence
   /// and locked, so the user has nothing to correct.
+  /// EMIS No. / APAAR ID of this year's students -> their admission no.
+  Map<String, String> _studentEmis = {};
+
+  /// The admission no. that already holds the typed EMIS No. / APAAR ID, or
+  /// null. One ID belongs to one child; this record's own student is skipped.
+  String? get _emisOwner {
+    final v = _emisController.text.trim();
+    if (v.isEmpty) return null;
+    final own = (_selected?.admno ?? '').trim().toUpperCase();
+    for (final a in _allAdmissions) {
+      if (a.admstatus == 'CANCELLED' || (a.emisno ?? '').trim() != v) continue;
+      final n = a.admno.trim().toUpperCase();
+      if (n != own && (_selected == null || a.admId != _selected!.admId)) return a.admno.trim();
+    }
+    final s = _studentEmis[v];
+    return (s != null && s != own) ? s : null;
+  }
+
   bool get _regNoDuplicate {
     if (_regNoLocked) return false;
     final v = _admnoController.text.trim().toUpperCase();
@@ -199,15 +236,15 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _photoUrl;            // student photo URL (uploaded to storage)
   bool _isUploadingPhoto = false;
   static const _pageSize = 10;
-  /// The notebook section the cursor is in (its numeral turns maroon).
+  /// The notebook section the cursor is in (its numeral turns teal).
   int _activeSection = 0;
 
   static const _tabLabels = [
     'Personal Details', 'Academic Details', 'Parent / Guardian',
-    'Address Details', 'Documents', 'Other Details',
+    'Address Details', 'Previous School', 'Other Details',
   ];
 
-  static const _genders = ['Male', 'Female', 'Other'];
+  static List<String> get _genders => [kBoyLabel, kGirlLabel, 'Other'];
   static const _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
   static const _sources = ['WALK-IN', 'ONLINE', 'REFERRAL', 'AGENT'];
   // The stored source codes above, as the dropdown shows them. Display only.
@@ -216,8 +253,30 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   @override
   void initState() {
     super.initState();
+    for (final c in [
+      _fatherNameController, _fatherMobileController, _motherNameController,
+      _motherMobileController, _guardianNameController, _guardianMobileController,
+    ]) {
+      c.addListener(_syncPayer);
+    }
     _load();
     _loadRegModeDefault();
+  }
+
+  /// What Pay In Charge was last filled with automatically.
+  List<String> _autoPayer = const ['', ''];
+
+  /// Pay In Charge follows Father -> Mother -> Guardian (the first with both a
+  /// name and a mobile) until the office types its own: a box still empty,
+  /// or still holding what was filled automatically, is refilled.
+  void _syncPayer() {
+    final name = _payNameController.text.trim(), mob = _payMobileController.text.trim();
+    final untouched = (name.isEmpty || name == _autoPayer[0]) && (mob.isEmpty || mob == _autoPayer[1]);
+    if (!untouched) return;
+    final d = _derivePayer();
+    _autoPayer = d;
+    if (name != d[0]) _payNameController.text = d[0];
+    if (mob != d[1]) _payMobileController.text = d[1];
   }
 
   /// Seeds the Reg No Mode from the institution's Utilities setting
@@ -255,6 +314,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     // (locked) Register No field.
     if (_regSeqs.isEmpty || _selectedRegSeqId != null) return;
     if (_admnoController.text.trim().isNotEmpty) return;
+    // Division-wise: the standard decides; until one is picked, the general
+    // sequence (if any) is shown.
+    if (_seqByDivision) {
+      setState(() => _pickDivision(_divisionOfCourse(_selectedCourse)));
+      return;
+    }
     final seq = _regSeqs.first;
     setState(() {
       _selectedRegSeqId = seq['seq_id'].toString();
@@ -278,7 +343,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _fatherNameController, _fatherMobileController, _motherNameController,
       _motherMobileController, _guardianNameController, _guardianMobileController,
       _fatherOccController, _motherOccController, _guardianOccController,
-      _payNameController, _payMobileController,
+      _payNameController, _payMobileController, _idMark1Controller, _idMark2Controller,
       _casteController, _religionController, _nationalityController,
       _parentEmailController, _mediumController,
       _remarksController,
@@ -306,16 +371,38 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         SupabaseService.fromSchema('sequence').select('*').eq('actname', 'REGNO').eq('activestatus', 1).order('seq_id', ascending: true),
         // Admission Master -> Division (may be empty or missing)
         SupabaseService.fromSchema('division').select('div_id, divname').eq('ins_id', insId).eq('activestatus', 1).then((v) => v, onError: (_) => <dynamic>[]),
+        // Admission numbers of this year's students (null if it can't be read:
+        // then nothing is hidden).
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students')
+                .select('stuadmno, emisno').eq('ins_id', insId))
+            .then<Set<String>?>((rows) {
+              // Students' EMIS / APAAR IDs too: the EMIS / APAAR ID screen
+              // edits them on the student, not on the admission.
+              _studentEmis = {
+                for (final r in rows)
+                  if ('${r['emisno'] ?? ''}'.trim().isNotEmpty)
+                    '${r['emisno']}'.trim(): '${r['stuadmno'] ?? ''}'.trim().toUpperCase(),
+              };
+              return rows.map((r) => '${r['stuadmno'] ?? ''}'.trim().toUpperCase()).toSet();
+            }, onError: (_) => null),
       ]);
       if (!mounted) return;
       setState(() {
-        _admissions = results[0] as List<AdmissionModel>;
+        _allAdmissions = results[0] as List<AdmissionModel>;
+        final thisYear = results[10] as Set<String>?;
+        _admissions = thisYear == null
+            ? _allAdmissions
+            : _allAdmissions.where((a) =>
+                a.admstatus == AdmissionStatus.pending ||
+                thisYear.contains(a.admno.trim().toUpperCase())).toList();
         _years = results[1] as List<Map<String, dynamic>>;
         _courseList = List<Map<String, dynamic>>.from(results[2] as List);
         _classList = List<Map<String, dynamic>>.from(results[3] as List);
         _admissionTypes = results[4] as List<Map<String, dynamic>>;
         _quotas = results[5] as List<Map<String, dynamic>>;
         _concessions = results[6] as List<Map<String, dynamic>>;
+        // the form already open for a new admission gets GENERAL too
+        if (_selected == null && _selectedConId == null) _selectedConId = _generalConId;
         _communities = (results[7] as List)
             .map((e) => e['comname']?.toString().trim() ?? '')
             .where((s) => s.isNotEmpty).toSet().toList()..sort();
@@ -441,7 +528,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _selectedClass = null;
       _selectedAdmName = null;
       _selectedQuoName = null;
-      _selectedConId = null;
+      _selectedConId = _generalConId;
       _transportMode = null;
       _hostel = null;
       _scholarship = null;
@@ -469,13 +556,15 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         _fatherMobileController, _motherNameController, _motherMobileController,
         _guardianNameController, _guardianMobileController,
         _fatherOccController, _motherOccController, _guardianOccController,
-        _payNameController, _payMobileController,
+        _payNameController, _payMobileController, _idMark1Controller, _idMark2Controller,
         _casteController, _religionController, _nationalityController,
         _parentEmailController, _mediumController,
         _remarksController,
       ]) {
         c.clear();
       }
+      _autoPayer = const ['', ''];
+      _siblingOf = null;
     });
     // AUTO institutions get their sequence and next number straight back, so
     // the clerk can type the student in without touching numbering at all.
@@ -484,6 +573,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
 
   void _populate(AdmissionModel a) {
     setState(() {
+      _siblingOf = null;
       _selected = a;
       _currentTab = 0;
       _showErrors = false;   // a fresh form starts unmarked
@@ -542,12 +632,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _guardianOccController.text = a.guardianoccupation ?? '';
       _payNameController.text = a.payincharge ?? '';
       _payMobileController.text = a.payinchargemob ?? '';
+      _autoPayer = _derivePayer();
       _remarksController.text = a.admremarks ?? '';
+      _idMark1Controller.text = a.idmark1 ?? '';
+      _idMark2Controller.text = a.idmark2 ?? '';
     });
   }
 
-  String? _genderCode(String? g) =>
-      g == 'Male' ? 'M' : g == 'Female' ? 'F' : g == 'Other' ? 'T' : null;
+  String? _genderCode(String? g) => genderCode(g);
 
   /// The next counter value a register sequence would issue.
   int _nextRegNum(Map<String, dynamic> seq) {
@@ -562,6 +654,118 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     final padded = _nextRegNum(seq).toString().padLeft(width, '0');
     final affix = seq['seqprefix']?.toString() ?? '';
     return (seq['isprefix']?.toString() ?? 'Y') == 'Y' ? '$affix$padded' : '$padded$affix';
+  }
+
+  /// Admissions on the same Pay In Charge mobile -- the brothers / sisters
+  /// that share one parent record (and one parent-app login) once allocated.
+  List<AdmissionModel> _siblingsOnNumber() {
+    final mob = _payMobileController.text.trim();
+    if (mob.length < 10) return const [];
+    return _allAdmissions.where((a) =>
+        a.admstatus != 'CANCELLED' &&
+        (a.payinchargemob ?? '').trim() == mob &&
+        (_selected == null || a.admId != _selected!.admId)).toList();
+  }
+
+  /// Add Sibling: pick an existing student and copy the family details
+  /// (parents, guardian, pay in charge, address, community) into this new
+  /// admission. The same Pay In Charge mobile makes section allocation reuse
+  /// that family's parent record, so both children share one parent login.
+  Future<void> _pickSibling() async {
+    final search = TextEditingController();
+    final picked = await showDialog<AdmissionModel>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final q = search.text.trim().toLowerCase();
+        final list = _allAdmissions.where((a) {
+          if (a.admstatus == 'CANCELLED') return false;
+          if (q.isEmpty) return true;
+          return [a.stuname, a.admno, a.stuclass, a.fathername, a.mothername, a.guardianname,
+                  a.payincharge, a.payinchargemob, a.fathermobile, a.mothermobile]
+              .any((v) => (v ?? '').toLowerCase().contains(q));
+        }).take(50).toList();
+        return AlertDialog(
+          title: const Text('Add Sibling'),
+          content: SizedBox(
+            width: 560.w,
+            height: 460.h,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(schoolTerm('Find the brother or sister already in the school. Their family details are copied into this admission.'),
+                    style: AppUI.muted),
+                SizedBox(height: 10.h),
+                AppSearchField(
+                  controller: search,
+                  autofocus: true,
+                  hintText: schoolTerm('Search by name, register no., parent name or mobile'),
+                  onChanged: (_) => setD(() {}),
+                ),
+                SizedBox(height: 8.h),
+                Expanded(
+                  child: list.isEmpty
+                      ? AppUI.empty(title: 'No student found', why: 'Try another name, number or mobile.', icon: 'people')
+                      : ListView.separated(
+                          itemCount: list.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+                          itemBuilder: (_, i) {
+                            final a = list[i];
+                            final parent = [a.payincharge, a.payinchargemob]
+                                .where((v) => (v ?? '').trim().isNotEmpty).join(' · ');
+                            return ListTile(
+                              dense: true,
+                              leading: AppIcon('user', size: 18, color: AppColors.primary),
+                              title: Text(a.stuname, style: AppUI.cell),
+                              subtitle: Text(
+                                  [a.admno, a.stuclass ?? '', if (parent.isNotEmpty) parent]
+                                      .where((v) => v.trim().isNotEmpty).join('  |  '),
+                                  style: AppUI.muted),
+                              onTap: () => Navigator.pop(ctx, a),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ],
+        );
+      }),
+    );
+    search.dispose();
+    if (picked == null || !mounted) return;
+    _applySibling(picked);
+  }
+
+  void _applySibling(AdmissionModel s) {
+    setState(() {
+      _fatherNameController.text = s.fathername ?? '';
+      _fatherMobileController.text = s.fathermobile ?? '';
+      _fatherOccController.text = s.fatheroccupation ?? '';
+      _motherNameController.text = s.mothername ?? '';
+      _motherMobileController.text = s.mothermobile ?? '';
+      _motherOccController.text = s.motheroccupation ?? '';
+      _guardianNameController.text = s.guardianname ?? '';
+      _guardianMobileController.text = s.guardianmobile ?? '';
+      _guardianOccController.text = s.guardianoccupation ?? '';
+      _parentEmailController.text = s.paremail ?? '';
+      // Exactly the sibling's payer, so allocation finds the same parent record.
+      _payNameController.text = s.payincharge ?? '';
+      _payMobileController.text = s.payinchargemob ?? '';
+      _autoPayer = _derivePayer();
+      _addressController.text = s.stuaddress ?? '';
+      _cityController.text = s.stucity ?? '';
+      _stateController.text = s.stustate ?? '';
+      _pinController.text = s.stupin ?? '';
+      if (_communities.contains(s.community)) _selectedCommunity = s.community;
+      _casteController.text = s.caste ?? '';
+      _religionController.text = s.religion ?? '';
+      _nationalityController.text = s.nationality ?? '';
+      _siblingOf = s;
+    });
+    _snack('Family details copied from ${s.stuname}. Enter this student\'s own details and save.', AppColors.success);
   }
 
   /// Pay-in-charge is auto-derived from the parent/guardian details with the
@@ -619,7 +823,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                               : AppColors.textPrimary)),
                   SizedBox(height: 2.h),
                   Text(
-                      schoolTerm('Collect the admission fee now. No fee demand is raised '
+                      schoolTerm('Collect next year\'s fees now. No fee demand is raised '
                       'for the current academic year, and Year End Process keeps the '
                       'student in the chosen class instead of promoting them.'),
                       style: AppUI.muted),
@@ -633,7 +837,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   Map<String, dynamic> _formData() {
     final auth = context.read<AuthProvider>();
     String? t(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
-    final payer = _derivePayer();
+    // Pay In Charge as shown on the form (filled from a parent, or typed).
+    final payer = [_payNameController.text.trim(), _payMobileController.text.trim()];
     return {
       'ins_id': auth.insId ?? 1,
       'inscode': auth.inscode ?? '',
@@ -709,6 +914,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       // switched back to No would otherwise be saved.
       'scholarshiptype': _scholarship == 'Yes' ? t(_scholarshipTypeController) : null,
       'admremarks': t(_remarksController),
+      'idmark1': t(_idMark1Controller),
+      'idmark2': t(_idMark2Controller),
       'createdby': auth.userName,
     };
   }
@@ -758,7 +965,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// Validates only the fields that live on [tab]. Next calls this so a missing
   /// required field is caught on the tab that owns it, instead of surfacing at
   /// Save several tabs later with no clue where to go. Tabs 3-5 (Address,
-  /// Documents, Other Details) carry no required fields; Address checks only
+  /// Previous School, Other Details) carry no required fields; Address checks only
   /// that a filled Pin Code is 6 digits.
   bool _validateTab(int tab) {
     switch (tab) {
@@ -781,11 +988,26 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           _snack('$kEmisRuleMsg.', AppColors.error);
           return false;
         }
+        final emisOwner = _emisOwner;
+        if (emisOwner != null) {
+          _snack('EMIS No. / APAAR ID ${_emisController.text.trim()} is already used by $emisOwner. Enter this student\'s own ID.',
+              AppColors.error);
+          return false;
+        }
         return true;
       case 1: // Academic Details
         if (_regMode == null) {
           _snack(schoolTerm('Select the register number mode (Manual or Auto).'), AppColors.error);
           return false;
+        }
+        // Division-wise: a standard whose division cannot be numbered is
+        // stopped here, with where to create the sequence.
+        if (_seqByDivision && _regNoLocked && _selected == null && _selectedCourse != null) {
+          final c = regSeqFor(_regSeqs, _divisionOfCourse(_selectedCourse));
+          if (c.blocked) {
+            _snack(c.notice!, AppColors.error);
+            return false;
+          }
         }
         if (_admnoController.text.trim().isEmpty) {
           _snack(schoolTerm('Enter the register number.'), AppColors.error);
@@ -800,10 +1022,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         }
         if (_admDate == null) {
           _snack('Select the date of admission.', AppColors.error);
-          return false;
-        }
-        if (isSchool && (_selectedDivision == null || _selectedDivision!.trim().isEmpty)) {
-          _snack('Select a division.', AppColors.error);
           return false;
         }
         // Course + Class are mandatory — the student is enrolled straight into
@@ -860,6 +1078,17 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             return false;
           }
         }
+        if (_payNameController.text.trim().isEmpty || _payMobileController.text.trim().isEmpty) {
+          _snack('Enter the Payment In Charge and Pay In Charge Mobile.', AppColors.error);
+          return false;
+        }
+        // The Pay In Charge mobile links brothers and sisters to one parent
+        // record, so a placeholder (9999999999) would join unrelated families.
+        final payErr = payerMobileError('Pay In Charge Mobile', _payMobileController.text);
+        if (payErr != null) {
+          _snack(payErr, AppColors.error);
+          return false;
+        }
         return true;
       case 3: // Address Details
         if (!_lenOk(_pinController, 6)) {
@@ -898,6 +1127,10 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         // the server hands out the next number (claim_reg_no) and that one is
         // used for both the admission and the allocation. A number the operator
         // typed themselves is never replaced.
+        // Division-wise: always the sequence of the standard being saved.
+        if (_seqByDivision && _regNoLocked) {
+          _selectedRegSeqId = regSeqFor(_regSeqs, _divisionOfCourse(_selectedCourse)).seq?['seq_id']?.toString();
+        }
         final seq = _selectedRegSeqId == null
             ? const <String, dynamic>{}
             : _regSeqs.firstWhere((s) => s['seq_id'].toString() == _selectedRegSeqId, orElse: () => const {});
@@ -957,6 +1190,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         // A still-PENDING admission now has a class (mandatory) → enrol it now,
         // so nothing is left waiting in Class Allocation.
         var enrolled = false;
+        var allocFailed = false;
         if (!isSchool &&
             !_selected!.isAllocated &&
             _selectedClass != null &&
@@ -970,11 +1204,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             );
             enrolled = true;
           } catch (e) {
+            allocFailed = true;
             _snack('Admission updated, but the student could not be allocated to the class. ${friendlyError(e)} Allocate them from Class Allocation.',
                 AppColors.warning);
           }
         }
-        if (enrolled || _selected!.isAllocated) {
+        // Every successful save says so -- a pending admission used to be saved
+        // silently and the form reset, so it looked lost and was entered again.
+        if (!allocFailed) {
           _snack(enrolled ? 'Admission updated and added to Students.' : 'Admission updated.',
               AppColors.success);
         }
@@ -1230,7 +1467,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   /// hint and means "no filter".
   Widget _listFilterDropdown(String hint, String? value, List<String> options, ValueChanged<String?> onChanged) {
     final filled = options.contains(value);
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: filled ? value : null,
       isExpanded: true,
       isDense: true,
@@ -1402,7 +1639,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                         children: [
                           _studentInfoHeader(),
                           // ONE PAGE: every group of fields in order (no tabs),
-                          // each as a Royal "notebook" section.
+                          // each as a "notebook" section.
                           for (var t = 0; t < _tabLabels.length; t++) _notebookSection(t),
                         ],
                       ),
@@ -1417,9 +1654,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     );
   }
 
-  /// A Royal notebook section: a big Playfair numeral and the section name in
+  /// A notebook section: a big Fraunces numeral and the section name in
   /// a left margin, a thin burnt-orange rule, the fields on the right. The
-  /// numeral of the section being edited is maroon, the others faint. On a
+  /// numeral of the section being edited is teal, the others faint. On a
   /// narrow pane it falls back to a plain heading above the fields.
   Widget _notebookSection(int t) {
     final title = _tabLabels[t];
@@ -1447,9 +1684,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                   padding: EdgeInsets.only(right: 18.w, top: 2.h),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     Text((t + 1).toString().padLeft(2, '0'),
-                        style: AppFonts.heading(size: 40.sp, color: active ? AppColors.primary : AppColors.faint, height: 1)),
+                        style: AppFonts.body(size: 40.sp, weight: FontWeight.w800, color: active ? AppColors.primary : AppColors.faint).copyWith(height: 1)),
                     SizedBox(height: 6.h),
-                    Text(words.first, textAlign: TextAlign.right, style: AppFonts.heading(size: 17.sp, height: 1.15)),
+                    Text(words.first, textAlign: TextAlign.right, style: AppFonts.body(size: 17.sp, weight: FontWeight.w700).copyWith(height: 1.15)),
                     if (words.length > 1)
                       Text(words.skip(1).join(' '), textAlign: TextAlign.right, style: AppUI.muted),
                   ]),
@@ -1616,7 +1853,42 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             padding: EdgeInsets.only(top: 8.h),
             child: Text('Student Information', style: AppUI.cardTitle),
           ),
-          const Spacer(),
+          SizedBox(width: 16.w),
+          // Add Sibling (new admissions only): copy a brother's / sister's
+          // family details so both share one parent record.
+          if (a == null)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(top: 2.h),
+                child: Wrap(
+                  spacing: 10.w,
+                  runSpacing: 6.h,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _saving ? null : _pickSibling,
+                      icon: AppIcon('people', size: 16, color: AppColors.primary),
+                      label: const Text('Add Sibling'),
+                      style: AppUI.secondary(context),
+                    ),
+                    if (_siblingOf != null)
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        AppUI.chip(schoolTerm('Sibling of ${_siblingOf!.stuname} (${_siblingOf!.admno}${(_siblingOf!.stuclass ?? '').isEmpty ? '' : ', ${_siblingOf!.stuclass}'})'),
+                            AppStatus.info),
+                        IconButton(
+                          tooltip: 'Clear the sibling note (the copied details stay)',
+                          onPressed: () => setState(() => _siblingOf = null),
+                          icon: const Icon(Icons.close, size: 14),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                        ),
+                      ]),
+                  ],
+                ),
+              ),
+            )
+          else
+            const Spacer(),
           // Upload / Remove photo are mouse actions: kept out of Tab
           ExcludeFocus(child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -1726,10 +1998,10 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               // university enrolment, so a fresher often has one and not the
               // other. Digits-only, but no fixed length — formats vary by year.
               _text(schoolTerm('EMIS No'), _emisController, digitsOnly: true, maxLen: emisMaxLength,
-                  extraError: emisInvalid(_emisController.text), extraMsg: kEmisRuleMsg),
+                  extraError: emisInvalid(_emisController.text) || _emisOwner != null,
+                  extraMsg: emisInvalid(_emisController.text) ? kEmisRuleMsg : 'Already used by $_emisOwner'),
+              // Three slots, like the rows above, so the boxes line up with them.
               if (isSchool) const Spacer() else _text('UMIS No', _umisController, digitsOnly: true, maxLen: 30),
-              const Spacer(),
-              const Spacer(),
             ]),
           ]),
         ];
@@ -1759,18 +2031,26 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               // student's identity or enrolment -- correcting a mistyped batch
               // moves nothing and breaks no link, where changing Register No,
               // Course or Class after allocation would.
-              if (isSchool) _divisionField() else _text('Batch', _batchController, required: true, maxLen: 9),
+              // School: no Division field -- it comes from the standard
+              // (Master Data > Standard), set when the standard is picked.
+              if (isSchool) const SizedBox.shrink() else _text('Batch', _batchController, required: true, maxLen: 9),
             ]),
-            _row([_preAdmissionField(), if (isSchool) const SizedBox.shrink() else _divisionField(), const SizedBox.shrink()]),
+            // School: the tick and its note take the full row, so the note
+            // reads in two lines instead of a tall narrow column.
+            if (isSchool)
+              _row([_preAdmissionField()])
+            else
+              _row([_preAdmissionField(), _divisionField(), const SizedBox.shrink()]),
           ]),
           _section(schoolTerm('Course & class'), [
             _row([
               _dropdown(schoolTerm('Course'), _selectedCourse, _courseNames, (v) => setState(() {
                     _selectedCourse = v;
                     if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) _selectedClass = null;
-                    // the standard's division (Master Data -> Standard), still changeable
+                    // the standard's division (Master Data -> Standard). School:
+                    // always the standard's (no field); college: still changeable.
                     final div = _divisionOfCourse(v);
-                    if (div != null) _pickDivision(div);
+                    if (isSchool || div != null) _pickDivision(div);
                   }), locked: _coreLocked, required: true),
               _dropdown(schoolTerm('Class'), _selectedClass, _classNamesFor(_selectedCourse),
                   (v) => setState(() => _selectedClass = v), hint: schoolTerm('Select class'),
@@ -1836,9 +2116,12 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           ]),
           _section('Contact & pay in charge', [
             _row([
+              _text('Payment In Charge *', _payNameController, required: true),
+              _text('Pay In Charge Mobile *', _payMobileController, keyboard: TextInputType.phone, maxLen: 10, required: true,
+                  extraError: _payMobileController.text.trim().isNotEmpty &&
+                      payerMobileError('Pay In Charge Mobile', _payMobileController.text) != null,
+                  extraMsg: 'Enter the payer\'s own 10-digit mobile (starting 6-9), not a placeholder.'),
               _text('Parent Email', _parentEmailController, keyboard: TextInputType.emailAddress),
-              const Spacer(),
-              const Spacer(),
             ]),
             Padding(
               padding: EdgeInsets.only(top: 4.h),
@@ -1847,12 +2130,32 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                 SizedBox(width: 6.w),
                 Expanded(
                   child: Text(
-                    'Pay In Charge is set automatically from Father → Mother → Guardian (the first with both Name and Mobile).',
+                    'Payment In Charge fills in from Father → Mother → Guardian (the first with both Name and Mobile). '
+                    'Change it if someone else pays.',
                     style: AppUI.muted,
                   ),
                 ),
               ]),
             ),
+            // Brothers / sisters on this Pay In Charge mobile (one parent login).
+            Builder(builder: (_) {
+              final sibs = _siblingsOnNumber();
+              if (sibs.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: EdgeInsets.only(top: 8.h),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  AppIcon('people', size: 14, color: AppColors.primary),
+                  SizedBox(width: 6.w),
+                  Expanded(
+                    child: Text(
+                      schoolTerm('Siblings on this mobile (same parent login): ') +
+                          sibs.map((b) => '${b.stuname} (${[b.admno, b.stuclass ?? ''].where((v) => v.trim().isNotEmpty).join(', ')})').join('; '),
+                      style: AppUI.body.copyWith(color: AppColors.primary),
+                    ),
+                  ),
+                ]),
+              );
+            }),
           ]),
         ];
       case 3: // Address Details
@@ -1876,7 +2179,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             ]),
           ]),
         ];
-      case 4: // Documents
+      case 4: // Previous School
         return [
           _section('Previous School', [
             _row([
@@ -1902,6 +2205,13 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
                   _optionsOf((a) => a.nationality), hint: 'Type or select a nationality'),
               const Spacer(),
               const Spacer(),
+            ]),
+          ]),
+          // Printed on the TC (Personal Marks of Identification).
+          _section('Personal identification', [
+            _row([
+              _text('Identification Mark 1', _idMark1Controller, hint: 'e.g. A mole on the right thumb'),
+              _text('Identification Mark 2', _idMark2Controller, hint: 'e.g. A scar on the left knee'),
             ]),
           ]),
           _section('Notes', [
@@ -2169,7 +2479,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(label, required: required, optional: !required && !_conditionalLabels.contains(label)),
-        DropdownButtonFormField<String>(
+        AppDropdownField<String>(
           initialValue: items.contains(value) ? value : null,
           isExpanded: true,
           dropdownColor: Colors.white,
@@ -2200,7 +2510,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(label, required: required, optional: !required && !_conditionalLabels.contains(label)),
-        DropdownButtonFormField<String>(
+        AppDropdownField<String>(
           initialValue: values.contains(value) ? value : null,
           isExpanded: true,
           dropdownColor: Colors.white,
@@ -2240,10 +2550,20 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
     return (name == null || name.isEmpty) ? null : name;
   }
 
+  /// The school keeps its admission number sequences division-wise.
+  bool get _seqByDivision => isSchool && regSeqDivisionWise(_regSeqs);
+
   /// Set the division (call inside setState). A new admission whose number
   /// comes from a sequence also takes that division's Register Sequence.
   void _pickDivision(String? v) {
     _selectedDivision = v;
+    if (_seqByDivision) {
+      if (!_regNoLocked || _selected != null) return;
+      final seq = regSeqFor(_regSeqs, v).seq;
+      _selectedRegSeqId = seq?['seq_id']?.toString();
+      _admnoController.text = seq == null ? '' : _buildRegNo(seq);
+      return;
+    }
     if (_regNoLocked && _selected == null && v != null) {
       final m = _regSeqs.where((s) => (s['division'] ?? '').toString().trim().toUpperCase() == v.toUpperCase());
       if (m.isNotEmpty) {
@@ -2256,7 +2576,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   Widget _divisionField() {
     final items = <String>{..._divisions, if (_selectedDivision != null) _selectedDivision!}.toList();
     return _dropdown(isSchool ? 'Division *' : 'Division', _selectedDivision, items, (v) => setState(() => _pickDivision(v)),
-        hint: _divisions.isEmpty ? 'No divisions yet. Add one in Admission Master' : 'Select division', required: isSchool);
+        hint: _divisions.isEmpty ? 'No divisions yet. Add one in Master Data' : 'Select division', required: isSchool);
   }
 
   Widget _regSeqField() {
@@ -2265,7 +2585,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(schoolTerm('Register Sequence')),
-        DropdownButtonFormField<String>(
+        AppDropdownField<String>(
+          // Division-wise the sequence changes with the standard.
+          key: ValueKey('reg-seq-$_selectedRegSeqId'),
           initialValue: values.contains(_selectedRegSeqId) ? _selectedRegSeqId : null,
           isExpanded: true,
           dropdownColor: Colors.white,
@@ -2274,7 +2596,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
           style: AppUI.fieldText(context),
           decoration: _dec(
-              filled: values.contains(_selectedRegSeqId), locked: !_regNoLocked),
+              filled: values.contains(_selectedRegSeqId), locked: !_regNoLocked || _seqByDivision),
           hint: Text(schoolTerm('Select register sequence'), style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
           items: _regSeqs
               .map((s) => DropdownMenuItem(
@@ -2290,7 +2612,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
           // it stays editable so the user can overwrite the suggestion.
           // Only usable in AUTO — in MANUAL the number is typed, so there is no
           // sequence to choose.
-          onChanged: (_readonly || _regMode == null || !_regNoLocked)
+          // Division-wise it follows the standard, so it cannot be changed here.
+          onChanged: (_readonly || _regMode == null || !_regNoLocked || _seqByDivision)
               ? null
               : (v) => setState(() {
                     _selectedRegSeqId = v;
@@ -2309,6 +2632,17 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
             child: Text(schoolTerm('No register sequence yet. Add one in Admission Master.'),
                 style: TextStyle(fontSize: 12.sp, color: AppColors.error, fontWeight: FontWeight.w600)),
           ),
+        // Division-wise: this standard's division has no sequence of its own.
+        if (_seqByDivision && _regNoLocked && _selected == null && _selectedCourse != null)
+          Builder(builder: (_) {
+            final c = regSeqFor(_regSeqs, _divisionOfCourse(_selectedCourse));
+            if (c.notice == null) return const SizedBox.shrink();
+            return Padding(
+              padding: EdgeInsets.only(top: 4.h, left: 2.w),
+              child: Text(c.notice!,
+                  style: TextStyle(fontSize: 12.sp, color: c.blocked ? AppColors.error : AppColors.warning, fontWeight: FontWeight.w600)),
+            );
+          }),
       ],
     );
   }
@@ -2318,7 +2652,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label('Academic Year'),
-        DropdownButtonFormField<String>(
+        AppDropdownField<String>(
           initialValue: _selectedYrId,
           isExpanded: true,
           dropdownColor: Colors.white,

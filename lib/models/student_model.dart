@@ -1,3 +1,5 @@
+import '../utils/school_terms.dart';
+
 /// Student model matching Supabase 'students' table
 class StudentModel {
   final int stuId;
@@ -140,7 +142,7 @@ class StudentModel {
   String get name => stuname;
   String get admissionNumber => stuadmno;
   String get className => stuclass;
-  String get gender =>
-      stugender == 'M' ? 'Male' : stugender == 'F' ? 'Female' : 'Other';
+  /// Boy / Girl / Other (school), Male / Female / Other (college).
+  String get gender => stugender == 'M' || stugender == 'F' ? genderLabel(stugender) : 'Other';
   bool get isActive => activestatus == 1;
 }

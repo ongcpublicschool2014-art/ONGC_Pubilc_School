@@ -13,6 +13,8 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/import_errors_export.dart';
+import '../../utils/excel_theme.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show FileOptions, PostgrestException;
 import 'package:provider/provider.dart';
 import '../../utils/app_theme.dart';
@@ -22,7 +24,11 @@ import '../../services/supabase_service.dart';
 import '../../models/student_model.dart';
 import '../../utils/app_text.dart';
 import '../../utils/friendly_error.dart';
+import '../../utils/mobile_rules.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/student_import_rules.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 class StudentsScreen extends StatefulWidget {
   final StudentModel? initialStudent;
@@ -54,6 +60,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
   String? _selectedBloodGroup;
   String? _selectedClass;
   List<String> _classes = [];
+  // true once the first load finished (so an empty list shows a message,
+  // not a spinner that never stops)
+  bool _classesLoaded = false;
   String? _selectedConId;
   List<Map<String, dynamic>> _concessions = [];
   String? _selectedAdmName;
@@ -142,6 +151,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   // reject rows whose class/course doesn't exist or whose classâ†’course
   // mapping disagrees with the master.
   Set<String> _importClassNames = {};         // normalized claname
+  Set<String> _importDivisionNames = {};      // normalized divname (Master Data > Division)
+  String? _importFirstDivision;               // a real division for the sample file
   Set<String> _importCourseNames = {};        // normalized courname
   Map<String, String?> _importClassToCourse = {}; // normalized claname â†’ normalized course name (from class.cour_id)
 
@@ -154,20 +165,27 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'concession', 'quoname',
     'stumobile', 'stuemail',
     'stuaddress', 'stucity', 'stustate', 'stucountry', 'stupin', 'stubloodgrp',
-    'aadharno', 'community', 'caste', 'religion', 'nationality', 'transportmode', 'hostel', 'division',
+    'aadharno', 'community', 'caste', 'religion', 'nationality', 'transportmode', 'hostel',
     'fathername', 'fathermobile', 'fatheroccupation',
     'mothername', 'mothermobile', 'motheroccupation',
     'guardianname', 'guardianmobile', 'guardianoccupation', 'paremail',
     'payincharge', 'payinchargemob',
     'admitted_course_id', 'course_id', 'class_id', 'admission_type_id', 'concession_id', 'quota_id',
+    // user's sheet, 2026-11-07
+    'community_id', 'emisno',
+    // last column (user, 2026-10-30)
+    'division',
   ];
 
   // A school has no admission type / quota / batch, so these grid columns are
   // dropped there (grid, template, sample). College keeps the full list.
-  static const _schoolDropGridKeys = {'admname', 'batch', 'quoname', 'admission_type_id', 'quota_id'};
+  // Division too (user, 2026-11-10): a school student's division comes from
+  // the standard (Master Data > Standard), filled in by the import.
+  static const _schoolDropGridKeys = {'admname', 'batch', 'quoname', 'admission_type_id', 'quota_id', 'division'};
+  // EMIS No. is imported on a school only (the college import does not carry it).
   List<String> get _gridKeys => isSchool
       ? _importGridKeys.where((k) => !_schoolDropGridKeys.contains(k)).toList()
-      : _importGridKeys;
+      : _importGridKeys.where((k) => k != 'emisno').toList();
 
   // Labels + order mirror the student import Excel template.
   static const Map<String, String> _importGridLabels = {
@@ -218,20 +236,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'admission_type_id': 'Admission Type Id',
     'concession_id': 'Concession Id',
     'quota_id': 'Quota id',
+    'community_id': 'Community Id',
+    'emisno': 'EMIS No',
   };
 
   final ScrollController _importScrollController = ScrollController();
 
   // Required = the NOT NULL columns on students/parents (studob is NOT NULL;
   // con_id is nullable so Concession is optional). payincharge / payinchargemob
-  // are NOT listed here: they're auto-filled from a parent (see
-  // _deriveImportPayer) when left blank, and validated conditionally.
+  // and the "one parent with name + mobile" rule are checked separately in
+  // _validateImportRow, with their own messages.
   static const _importRequiredFields = {'stuadmno', 'stuname', 'stugender', 'studob', 'stuclass'};
 
   TextStyle get _inputStyle => AppUI.fieldText(context);
 
   final List<String> _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
-  final List<String> _genders = ['Male', 'Female', 'Other'];
+  List<String> get _genders => [kBoyLabel, kGirlLabel, 'Other'];
   static const List<String> _classOrder = [
     'PKG', 'LKG', 'UKG', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII',
   ];
@@ -319,7 +339,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final insId = auth.insId ?? 1;
 
     // Stage 1: parallel - includes class counts so list shows immediately with correct counts
-    final results = await Future.wait<dynamic>([
+    final List<dynamic> results;
+    try {
+      results = await Future.wait<dynamic>([
       SupabaseService.getYears(insId),
       SupabaseService.getConcessions(insId),
       SupabaseService.getClasses(insId),
@@ -331,6 +353,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
       SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       SupabaseService.fromSchema('course').select('courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
     ]);
+    } catch (_) {
+      if (mounted) setState(() => _classesLoaded = true);
+      return;
+    }
 
     if (!mounted) return;
     final years = results[0] as List<Map<String, dynamic>>;
@@ -382,6 +408,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _admissionTypes = admissionTypes;
       _quotas = quotas;
       _classes = allClasses;
+      _classesLoaded = true;
       _classCounts = classCounts;
       _classOrdMap = classOrdMap;
       _courseOrdMap = courseOrdMap;
@@ -604,7 +631,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
         return '${e.key} must be exactly 10 digits';
       }
     }
-    return null;
+    // Payment Mobile links brothers and sisters to one parent record and is
+    // the parent app login, so a placeholder (9999999999) is refused.
+    return payerMobileError('Payment Mobile', _payMobileController.text);
   }
 
   Future<void> _saveNewStudent() async {
@@ -643,7 +672,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuadmno': _admNoController.text.trim(),
         'stuadmdate': (_admDate ?? DateTime.now()).toIso8601String().split('T').first,
         'stuname': _nameController.text.trim(),
-        'stugender': _selectedGender == 'Female' ? 'F' : _selectedGender == 'Male' ? 'M' : 'O',
+        'stugender': genderCode(_selectedGender, other: 'O') ?? 'O',
         'studob': _dob?.toIso8601String().split('T').first,
         'stumobile': _mobileController.text.trim(),
         'stuemail': _emailController.text.trim().isNotEmpty ? _emailController.text.trim() : null,
@@ -774,7 +803,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stuadmno': _admNoController.text.trim(),
         'stuadmdate': (_admDate ?? DateTime.now()).toIso8601String().split('T').first,
         'stuname': _nameController.text.trim(),
-        'stugender': _selectedGender == 'Female' ? 'F' : _selectedGender == 'Male' ? 'M' : 'O',
+        'stugender': genderCode(_selectedGender, other: 'O') ?? 'O',
         'studob': _dob?.toIso8601String().split('T').first,
         'stumobile': _mobileController.text.trim(),
         'stuemail': _emailController.text.trim().isNotEmpty ? _emailController.text.trim() : null,
@@ -1175,8 +1204,11 @@ class _StudentsScreenState extends State<StudentsScreen> {
   }
 
   Widget _buildClassList() {
-    if (_classes.isEmpty) {
+    if (!_classesLoaded) {
       return const Center(child: CircularProgressIndicator());
+    }
+    if (_classes.isEmpty) {
+      return AppUI.empty(title: 'No students yet', why: 'Add one under Admission or use Import CSV/Excel.', icon: 'people');
     }
 
     final courseClassCounts = _getCoursewiseClassCounts();
@@ -1220,7 +1252,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   // when next rebuilt.
                 }
               }
-              setState(() => _expandedCourse = courseName);
+              // A tile mounting already expanded (scrolled back into view)
+              // reports it during the build: nothing changed, so no setState.
+              if (_expandedCourse != courseName) setState(() => _expandedCourse = courseName);
             } else if (_expandedCourse == courseName) {
               setState(() => _expandedCourse = null);
             }
@@ -1584,12 +1618,21 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10.r)),
                 child: Text('$totalStudents students', style: TextStyle(fontSize: 12.sp, color: AppColors.primary, fontWeight: FontWeight.w600)),
               ),
-              const Spacer(),
-              AppSearchField(
-                controller: _searchController,
-                hintText: schoolTerm('Search by name, roll no. or course'),
-                onChanged: (_) => setState(() {}),
-                width: 300.w,
+              // the search box takes what is left (up to 300) so the row fits a
+              // small window instead of overflowing
+              SizedBox(width: 12.w),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: 300.w),
+                    child: AppSearchField(
+                      controller: _searchController,
+                      hintText: schoolTerm('Search by name, roll no. or course'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ),
               ),
               ..._buildImportActionButtons(),
             ],
@@ -2101,7 +2144,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _row3(
-          _fieldFull(label: 'Academic Year *', child: DropdownButtonFormField<String>(
+          _fieldFull(label: 'Academic Year *', child: AppDropdownField<String>(
             initialValue: _selectedYrId,
             dropdownColor: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -2167,7 +2210,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ),
             ),
           ),
-          _fieldFull(label: 'Gender *', child: DropdownButtonFormField<String>(
+          _fieldFull(label: 'Gender *', child: AppDropdownField<String>(
             initialValue: _selectedGender,
             dropdownColor: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -2239,7 +2282,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   !_classes.contains(_selectedClass))
                 _selectedClass!,
             ];
-            return DropdownButtonFormField<String>(
+            return AppDropdownField<String>(
               initialValue: classOptions.contains(_selectedClass) ? _selectedClass : null,
               dropdownColor: Colors.white,
               borderRadius: BorderRadius.circular(12),
@@ -2253,7 +2296,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               validator: (v) => v == null ? 'Required' : null,
             );
           })),
-          _fieldFull(label: 'Blood Group', child: DropdownButtonFormField<String>(
+          _fieldFull(label: 'Blood Group', child: AppDropdownField<String>(
             initialValue: _selectedBloodGroup,
             isExpanded: true,
             dropdownColor: Colors.white,
@@ -2277,7 +2320,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               items.add(DropdownMenuItem(value: v, child: Text((c['condesc'] ?? '').toString(), overflow: TextOverflow.ellipsis)));
             }
             final value = seen.contains(_selectedConId) ? _selectedConId : null;
-            return DropdownButtonFormField<String>(
+            return AppDropdownField<String>(
               initialValue: value,
               isExpanded: true,
               dropdownColor: Colors.white,
@@ -2306,7 +2349,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               items.add(DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis)));
             }
             final value = seen.contains(_selectedAdmName) ? _selectedAdmName : null;
-            return DropdownButtonFormField<String>(
+            return AppDropdownField<String>(
               initialValue: value,
               isExpanded: true,
               dropdownColor: Colors.white,
@@ -2329,7 +2372,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               items.add(DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis)));
             }
             final value = seen.contains(_selectedQuoName) ? _selectedQuoName : null;
-            return DropdownButtonFormField<String>(
+            return AppDropdownField<String>(
               initialValue: value,
               isExpanded: true,
               dropdownColor: Colors.white,
@@ -2423,7 +2466,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         _row4(
           _fieldFull(label: 'Nationality', child: TextFormField(controller: _nationalityController, decoration: _dec('Enter nationality', filled: _nationalityController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _nationalityController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
           _fieldFull(label: 'Transport Mode', child: TextFormField(controller: _transportController, decoration: _dec('e.g. Bus / Own', filled: _transportController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _transportController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
-          _fieldFull(label: 'Hostel', child: DropdownButtonFormField<String>(
+          _fieldFull(label: 'Hostel', child: AppDropdownField<String>(
             initialValue: _selectedHostel,
             isExpanded: true,
             dropdownColor: Colors.white,
@@ -2608,6 +2651,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     'concession_id': 'Concession Id',
     'quota_id': 'Quota Id',
     'admitted_course_id': 'Admitted Course Id',
+    'community_id': 'Community Id',
+    'emisno': 'EMIS No',
   };
 
   /// Auto-map header text to field key (case-insensitive)
@@ -2666,8 +2711,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
       'concession id': 'concession_id', 'concession category id': 'concession_id', 'con id': 'concession_id',
       'quota id': 'quota_id', 'quo id': 'quota_id',
       'admitted course id': 'admitted_course_id',
+      'community id': 'community_id', 'communityid': 'community_id', 'com id': 'community_id',
+      'emis no': 'emisno', 'emisno': 'emisno', 'emis': 'emisno', 'emis number': 'emisno', 'emis id': 'emisno',
+      'apaar id': 'emisno', 'emis no / apaar id': 'emisno',
     };
-    return map[h] ?? '';
+    final key = map[h] ?? '';
+    // School: a Division column in the file is ignored (see _schoolDropGridKeys).
+    return (isSchool && key == 'division') ? '' : key;
   }
 
   /// Parse a date string in common formats
@@ -2705,8 +2755,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   static String _normalizeGender(String? g) {
     if (g == null) return 'M';
     final v = g.trim().toUpperCase();
-    if (v == 'M' || v == 'MALE') return 'M';
-    if (v == 'F' || v == 'FEMALE') return 'F';
+    if (v == 'M' || v == 'MALE' || v == 'BOY') return 'M';
+    if (v == 'F' || v == 'FEMALE' || v == 'GIRL') return 'F';
     return 'O';
   }
 
@@ -2799,9 +2849,18 @@ class _StudentsScreenState extends State<StudentsScreen> {
         SupabaseService.fromSchema('course')
             .select('cour_id, courname')
             .eq('ins_id', insId),
+        SupabaseService.fromSchema('division')
+            .select('divname')
+            .eq('ins_id', insId)
+            .eq('activestatus', 1)
+            .then((v) => v, onError: (_) => <dynamic>[]),
       ]);
       final classRows = results[0] as List;
       final courseRows = results[1] as List;
+      final divNames = [
+        for (final d in results[2] as List)
+          if ((d['divname']?.toString() ?? '').trim().isNotEmpty) d['divname'].toString().trim(),
+      ];
       final courNameById = <int, String>{
         for (final c in courseRows)
           if (c['cour_id'] is int && (c['courname']?.toString() ?? '').isNotEmpty)
@@ -2823,6 +2882,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       if (mounted) {
         setState(() {
           _importClassNames = classNames;
+          _importDivisionNames = divNames.map(norm).toSet();
+          _importFirstDivision = divNames.isEmpty ? null : divNames.first;
           _importCourseNames = courseNames;
           _importClassToCourse = classToCourse;
         });
@@ -2843,7 +2904,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final origHeaders = List<String>.from(_importHeaders);
     final headers = [...origHeaders, 'Error'];
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -2877,7 +2938,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     }
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save File with Errors',
         fileName: 'student_import_errors.xlsx',
         type: FileType.custom,
@@ -2911,7 +2972,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final headers = _gridKeys.map((k) => _importGridLabels[k] ?? k).toList();
 
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -2925,7 +2986,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     sheet.setRowHeight(0, 32);
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save Template',
         fileName: 'student_import_template.xlsx',
         type: FileType.custom,
@@ -2952,6 +3013,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   }
 
   Future<void> _exportSampleData() async {
+    // the sample's Division is a real one from Master Data
+    if (_importFirstDivision == null) await _loadImportMasters();
     final excel = xl.Excel.createExcel();
     final sheet = excel['Students'];
     excel.delete('Sheet1');
@@ -2961,19 +3024,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final headers = _gridKeys.map((k) => _importGridLabels[k] ?? k).toList();
     final sampleMaps = <Map<String, String>>[
       {
-        'stuadmno': 'CS001', 'stuname': 'RAHUL KUMAR', 'stugender': 'Male', 'studob': '2004-06-15',
+        'stuadmno': 'CS001', 'stuname': 'RAHUL KUMAR', 'stugender': kBoyLabel, 'studob': '2004-06-15',
         'stuadmdate': '2025-06-01', 'courname': isSchool ? 'I' : 'BSC-CS', 'stuclass': isSchool ? 'I A' : 'I Year', 'stumobile': '9876543210',
         'stuemail': 'rahul@email.com', 'concession': 'GENERAL', 'stuaddress': 'No.5 Main Street',
         'stucity': 'Chennai', 'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600001',
         'stubloodgrp': 'B+', 'aadharno': '234567890123', 'community': 'OC', 'caste': 'Iyer',
-        'religion': 'Hindu', 'nationality': 'Indian', 'transportmode': 'Y', 'hostel': 'N', 'division': 'PRIMARY',
+        'religion': 'Hindu', 'nationality': 'Indian', 'transportmode': 'Y', 'hostel': 'N', 'division': _importFirstDivision ?? '',
         'fathername': 'KUMAR S', 'fathermobile': '9876543210', 'fatheroccupation': 'Business',
         'mothername': 'LAKSHMI K', 'mothermobile': '9876543211', 'motheroccupation': 'Teacher',
         'paremail': 'kumar@email.com', 'payincharge': 'KUMAR S', 'payinchargemob': '9876543210',
         'admname': 'GEN', 'quoname': 'GQ', 'batch': '2025-2026', 'admittyear': '2025-2026', 'medium': 'English',
       },
       {
-        'stuadmno': 'CS002', 'stuname': 'PRIYA S', 'stugender': 'Female', 'studob': '2004-03-22',
+        'stuadmno': 'CS002', 'stuname': 'PRIYA S', 'stugender': kGirlLabel, 'studob': '2004-03-22',
         'stuadmdate': '2025-06-01', 'courname': isSchool ? 'I' : 'BSC-CS', 'stuclass': isSchool ? 'I A' : 'I Year', 'stumobile': '9876543220',
         'concession': 'GENERAL', 'stuaddress': 'No.10 Anna Nagar', 'stucity': 'Chennai',
         'stustate': 'Tamil Nadu', 'stucountry': 'India', 'stupin': '600040', 'stubloodgrp': 'O+',
@@ -2988,7 +3051,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final sampleRows = sampleMaps.map((m) => _gridKeys.map((k) => m[k] ?? '').toList()).toList();
 
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -3007,7 +3070,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     }
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save Sample Data',
         fileName: 'student_import_sample.xlsx',
         type: FileType.custom,
@@ -3127,13 +3190,12 @@ class _StudentsScreenState extends State<StudentsScreen> {
         errors[reqKey] = 'Required';
       }
     }
-    // Pay In Charge / Mobile: satisfied either by an explicit value or by a
-    // parent that has BOTH a name and a mobile (auto-filled at import time).
-    final payer = _deriveImportPayer(row);
-    final payName = _nullIfEmpty(_importCellByKey(row, 'payincharge')) ?? payer[0];
-    final payMob = _nullIfEmpty(_importCellByKey(row, 'payinchargemob')) ?? payer[1];
-    if (payName == null) errors['payincharge'] = 'Payment In Charge is missing. Enter it, or enter a parent\'s name and mobile number.';
-    if (payMob == null) errors['payinchargemob'] = 'Payment Mobile is missing. Enter it, or enter a parent\'s name and mobile number.';
+    // Mandatory: (1) at least one parent -- Father, Mother or Guardian -- with
+    // BOTH a name and a mobile, and (2) Payment In Charge and Payment Mobile,
+    // both filled in the sheet (no longer taken from a parent).
+    String? cell(String k) => _nullIfEmpty(_importCellByKey(row, k));
+    errors.addAll(importParentPayErrors(cell)); // lib/utils/student_import_rules.dart
+    final payMob = cell('payinchargemob');
     // DOB is NOT NULL on students - a non-empty but unparseable value would
     // insert null and fail server-side, so flag the bad format here.
     final dobRaw = (_importCellByKey(row, 'studob') ?? '').trim();
@@ -3174,6 +3236,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
           }
         }
       }
+    }
+    // EMIS No. (optional): up to 20 characters on import (user, 2026-11-07;
+    // the database column is varchar(20)).
+    final emisRaw = (_importCellByKey(row, 'emisno') ?? '').trim().replaceAll(RegExp(r'\.0$'), '');
+    if (emisRaw.length > 20) errors['emisno'] = 'EMIS No. can be at most 20 characters (this one has ${emisRaw.length})';
+    // Division (optional) must be one of Master Data > Division.
+    final divRaw = (_importCellByKey(row, 'division') ?? '').trim();
+    if (divRaw.isNotEmpty && _importDivisionNames.isNotEmpty && !_importDivisionNames.contains(norm(divRaw))) {
+      errors['division'] = 'Division "$divRaw" not found in Master Data';
     }
     return errors;
   }
@@ -3305,6 +3376,12 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final admNameById = <int, String>{ for (final r in (admMasterRaw as List)) if (r['adm_id'] != null) (r['adm_id'] as int): (r['admname'] ?? '').toString().trim() };
     final conNameById = <int, String>{ for (final r in (conMasterRaw as List)) if (r['con_id'] != null) (r['con_id'] as int): (r['condesc'] ?? '').toString().trim() };
     final quoNameById = <int, String>{ for (final r in (quoMasterRaw as List)) if (r['quo_id'] != null) (r['quo_id'] as int): (r['quoname'] ?? '').toString().trim() };
+    // Community Id column -> the community's name (id wins over the name column).
+    List comMasterRaw = const [];
+    try {
+      comMasterRaw = await SupabaseService.fromSchema('community').select('com_id, comname').eq('ins_id', insId).eq('activestatus', 1);
+    } catch (_) {}
+    final comNameById = <int, String>{ for (final r in comMasterRaw) if (r['com_id'] != null) (r['com_id'] as num).toInt(): (r['comname'] ?? '').toString().trim() };
     // Reverse maps (name -> id) so we can also store adm_id / quo_id when only
     // the name is given (cla_id is resolved above; con_id is resolved server-side).
     final admIdByName = <String, int>{ for (final r in (admMasterRaw as List)) if (r['adm_id'] != null && (r['admname']?.toString() ?? '').isNotEmpty) _normKey(r['admname'].toString()): (r['adm_id'] as int) };
@@ -3420,13 +3497,19 @@ class _StudentsScreenState extends State<StudentsScreen> {
         'stupin': _truncate(_nullIfEmpty((_importCellByKey(row, 'stupin') ?? '').replaceAll(RegExp(r'[^0-9]'), '')), 6),
         'stubloodgrp': _nullIfEmpty(_importCellByKey(row, 'stubloodgrp')),
         'aadharno': _nullIfEmpty(_importCellByKey(row, 'aadharno')),
-        'community': _nullIfEmpty(_importCellByKey(row, 'community')),
+        'community': () {
+          final id = int.tryParse((_importCellByKey(row, 'community_id') ?? '').trim());
+          return (id != null && comNameById.containsKey(id)) ? comNameById[id] : _nullIfEmpty(_importCellByKey(row, 'community'));
+        }(),
+        // Excel may hand a 12-digit number back as "123456789012.0"
+        if (isSchool) 'emisno': _nullIfEmpty((_importCellByKey(row, 'emisno') ?? '').trim().replaceAll(RegExp(r'\.0$'), '')),
         'caste': _nullIfEmpty(_importCellByKey(row, 'caste')),
         'religion': _nullIfEmpty(_importCellByKey(row, 'religion')),
         'nationality': _nullIfEmpty(_importCellByKey(row, 'nationality')),
         'transportmode': _normalizeTransportMode(_importCellByKey(row, 'transportmode')),
         'hostel': _normalizeYesNo(_importCellByKey(row, 'hostel')),
-        'division': _truncate(_nullIfEmpty(_importCellByKey(row, 'division')), 50),
+        // School: null -> the import takes the standard's division.
+        'division': isSchool ? null : _truncate(_nullIfEmpty(_importCellByKey(row, 'division')), 50),
         'fathername': _nullIfEmpty(_importCellByKey(row, 'fathername')),
         'fathermobile': _digitsOnly(_importCellByKey(row, 'fathermobile')),
         'fatheroccupation': _nullIfEmpty(_importCellByKey(row, 'fatheroccupation')),
@@ -3616,12 +3699,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
                 final viewportW = constraints.maxWidth;
                 final sNoW = 50.w;
                 final gridKeys = _gridKeys;
-                final dividers = (gridKeys.length + 1) * 1.0;
+                // Column dividers are drawn inside each cell's width (header and
+                // data alike), so headers and cells always line up.
+                // Last narrow column holds the row's error icon.
+                const iconW = 32.0;
                 final dataColsRaw = gridKeys.fold<double>(0, (sum, k) => sum + _gridColWidth(k));
-                final totalRaw = sNoW + dataColsRaw + dividers;
+                final totalRaw = sNoW + dataColsRaw + iconW;
                 // If natural width fits the viewport, scale data columns up to fill it
                 // (keeps S.No fixed). Otherwise keep widths and let the user scroll.
-                final scale = totalRaw < viewportW ? (viewportW - sNoW - dividers) / dataColsRaw : 1.0;
+                final scale = totalRaw < viewportW ? (viewportW - sNoW - iconW) / dataColsRaw : 1.0;
                 double colW(String key) => _gridColWidth(key) * scale;
                 final tableW = totalRaw < viewportW ? viewportW : totalRaw;
                 final needsScroll = tableW > viewportW;
@@ -3642,11 +3728,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                 child: Row(
                                   children: [
                                     _gridHeaderCell('S.No', width: sNoW, center: true),
-                                    _gridHeaderDivider(),
-                                    for (final key in gridKeys) ...[
+                                    for (final key in gridKeys)
                                       _gridHeaderCell(schoolTerm(_importGridLabels[key] ?? key), width: colW(key)),
-                                      _gridHeaderDivider(),
-                                    ],
+                                    const SizedBox(width: iconW),
                                   ],
                                 ),
                               ),
@@ -3681,14 +3765,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                                           ),
                                                         )
                                                       : _gridDataCell(_importMappedCell(row, key), width: colW(key)),
-                                                if (hasError)
-                                                  Padding(
-                                                    padding: EdgeInsets.only(right: 8.w),
-                                                    child: Tooltip(
-                                                      message: _rowErrors[index] ?? '',
-                                                      child: AppIcon.linear('info-circle', color: AppColors.error, size: 16),
-                                                    ),
-                                                  ),
+                                                SizedBox(
+                                                  width: iconW,
+                                                  child: hasError
+                                                      ? Tooltip(
+                                                          message: _rowErrors[index] ?? '',
+                                                          child: AppIcon.linear('info-circle', color: AppColors.error, size: 16),
+                                                        )
+                                                      : null,
+                                                ),
                                               ],
                                             ),
                                           );
@@ -3803,10 +3888,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
               ),
             ],
             SizedBox(height: 20.h),
-            ElevatedButton(
-              onPressed: _resetImport,
-              child: const Text('Done'),
-            ),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              if (_importErrors.isNotEmpty) ...[
+                OutlinedButton.icon(
+                  onPressed: () => exportImportErrors('Student Import', _importErrors),
+                  icon: AppIcon('document-download', size: 16, color: AppColors.primary),
+                  label: const Text('Export Errors'),
+                ),
+                SizedBox(width: 10.w),
+              ],
+              ElevatedButton(
+                onPressed: _resetImport,
+                child: const Text('Done'),
+              ),
+            ]),
           ],
         ),
       ),
@@ -3878,6 +3973,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       case 'admission_type_id': return 160;
       case 'concession_id': return 140;
       case 'quota_id': return 110;
+      case 'community_id': return 130;
+      case 'emisno': return 140;
       default: return 120;
     }
   }
@@ -3886,6 +3983,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
     final child = Container(
       padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 12.h),
       alignment: center ? Alignment.center : Alignment.centerLeft,
+      decoration: const BoxDecoration(
+        border: Border(right: BorderSide(color: AppColors.divider)),
+      ),
       child: Text(
         text.toUpperCase(),
         maxLines: 1,
@@ -3895,10 +3995,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
       ),
     );
     return width != null ? SizedBox(width: width, child: child) : Expanded(flex: flex, child: child);
-  }
-
-  Widget _gridHeaderDivider() {
-    return Container(width: 1, height: 36.h, color: AppColors.divider);
   }
 
   Widget _gridDataCell(String text, {double? width, int flex = 1, bool center = false}) {

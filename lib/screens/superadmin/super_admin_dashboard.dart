@@ -40,13 +40,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   // in the Institutions Overview gets its own visually distinct highlight
   // without depending on a server-supplied palette.
   static const List<Color> _insCodePalette = [
-    Color(0xFF7A1F2B), // maroon
-    Color(0xFFC9971C), // gold
-    Color(0xFF3F4F9A), // navy
-    Color(0xFF1F7F80), // teal
-    Color(0xFFC2410C), // burnt orange
-    Color(0xFF8F6A0E), // dark gold
-    Color(0xFFD9A9B0), // muted maroon
+    AppColors.primary, // teal
+    AppColors.gold, // marigold
+    AppColors.info, // purple
+    AppColors.teal, // teal
+    AppColors.error, // coral
+    AppColors.goldDark, // dark marigold
+    AppColors.primaryMuted, // muted teal
   ];
   Color _colorForInsCode(String code) {
     if (code.isEmpty) return _insCodePalette[0];
@@ -859,16 +859,44 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     }
 
     final hPad = collapsed
-        ? 12.w
+        // Fixed (not scaled) inside the fixed 78px rail: scaled units grow on a
+        // big screen and overflowed it.
+        ? 10.0
         : (MediaQuery.of(context).size.width < 1100 ? 10.w : 14.w);
 
+    // Same menu as the institution app (dashboard_screen.dart): light teal
+    // with the school picture fading in at the foot.
     return Container(
       decoration: const BoxDecoration(
-        // Dark navy sidebar — light foreground on it.
-        color: AppColors.sidebarBg,
-        border: Border(right: BorderSide(color: AppColors.sidebarBorder, width: 1)),
+        color: AppColors.menuBg,
+        border: Border(right: BorderSide(color: AppColors.menuBorder, width: 1)),
       ),
-      child: Column(
+      child: Stack(children: [
+        if (!collapsed)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (r) => const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black],
+                  stops: [0.0, 0.3],
+                ).createShader(r),
+                // A faint watermark behind the menu items.
+                child: Image.asset(
+                  'assets/images/sidebar_school.jpg',
+                  fit: BoxFit.fitWidth,
+                  opacity: const AlwaysStoppedAnimation(0.16),
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        Column(
         children: [
           Container(
             padding: EdgeInsets.symmetric(
@@ -877,18 +905,21 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             ),
             child: Row(
               children: [
-                // White plate behind the logo (same treatment as Login /
-                // Welcome). The mark is dark navy on a transparent PNG, so
-                // without this it sinks into the navy sidebar.
+                // Cream plate with a marigold ring behind the logo (the mark is
+                // dark on a transparent PNG and would sink into the teal).
                 ClipRRect(
                   borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
                   child: Container(
                     width: collapsed ? 46 : 56.w,
                     height: collapsed ? 46 : 56.h,
-                    color: Colors.white,
-                    padding: EdgeInsets.all(collapsed ? 4 : 5),
+                    decoration: BoxDecoration(
+                      color: AppColors.onPrimary,
+                      borderRadius: BorderRadius.circular(collapsed ? 10 : 12),
+                      border: Border.all(color: AppColors.gold, width: 2),
+                    ),
+                    padding: EdgeInsets.all(collapsed ? 3 : 4),
                     child: Image.asset(
-                      'assets/images/educore360_logo.png',
+                      'assets/images/app_logo_mark.png',
                       fit: BoxFit.contain,
                       errorBuilder: (_, __, ___) => const AppIcon(
                         'teacher',
@@ -906,16 +937,18 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   // gives the name the remaining width and drops the Spacer,
                   // which the close button below doesn't need.
                   Expanded(
-                    child: Text(
-                      'EduCore360',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 16.sp,
-                        color: AppColors.sidebarText,
-                        fontWeight: FontWeight.w700,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: 'FIT ', style: AppFonts.heading(size: 20.sp, color: AppColors.menuBrandFit)),
+                          TextSpan(text: 'School', style: AppFonts.heading(size: 20.sp, color: AppColors.menuBrandSchool)),
+                        ]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
+                      Text('SUPER ADMIN',
+                          style: TextStyle(fontSize: 9.5.sp, fontWeight: FontWeight.w800, letterSpacing: 2.2, color: AppColors.menuMuted)),
+                    ]),
                   ),
                   Builder(
                     builder: (ctx) {
@@ -951,9 +984,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                         ),
                         child: Text(
                           orderedSections[s],
-                          style: AppUI.caps.copyWith(
-                            color: AppColors.sidebarText.withValues(alpha: 0.6),
-                          ),
+                          style: AppUI.caps.copyWith(color: AppColors.menuMuted),
                         ),
                       )
                     else
@@ -968,6 +999,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           ),
         ],
       ),
+      ]),
     );
   }
 
@@ -975,10 +1007,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     final item = _navItems[index];
     final isSelected = _selectedNavIndex == index;
 
-    const selectedBg = AppColors.primary;
-    const selectedFg = AppColors.textOnPrimary;
-    // Navy sidebar — light foreground reads cleanest on it.
-    const unselectedFg = AppColors.sidebarText;
+    // As the institution menu: the active item is a teal pill with a
+    // marigold edge.
+    const selectedBg = AppColors.menuActiveBg;
+    const selectedFg = AppColors.menuActiveText;
+    const unselectedFg = AppColors.menuText;
 
     return Padding(
       padding: EdgeInsets.only(bottom: 10.h),
@@ -1012,40 +1045,42 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           borderRadius: BorderRadius.circular(AppUI.controlRadius),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
+            padding: EdgeInsets.symmetric(horizontal: collapsed ? 8.0 : 10.w, vertical: 8.h),
             decoration: BoxDecoration(
-              // Active tile = solid accent pill on the navy sidebar.
-              color: isSelected ? selectedBg : null,
-              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              color: isSelected ? selectedBg : Colors.transparent,
+              border: isSelected ? const Border(left: BorderSide(color: AppColors.menuActiveEdge, width: 3)) : null,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: isSelected
+                  ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.14), blurRadius: 10, offset: const Offset(0, 3))]
+                  : null,
             ),
             child: Row(
               mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
               children: [
                 Container(
-                  width: 34.w, height: 34.w, alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: isSelected ? 0.22 : 0.07),
-                    borderRadius: BorderRadius.circular(9.r),
-                    border: Border.all(color: Colors.white.withValues(alpha: isSelected ? 0.28 : 0.10)),
-                  ),
+                  width: collapsed ? 36.0 : 34.w, height: collapsed ? 36.0 : 34.w, alignment: Alignment.center,
                   child: AppIcon(
-                    isSelected ? item.icon : (item.unselectedIcon ?? item.icon),
-                    style: isSelected ? AppIconStyle.bold : AppIconStyle.linear,
+                    item.unselectedIcon ?? item.icon,
+                    style: AppIconStyle.linear,
                     color: isSelected ? selectedFg : unselectedFg,
                     size: 20.sp,
                   ),
                 ),
                 if (!collapsed) ...[
                   SizedBox(width: 12.w),
+                  // A long name shrinks a little to fit rather than end in "...".
                   Expanded(
-                    child: Text(
-                      item.label,
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                      style: TextStyle(
-                        fontSize: 13.5.sp,
-                        color: isSelected ? selectedFg : unselectedFg,
-                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        item.label,
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 14.sp,
+                          color: isSelected ? selectedFg : unselectedFg,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
@@ -1099,9 +1134,9 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         // Matches the admin dashboard header height (dashboard_screen.dart).
         vertical: 18,
       ),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+      decoration: const BoxDecoration(
+        color: AppColors.topbar,
+        border: Border(bottom: BorderSide(color: AppColors.line)),
       ),
       child: Row(
         children: [
@@ -1160,59 +1195,29 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   _navItems[_selectedNavIndex].label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppUI.cardTitle.copyWith(height: 1.1),
+                  style: AppFonts.heading(size: 26.sp, height: 1.1),
                 ),
-                SizedBox(height: 6.h),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Current date & time — refreshed on demand
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                            color: AppColors.accent.withValues(alpha: 0.4)),
+                SizedBox(height: 5.h),
+                // Current date & time, in the gold chip the institution header
+                // uses for the academic year
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.goldSoft,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.goldLine),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AppIcon('clock', size: 14, color: AppColors.goldInk),
+                      SizedBox(width: 6.w),
+                      Text(
+                        _formatHeaderDateTime(_lastUpdated),
+                        style: TextStyle(fontSize: 12.sp, color: AppColors.goldInk, fontWeight: FontWeight.w800, letterSpacing: 0.2),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          AppIcon('clock', size: 14, color: AppColors.accent),
-                          const SizedBox(width: 6),
-                          Text(
-                            _formatHeaderDateTime(_lastUpdated),
-                            style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.accent),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(width: 8.w),
-                    // Refresh — updates the date & time to the current moment
-                    InkWell(
-                      onTap:
-                          _loadingInstitutions ? null : _refreshDashboard,
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        padding: const EdgeInsets.all(7),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.accent,
-                        ),
-                        child: _loadingInstitutions
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white))
-                            : AppIcon('refresh',
-                                size: 14, color: Colors.white),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1223,12 +1228,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if ((_trustLogo ?? '').isNotEmpty) ...[
-                        ClipOval(
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10.r),
                           child: Image.network(
                             _trustLogo!,
-                            width: 44,
-                            height: 44,
-                            fit: BoxFit.cover,
+                            width: 56.w,
+                            height: 56.h,
+                            fit: BoxFit.contain,
                             errorBuilder: (_, __, ___) =>
                                 const SizedBox.shrink(),
                           ),
@@ -1240,12 +1246,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                           _trustName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.accent,
-                              letterSpacing: 0.2,
-                              height: 1.15),
+                          style: AppFonts.heading(size: 20.sp, height: 1.1),
                         ),
                       ),
                     ],
@@ -1263,6 +1264,17 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
             _buildYearFilter(),
           ],
           SizedBox(width: 12.w),
+          // Refresh: reloads the figures (and the time in the chip)
+          if (!isMobile) ...[
+            Tooltip(
+              message: 'Refresh',
+              child: _softIconButton(
+                icon: 'refresh',
+                onTap: _loadingInstitutions ? () {} : _refreshDashboard,
+              ),
+            ),
+            SizedBox(width: 14.w),
+          ],
           if (isMobile)
             IconButton(
               onPressed: () async {
@@ -1313,7 +1325,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   ? const EdgeInsets.all(2)
                   : EdgeInsets.only(left: 4.w, right: 12.w, top: 4.h, bottom: 4.h),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Row(
@@ -1321,14 +1333,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                 children: [
                   CircleAvatar(
                     radius: isMobile ? 18 : 26,
-                    backgroundColor: AppColors.accent.withValues(alpha: 0.18),
+                    backgroundColor: AppColors.primary,
                     child: Text(
                       (auth.userName ?? 'S')[0].toUpperCase(),
-                      style: TextStyle(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w800,
-                        fontSize: isMobile ? 14 : 20,
-                      ),
+                      style: AppFonts.heading(size: isMobile ? 14 : 20.sp, color: AppColors.onPrimary),
                     ),
                   ),
                   if (!isMobile) ...[
@@ -1344,14 +1352,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                             auth.userName ?? 'Super Admin',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 16, color: AppColors.textPrimary, fontWeight: FontWeight.w700, height: 1.15, letterSpacing: -0.2),
+                            style: TextStyle(fontSize: 16.sp, color: AppColors.textPrimary, fontWeight: FontWeight.w700, height: 1.15, letterSpacing: -0.2),
                           ),
                           SizedBox(height: 2.h),
                           Text(
                             auth.userEmail ?? 'Super Admin',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w500, height: 1.15),
+                            style: AppUI.muted.copyWith(height: 1.15),
                           ),
                         ],
                       ),
@@ -1374,8 +1382,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
     bool filled = false,
     required VoidCallback onTap,
   }) {
-    final bg = filled ? AppColors.primary : Colors.white;
-    final fg = filled ? Colors.white : AppColors.textSecondary;
+    final bg = filled ? AppColors.primary : AppColors.card;
+    final fg = filled ? AppColors.onPrimary : AppColors.ink2;
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(AppUI.controlRadius),
@@ -1526,7 +1534,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           SizedBox(width: 10.w),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(label.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps),
-            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppFonts.figure(size: 18.sp)),
           ])),
         ]),
       );
@@ -1589,7 +1597,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
           CustomPaint(size: Size(128.w, 128.w), painter: _ScDonut(slices, total)),
           Column(mainAxisSize: MainAxisSize.min, children: [
             Text('TOTAL', style: AppUI.caps),
-            FittedBox(fit: BoxFit.scaleDown, child: Text(_formatAmount(total), style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary))),
+            FittedBox(fit: BoxFit.scaleDown, child: Text(_inr(total), style: AppFonts.figure(size: 15.sp))),
           ]),
         ]),
       ),
@@ -2148,11 +2156,11 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       final pendingPct = totalDemand <= 0 ? 0.0 : (totalPending / totalDemand * 100).clamp(0, 100);
       final cards = <Widget>[
         // Non-interactive KPI cards (no drill-down), with real subtitles.
-        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _formatAmount(totalDemand), 'Total Demand', subtitle: 'For the trust')),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _formatAmount(totalCollection), 'Total Collection', subtitle: '${collectedPct.toStringAsFixed(1)}% collected', subtitleColor: AppColors.success)),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('receipt-2', AppColors.accent, _formatAmount(totalMisc), 'Miscellaneous Collection', subtitle: 'Miscellaneous fees')),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('calendar', AppColors.today, _formatAmount(totalTodayCollection), "Today's Collection", subtitle: 'Reconciled today')),
-        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _formatAmount(totalPending), 'Total Pending', subtitle: '${pendingPct.toStringAsFixed(1)}% pending', subtitleColor: AppColors.error)),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('wallet-1', AppColors.demand, _inr(totalDemand), 'Total Demand', subtitle: 'For the trust')),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('tick-circle', AppColors.success, _inr(totalCollection), 'Collected', subtitle: '${collectedPct.toStringAsFixed(1)}% collected', subtitleColor: AppColors.success)),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('receipt-2', AppColors.accent, _inr(totalMisc), 'Misc. Collection', subtitle: 'Miscellaneous fees')),
+        SizedBox(width: cardWidth, child: _todayCard(_inr(totalTodayCollection))),
+        SizedBox(width: cardWidth, child: _buildSummaryCard('timer', AppColors.warning, _inr(totalPending), 'Outstanding', subtitle: '${pendingPct.toStringAsFixed(1)}% pending', subtitleColor: AppColors.error)),
         SizedBox(width: cardWidth, child: _buildSummaryCard('buildings-2', AppColors.primary, '$activeCount of ${_institutionSummaries.length}', 'Institutions', subtitle: 'Active Institutions')),
         SizedBox(width: cardWidth, child: _buildSummaryCard('people', AppColors.today, '$totalStudents', 'Total Students', subtitle: 'Across institutions')),
       ];
@@ -2171,12 +2179,13 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(label.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.caps),
+            // the label shrinks a little rather than end in "..."
+            AppFitText(label.toUpperCase(), style: AppUI.caps),
             SizedBox(height: 4.h),
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: Text(value, maxLines: 1, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+              child: Text(value, maxLines: 1, style: AppFonts.figure(size: 24.sp, height: 1.15)),
             ),
             if (subtitle != null) ...[
               SizedBox(height: 2.h),
@@ -2187,6 +2196,29 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
       ]),
     );
   }
+
+  /// Today's collection as the teal card the institution dashboard uses.
+  Widget _todayCard(String value) => Container(
+        padding: EdgeInsets.all(16.w),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [AppColors.primary, AppColors.primaryDark]),
+          borderRadius: BorderRadius.circular(AppUI.cardRadius),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          AppFitText("TODAY'S COLLECTION", style: AppUI.caps.copyWith(color: AppColors.onPrimaryAccent)),
+          SizedBox(height: 4.h),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, maxLines: 1, style: AppFonts.figure(size: 24.sp, color: AppColors.onPrimary, height: 1.15)),
+          ),
+          SizedBox(height: 2.h),
+          Text('Reconciled today', maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: AppFonts.body(size: 12.5.sp, weight: FontWeight.w600, color: AppColors.onPrimaryMuted)),
+        ]),
+      );
+
+  String _inr(double amount) => '\u20B9${formatIndianNumber(amount)}';
 
   void _showAggregateDrilldown(BuildContext context, String mode) {
     setState(() => _aggregateDrilldownMode = mode);

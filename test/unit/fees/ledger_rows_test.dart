@@ -135,12 +135,13 @@ void main() {
       expect(t.pending, 1500);
     });
 
-    test('all reconciled — paid is paidamount-fine', () {
+    // paidamount is FEE only; the fine is collected on top of it.
+    test('all reconciled — paid is paidamount, fine on top', () {
       final t = computeLedgerTotals([
         _demand(feeamount: 1000, paidamount: 1000, fineamount: 100, reconbalancedue: 0),
       ]);
       expect(t.demand, 1000);
-      expect(t.paid, 900);
+      expect(t.paid, 1000);
       expect(t.fine, 100);
       expect(t.pending, 0);
     });

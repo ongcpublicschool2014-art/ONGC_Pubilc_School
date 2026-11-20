@@ -13,6 +13,8 @@ import '../../widgets/focusable_tap.dart';
 import '../../widgets/app_search_field.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
+import '../../utils/import_errors_export.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
@@ -21,6 +23,8 @@ import '../../utils/school_terms.dart';
 import '../../utils/app_text.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/formatters.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 class FeeDemandScreen extends StatefulWidget {
   const FeeDemandScreen({super.key});
@@ -98,6 +102,13 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
   // Main class-list Course/Class filters + pagination
   String? _courseFilter; // null = All Courses
   String? _classFilter;  // null = All Classes
+  /// 'Regular' or 'Arrear' demands -- one or the other, Regular by default
+  /// (user, 2026-11-14: "defaulty show regular not need regular+arrear").
+  String _typeFilter = 'Regular';
+  bool _typeMatches(Map<String, dynamic> d) {
+    final arrear = (d['demseqtype']?.toString() ?? '').trim().toUpperCase() == 'ARREAR';
+    return arrear == (_typeFilter == 'Arrear');
+  }
   int _fdPage = 0;
   int _fdPerPage = 20;
 
@@ -225,7 +236,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     setState(() => _loadingDemands = true);
     try {
       final results = await Future.wait<dynamic>([
-        SupabaseService.getFeeDemandSummary(insId),
+        SupabaseService.getFeeDemandSummary(insId, seqType: _typeFilter.toUpperCase()),
         SupabaseService.getCourseClassOrdering(insId),
       ]);
       final summary = results[0] as List<Map<String, dynamic>>;
@@ -249,8 +260,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           if (ck != 0) return ck;
           return aClass.compareTo(bClass);
         });
+        // Arrear: only the sections that have arrears -- the Standard and
+        // Section lists, student count and totals follow (user, 2026-11-14).
+        if (_typeFilter == 'Arrear') {
+          summary.removeWhere((c) => ((c['total_demand'] as num?)?.toDouble() ?? 0) <= 0);
+        }
         setState(() {
           _classSummary = summary;
+          // a Standard / Section no longer listed stops filtering
+          if (_courseFilter != null && !summary.any((c) => c['courname']?.toString() == _courseFilter)) _courseFilter = null;
+          if (_classFilter != null && !summary.any((c) => c['stuclass']?.toString() == _classFilter)) _classFilter = null;
           _loadingDemands = false;
         });
       }
@@ -289,9 +308,9 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       final demands = List<Map<String, dynamic>>.from(results[0] as List);
       var students = List<Map<String, dynamic>>.from(results[1] as List);
       // Filter by course if specified
-      final filtered = courseName != null
+      final filtered = (courseName != null
           ? demands.where((d) => (d['courname']?.toString() ?? d['stuname_course'] ?? '') == courseName || courseName == 'Other').toList()
-          : demands;
+          : demands).where(_typeMatches).toList();
       if (courseName != null && courseName != 'Other') {
         students = students
             .where((s) => (s['courname']?.toString() ?? '') == courseName)
@@ -349,6 +368,22 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
       final feeAmount = double.tryParse(_feeAmountController.text.trim()) ?? 0;
       final conAmount = double.tryParse(_conAmountController.text.trim()) ?? 0;
+      if (feeAmount <= 0 || conAmount < 0 || conAmount > feeAmount) {
+        throw const _DemandInputError('The concession cannot be more than the fee amount.');
+      }
+
+      // The term must be one of the Term master's names (a typo here becomes a
+      // separate fee that is billed twice). Its sem_id rides along.
+      final termTyped = _feeTermController.text.trim();
+      final terms = List<Map<String, dynamic>>.from(await SupabaseService
+          .fromSchema('semester').select('sem_id, semname').eq('ins_id', insId).eq('activestatus', 1));
+      final term = terms.where((t) =>
+          (t['semname'] ?? '').toString().trim().toUpperCase() == termTyped.toUpperCase()).firstOrNull;
+      if (term == null) {
+        throw _DemandInputError(schoolTerm(
+            'Term "$termTyped" is not in the Semester master. Use one of: '
+            '${terms.map((t) => t['semname']).join(', ')}'));
+      }
 
       // Lookup stu_id from admission number
       final admNo = _admNoController.text.trim();
@@ -373,11 +408,12 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         'demfeetype': _selectedFeeType,
         'yr_id': _selectedFeeYear != null ? int.tryParse(_selectedFeeYear!) : null,
         'demfeeyear': yearLabel,
-        'demfeeterm': _feeTermController.text.trim(),
+        'demfeeterm': term['semname'].toString().trim(),
+        'sem_id': term['sem_id'],
         'con_id': _selectedConcession != null ? int.tryParse(_selectedConcession!) : null,
         'feeamount': feeAmount,
         'conamount': conAmount,
-        'balancedue': feeAmount,
+        'balancedue': feeAmount - conAmount,
         'duedate': _dueDate?.toIso8601String().split('T').first,
         'activestatus': 1,
         'createdat': DateTime.now().toIso8601String(),
@@ -398,7 +434,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       debugPrint('Error saving fee demand: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyError(e)), backgroundColor: AppColors.error),
+          SnackBar(content: Text(e is _DemandInputError ? e.message : friendlyError(e)), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -484,7 +520,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       'balanceamount': 'balancedue', 'balance': 'balancedue', 'balancedue': 'balancedue', 'balamount': 'balancedue', 'baldue': 'balancedue', 'balanceamt': 'balancedue',
       'duedate': 'duedate', 'due': 'duedate',
       'classid': 'cla_id', 'claid': 'cla_id',
-      'semesterid': 'sem_id', 'semid': 'sem_id',
+      'semesterid': 'sem_id', 'semid': 'sem_id', 'termid': 'sem_id', 'feetermid': 'sem_id',
       'feeid': 'fee_id',
       'classfeeid': 'cf_id', 'cfid': 'cf_id', 'cffeeid': 'cf_id',
     };
@@ -1351,7 +1387,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         items.add(DropdownMenuItem(value: c, child: Text(c)));
                       }
                       final value = seen.contains(_selectedClass) ? _selectedClass : null;
-                      return DropdownButtonFormField<String>(
+                      return AppDropdownField<String>(
                         value: value,
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),
@@ -1376,7 +1412,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         items.add(DropdownMenuItem(value: f, child: Text(f)));
                       }
                       final value = seen.contains(_selectedFeeType) ? _selectedFeeType : null;
-                      return DropdownButtonFormField<String>(
+                      return AppDropdownField<String>(
                         value: value,
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),
@@ -1409,7 +1445,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                                   items.add(DropdownMenuItem(value: v, child: Text(y['yrlabel']?.toString() ?? '-')));
                                 }
                                 final value = seen.contains(_selectedFeeYear) ? _selectedFeeYear : null;
-                                return DropdownButtonFormField<String>(
+                                return AppDropdownField<String>(
                                   value: value,
                                   dropdownColor: Colors.white,
                                   borderRadius: BorderRadius.circular(12),
@@ -1455,7 +1491,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         items.add(DropdownMenuItem(value: v, child: Text(c['condesc']?.toString() ?? '-')));
                       }
                       final value = seen.contains(_selectedConcession) ? _selectedConcession : null;
-                      return DropdownButtonFormField<String>(
+                      return AppDropdownField<String>(
                         value: value,
                         dropdownColor: Colors.white,
                         borderRadius: BorderRadius.circular(12),
@@ -1636,9 +1672,17 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           'demand_count': 0,
           'paid_count': 0,
           'unpaid_count': 0,
+          'arr_years': <String>{},
         };
       }
       final g = grouped[admNo]!;
+      // Arrear: the year the dues are from, with the section the student was
+      // in then (user, 2026-11-14: "for arrear show arrear year").
+      final yr = d['demfeeyear']?.toString().trim() ?? '';
+      if (yr.isNotEmpty && (d['demseqtype']?.toString().trim().toUpperCase() ?? '') == 'ARREAR') {
+        final was = d['arrearclass']?.toString().trim() ?? '';
+        (g['arr_years'] as Set<String>).add(was.isEmpty ? yr : '$yr ($was)');
+      }
       final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
       final con = (d['conamount'] as num?)?.toDouble() ?? 0;
       final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
@@ -1663,7 +1707,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     }
     // Add students of this class who have NO feedemand row at all, so they still
     // appear in the list (with a "No Demand" status and all-zero amounts).
-    for (final s in _drilldownAllStudents) {
+    // (Arrear view: only the students who have arrears.)
+    for (final s in _typeFilter == 'Arrear' ? const <Map<String, dynamic>>[] : _drilldownAllStudents) {
       final admNo = s['stuadmno']?.toString() ?? '';
       if (admNo.isEmpty || grouped.containsKey(admNo)) continue;
       grouped[admNo] = {
@@ -1774,26 +1819,33 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                   final totalPaid = (s['total_paid'] as num?)?.toDouble() ?? 0;
                   final totalFine = (s['total_fine'] as num?)?.toDouble() ?? 0;
                   final totalPending = (s['total_pending'] as num?)?.toDouble() ?? 0;
+                  // No demand raised for this section yet: its own colour, so
+                  // the gaps stand out (user, 2026-11-14).
+                  final none = totalDemand <= 0;
 
                   return InkWell(
-                    onTap: () => _loadDrilldown(className, courseName: s['courname']?.toString()),
+                    // Nothing raised: nothing to open (user, 2026-11-14).
+                    onTap: none ? null : () => _loadDrilldown(className, courseName: s['courname']?.toString()),
                     child: Container(
                       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        border: Border(bottom: BorderSide(color: AppColors.divider)),
+                      decoration: BoxDecoration(
+                        color: none ? AppColors.errorTint : Colors.white,
+                        border: const Border(bottom: BorderSide(color: AppColors.divider)),
                       ),
                       child: Row(
                         children: [
-                          Expanded(child: Text(s['courname']?.toString() ?? '-', style: AppUI.cell)),
-                          Expanded(child: Text(className, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700))),
+                          Expanded(child: Text(s['courname']?.toString() ?? '-', style: none ? AppUI.cell.copyWith(color: AppColors.errorInk) : AppUI.cell)),
+                          Expanded(child: Text(className, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, color: none ? AppColors.errorInk : null))),
                           Expanded(child: Text('$studentCount', style: AppUI.cell, textAlign: TextAlign.center)),
-                          Expanded(child: Text('${_formatAmount(totalDemand)}', style: AppUI.money, textAlign: TextAlign.right)),
+                          Expanded(
+                              child: none
+                                  ? Text('No demand', style: AppUI.cell.copyWith(color: AppColors.error, fontWeight: FontWeight.w700), textAlign: TextAlign.right)
+                                  : Text('${_formatAmount(totalDemand)}', style: AppUI.money, textAlign: TextAlign.right)),
                           Expanded(child: Text(totalConcession > 0 ? '${_formatAmount(totalConcession)}' : '-', style: AppUI.money, textAlign: TextAlign.right)),
                           Expanded(child: Text('${_formatAmount(totalPaid)}', style: AppUI.money.copyWith(color: AppColors.success), textAlign: TextAlign.right)),
                           Expanded(child: Text(totalFine > 0 ? '${_formatAmount(totalFine)}' : '-', style: AppUI.money.copyWith(color: totalFine > 0 ? AppColors.warning : AppColors.textLight), textAlign: TextAlign.right)),
                           Expanded(child: Text('${_formatAmount(totalPending)}', style: AppUI.money.copyWith(color: AppColors.warning), textAlign: TextAlign.right)),
-                          SizedBox(width: 32.w, child: AppIcon.linear('Chevron Right', size: 16, color: AppColors.textLight)),
+                          SizedBox(width: 32.w, child: none ? null : AppIcon.linear('Chevron Right', size: 16, color: AppColors.textLight)),
                         ],
                       ),
                     ),
@@ -1838,16 +1890,24 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       _fdDropdown(schoolTerm('Course'), _courseFilter, schoolTerm('All Courses'), _fdCourseOptions, (v) => setState(() { _courseFilter = v; _classFilter = null; _fdPage = 0; })),
       SizedBox(width: 14.w),
       _fdDropdown(schoolTerm('Class'), _classFilter, schoolTerm('All Classes'), _fdClassOptions, (v) => setState(() { _classFilter = v; _fdPage = 0; })),
+      SizedBox(width: 14.w),
+      // Regular / Arrear: the totals are re-read for that kind of demand.
+      _fdDropdown('Demand Type', _typeFilter, 'Regular', const ['Regular', 'Arrear'], (v) {
+        if (v == null || v == _typeFilter) return;
+        setState(() { _typeFilter = v; _fdPage = 0; });
+        _loadFeeDemands();
+      }, allowAll: false),
       const Spacer(),
     ]);
   }
 
-  Widget _fdDropdown(String label, String? value, String hint, List<String> options, ValueChanged<String?> onChanged) {
+  /// [allowAll] false: no "All ..." entry -- one of [options] is always chosen.
+  Widget _fdDropdown(String label, String? value, String hint, List<String> options, ValueChanged<String?> onChanged, {bool allowAll = true}) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       AppUI.fieldLabel(label),
       SizedBox(
         width: 220.w,
-        child: DropdownButtonFormField<String>(
+        child: AppDropdownField<String>(
           initialValue: options.contains(value) ? value : null,
           isExpanded: true,
           dropdownColor: Colors.white,
@@ -1856,7 +1916,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
           style: AppUI.fieldText(context, filled: options.contains(value)),
           decoration: AppUI.field(context, hint, filled: options.contains(value)),
           items: [
-            DropdownMenuItem<String>(value: null, child: Text(hint, overflow: TextOverflow.ellipsis)),
+            if (allowAll) DropdownMenuItem<String>(value: null, child: Text(hint, overflow: TextOverflow.ellipsis)),
             ...options.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis))),
           ],
           onChanged: onChanged,
@@ -1892,15 +1952,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       navBtn(Icons.chevron_right, _fdPage < pageCount - 1 ? () => setState(() => _fdPage++) : null),
       SizedBox(width: 14.w),
       SizedBox(
-        width: 120.w,
-        child: DropdownButtonFormField<int>(
+        // Fixed (not .w-scaled) so "20 / page" stays on one line in a small window.
+        width: 132,
+        child: AppDropdownField<int>(
           initialValue: _fdPerPage,
           isExpanded: true,
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           style: AppUI.fieldText(context),
           decoration: AppUI.field(context, ''),
-          items: const [10, 20, 50, 100].map((n) => DropdownMenuItem(value: n, child: Text('$n / page'))).toList(),
+          items: const [10, 20, 50, 100].map((n) => DropdownMenuItem(value: n, child: AppFitText('$n / page'))).toList(),
           onChanged: (v) => setState(() { _fdPerPage = v ?? 20; _fdPage = 0; }),
         ),
       ),
@@ -1953,6 +2014,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     Expanded(flex: 1, child: Text(schoolTerm('ROLL NO.'), style: AppUI.tableHead)),
                     Expanded(flex: 2, child: Text('NAME', style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text(schoolTerm('COURSE'), style: AppUI.tableHead)),
+                    if (_typeFilter == 'Arrear') Expanded(flex: 2, child: Text('ARREAR YEAR', style: AppUI.tableHead)),
                     Expanded(flex: 1, child: Text('DEMAND', style: AppUI.tableHead, textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('CONCESSION', style: AppUI.tableHead, textAlign: TextAlign.right)),
                     Expanded(flex: 1, child: Text('PAID', style: AppUI.tableHead, textAlign: TextAlign.right)),
@@ -2016,6 +2078,18 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                               flex: 1,
                               child: Text(s['courname']?.toString() ?? '-', style: AppUI.cell),
                             ),
+                            if (_typeFilter == 'Arrear')
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  () {
+                                    // one year per line, in full -- not cut off
+                                    final t = (((s['arr_years'] as Set<String>?) ?? const <String>{}).toList()..sort()).join('\n');
+                                    return t.isEmpty ? '-' : t;
+                                  }(),
+                                  style: AppUI.cell.copyWith(fontWeight: FontWeight.w600, color: AppColors.warning),
+                                ),
+                              ),
                             Expanded(
                               flex: 1,
                               child: Text('${_formatAmount(totalDemand)}', style: AppUI.money, textAlign: TextAlign.right),
@@ -2113,21 +2187,34 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
         child: LayoutBuilder(builder: (context, constraints) {
           // Right-sized base widths so the whole table (through STATUS) fits
           // the viewport without the DUE DATE column being clipped at the
-          // screen edge. The 40 is the 20px row padding on each side. Order:
-          // S No, SEMESTER, FEE TYPE, AMOUNT, CONCESSION, PAID, FINE, BALANCE,
-          // DUE DATE, STATUS.
+          // screen edge. Order: S No, SEMESTER, FEE TYPE, AMOUNT, CONCESSION,
+          // PAID, FINE, BALANCE, DUE DATE, STATUS.
           const baseWidths = <double>[60, 120, 170, 120, 130, 120, 100, 120, 140, 110];
-          final naturalWidth = baseWidths.reduce((a, b) => a + b) + 40;
-          // When the viewport is wider than the natural table, scale every
-          // column up proportionally so the table fills the space (no empty
-          // gutter on the right); when it's narrower, keep natural widths and
-          // let the row scroll horizontally.
+          // The narrowest each column may get before the table scrolls.
+          const minWidths = <double>[52, 96, 130, 108, 112, 108, 90, 108, 112, 100];
+          // Horizontal padding outside the columns: 20 on the left; on the
+          // right 28 plus the 16px scrollbar lane beside the body rows, so
+          // the last column never sits against the border or the scrollbar.
+          const rowPadL = 20.0, rowPadR = 28.0, barLane = 16.0;
+          const hPad = rowPadL + rowPadR + barLane;
+          final naturalWidth = baseWidths.reduce((a, b) => a + b) + hPad;
+          final minWidth = minWidths.reduce((a, b) => a + b) + hPad;
+          // Wider than the natural table: scale every column up so the table
+          // fills the space. Narrower: shrink the columns toward their
+          // minimums so every column still shows; only below that does the
+          // row scroll horizontally.
           final avail = constraints.maxWidth;
-          final scale = (avail.isFinite && avail > naturalWidth)
-              ? avail / naturalWidth
-              : 1.0;
-          final widths = [for (final w in baseWidths) w * scale];
-          final tableWidth = widths.reduce((a, b) => a + b) + 40;
+          final List<double> widths;
+          if (!avail.isFinite || avail <= minWidth) {
+            widths = List<double>.from(minWidths);
+          } else if (avail < naturalWidth) {
+            final t = (avail - minWidth) / (naturalWidth - minWidth);
+            widths = [for (int i = 0; i < baseWidths.length; i++) minWidths[i] + (baseWidths[i] - minWidths[i]) * t];
+          } else {
+            final scale = (avail - hPad) / (naturalWidth - hPad);
+            widths = [for (final w in baseWidths) w * scale];
+          }
+          final tableWidth = widths.reduce((a, b) => a + b) + hPad;
           const headers = <String>[
             'S. NO.', 'SEMESTER', 'FEE TYPE', 'AMOUNT', 'CONCESSION', 'PAID',
             'FINE', 'BALANCE', 'DUE DATE', 'STATUS',
@@ -2171,11 +2258,24 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               serials.add(k + 1);
             }
           }
-          if (regulars.isNotEmpty && arrears.isNotEmpty) {
-            addGroup('REGULAR FEES', regulars);
-            addGroup('ARREAR FEES', arrears);
-          } else {
-            addGroup(arrears.isNotEmpty ? 'ARREAR FEES' : 'REGULAR FEES', demands);
+          if (regulars.isNotEmpty || arrears.isEmpty) addGroup('REGULAR FEES', regulars);
+          // Arrears separated by year, oldest first, each with the section
+          // the student was in that year (user, 2026-11-14: "sepearte by year").
+          final byYear = <String, List<Map<String, dynamic>>>{};
+          for (final d in arrears) {
+            final yr = d['demfeeyear']?.toString().trim() ?? '';
+            (byYear[yr] ??= []).add(d);
+          }
+          for (final yr in byYear.keys.toList()..sort()) {
+            final lines = byYear[yr]!;
+            final was = lines
+                .map((d) => d['arrearclass']?.toString().trim() ?? '')
+                .where((x) => x.isNotEmpty)
+                .toSet()
+                .join(', ');
+            addGroup(
+                yr.isEmpty ? 'ARREAR FEES' : 'ARREAR FEES  ·  $yr${was.isEmpty ? '' : '  ($was)'}',
+                lines);
           }
           Widget bannerRow(String title) => Container(
                 width: tableWidth,
@@ -2195,8 +2295,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               // Sticky header.
               Container(
                 color: AppColors.tableHeadBg,
-                padding:
-                    EdgeInsets.symmetric(horizontal: 20, vertical: 12.h),
+                padding: EdgeInsets.fromLTRB(
+                    rowPadL, 12.h, rowPadR + barLane, 12.h),
                 child: Row(children: [
                   for (int i = 0; i < headers.length; i++)
                     cell(i, Text(schoolTerm(headers[i]), style: hStyle)),
@@ -2233,8 +2333,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final formattedDueDate = _formatDueDate(dueDate);
                     return Container(
                       color: Colors.white,
-                      padding: EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 11.h),
+                      padding: EdgeInsets.fromLTRB(
+                          rowPadL, 11.h, rowPadR, 11.h),
                       child: Row(children: [
                         cell(0, Text('$serial', style: cStyle)),
                         cell(1, Text(term, style: cStyle)),
@@ -2277,8 +2377,8 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               Container(height: 1, color: AppColors.cardBorder),
               Container(
                 color: AppColors.tableHeadBg,
-                padding:
-                    EdgeInsets.symmetric(horizontal: 20, vertical: 12.h),
+                padding: EdgeInsets.fromLTRB(
+                    rowPadL, 12.h, rowPadR + barLane, 12.h),
                 child: Row(children: [
                   cell(0, const SizedBox()),
                   cell(1, const SizedBox()),
@@ -2608,7 +2708,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     final origHeaders = List<String>.from(_headers);
     final allHeaders = [...origHeaders, 'Error'];
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -2644,7 +2744,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     }
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save File with Errors',
         fileName: 'fee_demand_errors.xlsx',
         type: FileType.custom,
@@ -2693,7 +2793,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     ];
 
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -2719,7 +2819,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     sheet.setRowHeight(0, 32);
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save Template',
         fileName: 'fee_demand_template.xlsx',
         type: FileType.custom,
@@ -2762,7 +2862,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     ];
 
     final headerStyle = xl.CellStyle(
-      backgroundColorHex: xl.ExcelColor.fromHexString('#FF2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFFFF'),
       bold: true,
     );
@@ -2781,7 +2881,7 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     }
 
     try {
-      final savePath = await FilePicker.platform.saveFile(
+      final savePath = await pickSavePath(
         dialogTitle: 'Save Sample Data',
         fileName: 'fee_demand_sample.xlsx',
         type: FileType.custom,
@@ -2899,13 +2999,29 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
               ),
             ],
             SizedBox(height: 20.h),
-            ElevatedButton(
-              onPressed: _resetImport,
-              child: const Text(AppText.close),
-            ),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              if (_importErrors.isNotEmpty) ...[
+                OutlinedButton.icon(
+                  onPressed: () => exportImportErrors('Fee Demand', _importErrors),
+                  icon: AppIcon('document-download', size: 16, color: AppColors.primary),
+                  label: const Text('Export Errors'),
+                ),
+                SizedBox(width: 10.w),
+              ],
+              ElevatedButton(
+                onPressed: _resetImport,
+                child: const Text(AppText.close),
+              ),
+            ]),
           ],
         ),
       ),
     );
   }
+}
+
+/// A fee demand the screen refuses before sending (shown as typed).
+class _DemandInputError implements Exception {
+  final String message;
+  const _DemandInputError(this.message);
 }

@@ -14,15 +14,24 @@ import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/class_sort.dart';
+import '../../utils/formatters.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_vertical_scrollbar.dart';
+import '../../widgets/missing_sequence_dialog.dart';
 import '../../widgets/student_avatar.dart';
 import '../../widgets/paytm_checkout_dialog.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import 'advance_fee_definition_dialog.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../services/online_payment_service.dart';
+import '../../utils/payment_gateways.dart';
+import '../../widgets/online_collect.dart';
+import '../../utils/save_path.dart';
 
 /// Advance Fee Collection (school) -- next academic year's fees, collected now.
 ///
@@ -30,9 +39,10 @@ import 'advance_fee_definition_dialog.dart';
 /// built by generate_student_advance from the Advance Fee Definition through
 /// Section Matching (a pre-admission is already in next year's section). The
 /// cashier ticks the lines being paid (a smaller amount is a part payment) and
-/// collect_student_advance issues ONE admission-advance receipt for them --
-/// same receipt series, bank, reconciliation, void and Advance Adjustment as
-/// every other advance -- and moves the money onto the lines. Voiding the
+/// collect_student_advance issues ONE admission-advance receipt for them, for
+/// one fee group at a time (as Fee Collection), numbered from that group's own
+/// advance receipt series -- same bank, reconciliation, void and Advance
+/// Adjustment as every other advance -- and moves the money onto the lines. Voiding the
 /// receipt hands it back (trigger on advance_detail).
 class AdvanceFeeCollectionScreen extends StatefulWidget {
   const AdvanceFeeCollectionScreen({super.key});
@@ -46,6 +56,21 @@ class _PayLine {
   final TextEditingController pay = TextEditingController();
   bool get ticked => (double.tryParse(pay.text.trim()) ?? 0) > 0;
   _PayLine(this.row);
+}
+
+/// One fee group's card: one receipt, one series, one bank account.
+class _AdvGroup {
+  const _AdvGroup({required this.fgId, required this.label, required this.rows});
+  final int fgId;
+  final String label;
+  final List<_PayLine> rows;
+
+  bool get _isHostel => label.contains('HOSTEL') || label.contains('MESS');
+  bool get _isCollege => label.contains('COLLEGE') || label.contains('TUITION');
+
+  // The same colours and icons as Fee Collection's cards.
+  Color get color => _isHostel ? AppColors.success : (_isCollege ? AppColors.accent : AppColors.textSecondary);
+  String get icon => _isHostel ? 'home-2' : (_isCollege ? 'teacher' : 'folder-2');
 }
 
 class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen> {
@@ -78,7 +103,91 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
   int _raised = 0; // the student's raised demands, paid ones included
   Map<int, double> _due = {}; // stu_id -> advance balance, for the search tags
 
-  static const _modes = ['Cash', 'QR/UPI', 'Paytm', 'Cheque', 'DD'];
+  // Fee groups, as Fee Collection: one card and one receipt per group, and
+  // only one group is collected at a time (user, 2026-11-18). An older demand
+  // may have no fee_id, so the fee type's name is the fallback.
+  static const int _noGroup = 1 << 30;
+  Map<int, int> _fgOfFeeId = {};
+  Map<String, int> _fgOfFeeName = {};
+  Map<int, String> _fgName = {};
+  Set<int> _fgWithoutBank = {};
+  Set<int> _fgWithSeries = {}; // groups with their own advance receipt series
+  bool _sharedSeries = false; // an older series that serves any group
+  int? _payFgId; // the group being collected
+
+  int _fgIdOf(Map<String, dynamic> row) =>
+      _fgOfFeeId[_id(row['fee_id'])] ?? _fgOfFeeName['${row['affeetype']}'.trim().toUpperCase()] ?? _noGroup;
+  String _fgLabel(int fg) => _fgName[fg] ?? 'OTHER FEES';
+  bool _inPayGroup(_PayLine l) => _payFgId == null || _fgIdOf(l.row) == _payFgId;
+
+  /// A whole rupee amount has no decimals in the Collect Amount box.
+  static String _amt(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+  /// Read each time a student is picked, so a bank or series set up in the
+  /// meantime counts at once.
+  Future<void> _loadGroupSetup() async {
+    try {
+      final r = await Future.wait<dynamic>([
+        SupabaseService.fromSchema('feetype').select('fee_id, feedesc, fg_id').eq('ins_id', _insId),
+        SupabaseService.fromSchema('feegroup').select('fg_id, fgdesc, ban_id').eq('ins_id', _insId),
+        SupabaseService.fromSchema('sequence').select('division').eq('ins_id', _insId).eq('actname', 'ADVFEENO').eq('activestatus', 1),
+      ]);
+      if (!mounted) return;
+      final feeId = <int, int>{};
+      final feeName = <String, int>{};
+      for (final f in (r[0] as List)) {
+        final fg = _id(f['fg_id']);
+        if (fg == null) continue;
+        final id = _id(f['fee_id']);
+        if (id != null) feeId[id] = fg;
+        feeName['${f['feedesc']}'.trim().toUpperCase()] = fg;
+      }
+      final series = [for (final q in (r[2] as List)) '${q['division'] ?? ''}'];
+      setState(() {
+        _fgOfFeeId = feeId;
+        _fgOfFeeName = feeName;
+        _fgName = {
+          for (final g in (r[1] as List))
+            _id(g['fg_id'])!: '${g['fgdesc'] ?? ''}'.trim().replaceAll(RegExp(r'\s+'), ' ').toUpperCase(),
+        };
+        _fgWithoutBank = {
+          for (final g in (r[1] as List))
+            if (g['ban_id'] == null) _id(g['fg_id'])!,
+        };
+        _fgWithSeries = {for (final d in series) if (d.startsWith('FG:')) int.tryParse(d.substring(3)) ?? -1};
+        _sharedSeries = series.any((d) => d.isEmpty);
+      });
+    } catch (e) {
+      debugPrint('advance fee collection: fee groups not loaded: $e');
+    }
+  }
+
+  /// Collect a different group: what was staged for the other one is dropped.
+  void _switchPayGroup(int fg, {bool selectAll = false}) => setState(() {
+        _payFgId = fg;
+        for (final l in _lines) {
+          if (_fgIdOf(l.row) != fg) {
+            l.pay.clear();
+          } else if (selectAll) {
+            l.pay.text = _amt(_num(l.row['balance']));
+          }
+        }
+        if (_fgWithoutBank.contains(fg) && _mode != 'Cash') _mode = null;
+      });
+
+  /// One card per fee group, lowest fg_id first.
+  List<_AdvGroup> get _groups {
+    final byFg = <int, List<_PayLine>>{};
+    for (final l in _lines) {
+      byFg.putIfAbsent(_fgIdOf(l.row), () => []).add(l);
+    }
+    final ids = byFg.keys.toList()..sort();
+    return [for (final id in ids) _AdvGroup(fgId: id, label: _fgLabel(id), rows: byFg[id]!)];
+  }
+
+  /// 'Online' (the school's gateway) only when one is set up; the old
+  /// 'Paytm' mode is not offered.
+  List<String> get _modes => ['Cash', 'QR/UPI', if (_onlineGateway != null) 'Online', 'Cheque', 'DD'];
 
   // Paytm: OUR order id (also the pending-collection intent's key) and
   // Paytm's transaction id once the payment is confirmed.
@@ -88,9 +197,30 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
   static int? _id(dynamic v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
   static double _num(dynamic v) => v is num ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0;
 
+
+  // The school's gateway (Setup > Payment Gateways). When there is one, the
+  // "Online" mode collects through it and the SERVER saves the collection once
+  // the gateway confirms the money. The old "Paytm" mode is not offered.
+  OnlineGateway? _onlineGateway;
+
+  Future<void> _loadOnlineGateway() async {
+    OnlineGateway? g;
+    try {
+      g = await OnlinePaymentService.gatewayFor();
+    } catch (_) {
+      g = const OnlineGateway(0, '', 'Online', ''); // could not tell: the server decides
+    }
+    if (mounted) setState(() => _onlineGateway = g);
+  }
+
+  String get _onlineLabel => _onlineGateway == null || _onlineGateway!.provider.isEmpty
+      ? 'Online'
+      : 'Online (${pgProvider(_onlineGateway!.provider)?.name ?? _onlineGateway!.name})';
+
   @override
   void initState() {
     super.initState();
+    _loadOnlineGateway();
     _load();
     // As Fee Collection / Advance Collection: a Paytm payment confirmed after
     // a counter closed is receipted on the next open.
@@ -222,8 +352,36 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
       _student = s;
       _busy = true;
     });
+    await _loadGroupSetup();
+    if (!mounted || _student != s) return;
+    // The REGULAR fees the student qualifies for come up for collection by
+    // themselves -- e.g. a pre-admission admitted after Advance Fee Demand was
+    // saved (user, 2026-11-14: "regular fees automatically comes for
+    // collection"). Same rule as that Save: optional fees and lines declined
+    // in Fee Definition are never raised; nothing is raised twice.
+    try {
+      final n = await SupabaseService.client.rpc('generate_student_advance', params: {
+        'p_token': SupabaseService.sessionToken,
+        'p_stu_id': s['stu_id'],
+      });
+      if (!mounted || _student != s) return;
+      if ((n is num ? n : 0) > 0) await _refreshDue(_id(s['stu_id']));
+    } catch (_) {
+      // Not raised now: the lines already raised are still shown.
+    }
+    if (!mounted || _student != s) return;
     await _loadStudentLines();
     if (mounted) setState(() => _busy = false);
+  }
+
+  /// Re-reads one student's total advance due (the list badge).
+  Future<void> _refreshDue(int? stuId) async {
+    if (stuId == null) return;
+    try {
+      final rows = await SupabaseService.fromSchema('stuadvdemand').select('balance').eq('stu_id', stuId).eq('activestatus', 1);
+      if (!mounted) return;
+      setState(() => _due[stuId] = (rows as List).fold<double>(0, (t, d) => t + _num((d as Map)['balance'])));
+    } catch (_) {}
   }
 
   Future<void> _loadStudentLines() async {
@@ -278,6 +436,9 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         _lines
           ..clear()
           ..addAll(rows.where((r) => _num(r['balance']) > 0).map(_PayLine.new));
+        // Opens on the first group with something due.
+        final fgs = _lines.map((l) => _fgIdOf(l.row)).toSet();
+        if (!fgs.contains(_payFgId)) _payFgId = fgs.isEmpty ? null : (fgs.toList()..sort()).first;
         _receipts = receipts;
       });
     } catch (e) {
@@ -291,7 +452,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         'QR/UPI' => 'upi',
         'Cheque' => 'cheque',
         'DD' => 'dd',
-        'Paytm' => 'Online Transfer',
+        'Paytm' || 'Online' => 'Online Transfer',
         _ => 'cash',
       };
 
@@ -303,6 +464,15 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     if (s == null || _mode == null) return;
     final pay = _lines.where((l) => l.ticked).toList();
     if (pay.isEmpty) return _snack('Tick or enter an amount for at least one fee line.', AppColors.warning);
+    // The receipt number comes from the fee group's own series: if there is
+    // none, say where to create it before any money is taken. Read fresh, so a
+    // series created a moment ago counts.
+    await _loadGroupSetup();
+    if (!mounted) return;
+    final fg = _payFgId;
+    if (fg != null && _fgName.isNotEmpty && !_sharedSeries && !_fgWithSeries.contains(fg)) {
+      return showMissingSequenceDialog(context, group: _fgLabel(fg), advance: true);
+    }
     for (final l in pay) {
       final bal = _num(l.row['balance']);
       if ((double.tryParse(l.pay.text.trim()) ?? 0) > bal) {
@@ -314,6 +484,9 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     if (_mode == 'Cash') {
       tender = await _cashDialog(total);
       if (tender == null) return;
+    } else if (_mode == 'Online') {
+      await _collectOnline(pay, total);
+      return;
     } else if (_mode == 'Paytm') {
       // Paytm takes the money BEFORE the receipt exists; nothing is saved
       // unless Paytm confirms it.
@@ -322,6 +495,58 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
       if (await _detailsDialog(total) != true) return;
     }
     await _collect(pay, total, tender ?? total);
+  }
+
+  /// Online through the school's gateway: the server records the advance fee
+  /// once the gateway confirms the money (also if this window is closed).
+  Future<void> _collectOnline(List<_PayLine> pay, double total) async {
+    final header = _collectHeader(total)
+      ..['paymethod'] = 'Online Transfer'
+      ..['payreference'] = null
+      ..['payorderid'] = null
+      ..['paytm_txnid'] = null
+      ..['paychequeno'] = null
+      ..['paychequedate'] = DateTime.now().toIso8601String().split('T').first
+      ..['paybankname'] = (pgProvider(_onlineGateway?.provider ?? '')?.name ?? 'ONLINE').toUpperCase();
+    final receiptLines = [
+      for (final l in pay)
+        {'term': '${l.row['afterm']}', 'feetype': '${l.row['affeetype']}', 'amount': double.tryParse(l.pay.text.trim()) ?? 0},
+    ];
+    setState(() => _busy = true);
+    final r = await collectOnline(
+      context,
+      kind: 'ADVFEE',
+      stuId: _id(_student?['stu_id']),
+      header: header,
+      lines: _collectLines(pay),
+      payerName: '${_student?['stuname'] ?? ''}',
+      merchantName: context.read<AuthProvider>().insName ?? '',
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (r?.status == 'C') {
+      final advno = r!.receiptNumbers;
+      final first = r.receipts.isEmpty ? const <String, dynamic>{} : r.receipts.first;
+      _refCtrl.clear();
+      _bankCtrl.clear();
+      _remarksCtrl.clear();
+      _refDate = null;
+      await _loadStudentLines();
+      if (!mounted) return;
+      _showSuccess(
+        advno: advno,
+        total: total,
+        mode: 'Online',
+        onDownload: () => _showReceipt(
+          advno: advno,
+          date: DateTime.now(),
+          lines: receiptLines,
+          mode: 'Online',
+          fgId: _id(first['fg_id']),
+          recon: '${first['recon_status'] ?? 'P'}',
+        ),
+      );
+    }
   }
 
   /// The receipt header collect_student_advance (and a recovered Paytm
@@ -665,13 +890,14 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     if (!mounted) return;
     setState(() => _busy = true);
     try {
-      await SupabaseService.client.rpc('void_advance_receipt', params: {
+      final res = await SupabaseService.client.rpc('void_advance_receipt', params: {
         'p_token': SupabaseService.sessionToken,
         'p_adv_id': rec['adv_id'],
         'p_user': context.read<AuthProvider>().userName,
         'p_reason': reason,
       });
-      _snack('Receipt ${rec['advno']} cancelled.', AppColors.success);
+      final cno = res is Map && '${res['cancelno'] ?? ''}'.isNotEmpty ? ' -- Cancel No. ${res['cancelno']}' : '';
+      _snack('Receipt ${rec['advno']} cancelled$cno.', AppColors.success);
       await _loadStudentLines();
     } catch (e) {
       _snack('Could not cancel the receipt. ${friendlyError(e)}', AppColors.error);
@@ -791,7 +1017,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                   onPressed: () async {
                     try {
                       final bytes = await (await buildReceiptPdf(data)).save();
-                      final path = await FilePicker.platform.saveFile(
+                      final path = await pickSavePath(
                         dialogTitle: 'Save Receipt PDF',
                         fileName: 'Receipt_${advno.replaceAll('/', '_')}.pdf',
                         type: FileType.custom,
@@ -810,7 +1036,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
                   onPressed: () async {
                     try {
                       await Printing.layoutPdf(
-                        format: a5PageFormat,
+                        format: await receiptPaper(),
                         onLayout: (fmt) async => (await buildReceiptPdf(data, pageFormat: fmt)).save(),
                         name: 'Receipt_${advno.replaceAll('/', '_')}',
                       );
@@ -826,7 +1052,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               ]),
             ),
             const Divider(height: 1),
-            Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(12), child: Center(child: ReceiptWidget(data: data)))),
+            Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(12), child: Center(child: ReceiptPreview(data: data)))),
           ]),
         ),
       ),
@@ -842,17 +1068,13 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
 
   BoxDecoration get _cardDec => AppUI.card();
 
-  ButtonStyle _solidBtn() => AppUI.primary(context);
-
-  ButtonStyle _outlineBtn() => AppUI.secondary(context);
-
   Widget _detailRow(String icon, String label, String value, {Color? color}) => Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        AppIcon(icon, size: 15, color: AppColors.textSecondary),
+        AppIcon.linear(icon, size: 15, color: AppColors.textLight),
         SizedBox(width: 8.w),
         Text('$label  ', style: AppUI.muted),
         Expanded(
           child: Text(value,
-              style: AppUI.label.copyWith(color: color ?? AppColors.textPrimary), overflow: TextOverflow.ellipsis),
+              style: color == null ? AppUI.label : AppUI.label.copyWith(color: color), overflow: TextOverflow.ellipsis),
         ),
       ]);
 
@@ -876,17 +1098,34 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         ),
       );
 
-  Widget _numField(TextEditingController ctrl, {bool enabled = true}) {
+  /// Collect Amount: never more than the balance, as Fee Collection.
+  Widget _numField(_PayLine l, {bool enabled = true}) {
+    final ctrl = l.pay;
     final filled = ctrl.text.trim().isNotEmpty;
-    return TextField(
-      controller: ctrl,
-      enabled: enabled,
-      onChanged: (_) => setState(() {}),
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
-      textAlign: TextAlign.center,
-      style: AppUI.fieldText(context, filled: filled),
-      decoration: AppUI.field(context, '0', filled: filled, dense: true),
+    return SizedBox(
+      height: 28.h,
+      child: TextField(
+        key: ValueKey('adv-col-${l.row['sad_id']}'),
+        controller: ctrl,
+        enabled: enabled,
+        onChanged: (_) {
+          final bal = _num(l.row['balance']);
+          if ((double.tryParse(ctrl.text.trim()) ?? 0) > bal) {
+            final t = _amt(bal);
+            ctrl.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+            _snack('Collect amount cannot be more than the balance due (₹${formatIndianNumber(bal)}).', AppColors.error);
+          }
+          setState(() {});
+        },
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*'))],
+        textAlign: TextAlign.center,
+        style: AppUI.fieldText(context, filled: filled),
+        decoration: AppUI.field(context, '0', filled: filled, dense: true).copyWith(
+          contentPadding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 4.h),
+          constraints: const BoxConstraints(),
+        ),
+      ),
     );
   }
 
@@ -903,14 +1142,18 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Container(
         decoration: _cardDec,
-        padding: EdgeInsets.all(AppUI.cardPad),
+        padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 16),
         child: _lookup(),
       ),
       SizedBox(height: AppUI.gap),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           if (_student != null) ...[
-            Container(decoration: _cardDec, padding: EdgeInsets.all(AppUI.cardPad), child: _studentCard()),
+            Container(
+              decoration: _cardDec,
+              padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 14),
+              child: _studentCard(),
+            ),
             SizedBox(height: AppUI.gap),
           ],
           Expanded(child: _demandsPanel()),
@@ -926,6 +1169,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         SizedBox(width: 12.w),
         Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text('Advance Fee Collection', style: AppUI.cardTitle),
+          SizedBox(height: 2.h),
           Text('Collect next year\'s fees in advance', style: AppUI.muted),
         ]),
         const Spacer(),
@@ -970,20 +1214,20 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               _lines.clear();
               _receipts = [];
               _mode = null;
+              _payFgId = null;
               _fCour = null;
               _fCla = null;
               _searchKey++;
             }),
-            icon: const Icon(Icons.refresh, size: 16),
+            icon: Icon(Icons.refresh, size: AppBtn.iconSize(context)),
             label: const Text('Clear'),
-            style: _solidBtn(),
         ),
       ]);
 
   int _searchKey = 0;
 
   Widget _filterDrop(String hint, int? value, List<(int, String)> items, ValueChanged<int?> onChanged) {
-    return DropdownButtonFormField<int>(
+    return AppDropdownField<int>(
       key: ValueKey('$hint-$value-${items.length}'),
       initialValue: items.any((e) => e.$1 == value) ? value : null,
       isExpanded: true,
@@ -993,21 +1237,24 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
       icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
       style: _ddTextStyle(),
       decoration: _inputDec(hint, filled: value != null),
-      hint: Text(hint, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
+      // One line that shrinks to fit rather than "Select stand…".
+      hint: _fitLine(hint, AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
       items: [
         for (final e in items)
           DropdownMenuItem(value: e.$1, child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context))),
       ],
       selectedItemBuilder: (_) => [
-        for (final e in items)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(e.$2, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)),
-          ),
+        for (final e in items) _fitLine(e.$2, AppUI.fieldText(context, filled: true)),
       ],
       onChanged: onChanged,
     );
   }
+
+  /// One line of dropdown text that shrinks to fit instead of ending in "…".
+  Widget _fitLine(String text, TextStyle style) => Align(
+        alignment: Alignment.centerLeft,
+        child: AppFitText(text, style: style),
+      );
 
   Widget _studentSearch() => Autocomplete<Map<String, dynamic>>(
         key: ValueKey('adv-search-$_searchKey'),
@@ -1026,11 +1273,13 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         fieldViewBuilder: (context, ctrl, focus, onSubmit) => TextField(
           controller: ctrl,
           focusNode: focus,
-          style: _ddTextStyle().copyWith(color: ctrl.text.isNotEmpty ? AppColors.accent : null),
-          decoration: _inputDec(schoolTerm('Search by register no. or name'), filled: ctrl.text.isNotEmpty)
-              .copyWith(
-                  prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textLight),
-                  prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0)),
+          style: AppUI.fieldText(context, filled: ctrl.text.isNotEmpty),
+          decoration: _inputDec(schoolTerm('Search by register no. or name'), filled: ctrl.text.isNotEmpty).copyWith(
+            prefixIcon: const Padding(
+              padding: EdgeInsets.only(left: 12, right: 8),
+              child: Icon(Icons.search, size: 18, color: AppColors.textLight),
+            ),
+          ),
         ),
         // Wider than the search box and growing LEFTWARD from its right edge,
         // as Fee Collection's list does -- the box's own width squeezed the
@@ -1110,6 +1359,7 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     final s = _student!;
     final app = _applicable(s);
     final name = '${s['stuname'] ?? ''}';
+    final pre = (_id(s['preadmission']) ?? 0) == 1;
     Widget sep() => Row(mainAxisSize: MainAxisSize.min, children: [
           SizedBox(width: 16.w),
           Container(width: 1, height: 36.h, color: AppColors.divider),
@@ -1118,37 +1368,54 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       StudentAvatar(photoUrl: s['stuphoto']?.toString(), name: name, size: 44),
       SizedBox(width: 12.w),
+      // Two lines at most: the name with its Pre-admission mark, then the
+      // admission number (it used to wrap to a third line).
       Expanded(
+        flex: 4,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(name, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          Row(children: [
+            Flexible(
+              child: Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppUI.body.copyWith(fontWeight: FontWeight.w800)),
+            ),
+            if (pre) ...[
+              SizedBox(width: 8.w),
+              AppUI.chip('Pre-admission', AppStatus.info),
+            ],
+          ]),
           SizedBox(height: 2.h),
-          Text('${schoolTerm('Roll Number')}: ${s['stuadmno']}${(_id(s['preadmission']) ?? 0) == 1 ? '  ·  Pre-admission' : ''}',
-              style: AppUI.muted),
+          Text('${schoolTerm('Roll Number')}: ${s['stuadmno']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
         ]),
       ),
       sep(),
-      Expanded(child: _detailRow('teacher', schoolTerm('Class'), '${s['stuclass'] ?? '-'}')),
+      Expanded(flex: 2, child: _detailRow('teacher', schoolTerm('Class'), '${s['stuclass'] ?? '-'}')),
       sep(),
       Expanded(
-        child: _detailRow('book-1', schoolTerm('Applicable Class'),
-            app == null ? schoolTerm('No next class') : _appName(app),
+        flex: 3,
+        // The standard next year's fees are for (user, 2026-11-14:
+        // "applicable standard"); a promoted student's next section follows
+        // in brackets -- a pre-admission's is already under Section.
+        child: _detailRow('book-1', 'Applicable Standard',
+            app == null
+                ? 'No next standard'
+                : '${_courseName[app.$2] ?? '-'}${app.$1 != null && (_id(s['preadmission']) ?? 0) != 1 ? ' (${_className[app.$1] ?? '-'})' : ''}',
             color: app == null ? AppColors.error : AppColors.accent),
       ),
       sep(),
-      Expanded(child: _detailRow('calendar-1', 'Academic Year', _nextYear)),
-      SizedBox(width: 16.w),
+      Expanded(flex: 3, child: _detailRow('calendar-1', 'Academic Year', _nextYear)),
+      SizedBox(width: 12.w),
       OutlinedButton.icon(
         onPressed: _openReceipts,
-        icon: const Icon(Icons.receipt_long_outlined, size: 16),
+        icon: Icon(Icons.receipt_long_outlined, size: AppBtn.iconSize(context)),
         label: const Text('Receipts'),
-        style: _outlineBtn(),
       ),
       SizedBox(width: 8.w),
       ElevatedButton.icon(
         onPressed: _busy ? null : _openFeeDefinition,
-        icon: const Icon(Icons.fact_check_outlined, size: 16),
+        icon: Icon(Icons.fact_check_outlined, size: AppBtn.iconSize(context)),
         label: const Text('Fee Definition'),
-        style: _solidBtn(),
       ),
     ]);
   }
@@ -1172,32 +1439,39 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     if (saved == true) await _loadStudentLines();
   }
 
-  // Panel shell + header (title, count pill, year badge).
+  // Panel shell + header, as Fee Collection's.
   Widget _demandsPanel() {
-    final ticked = _lines.where((l) => l.ticked).length;
     return Container(
       decoration: _cardDec,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(AppUI.cardPad, 16.h, AppUI.cardPad, 0),
-          child: Row(children: [
+        Container(
+          padding: EdgeInsets.fromLTRB(AppUI.cardPad, 14, AppUI.cardPad, 0),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
             AppUI.iconTile('document-text', size: 18),
             SizedBox(width: 12.w),
             Text('Pending Advance Fee Demands', style: AppUI.cardTitle),
-            SizedBox(width: 10.w),
-            AppUI.chip('$ticked of ${_lines.length} items', AppStatus.info),
+            if (_lines.isNotEmpty) ...[
+              SizedBox(width: 8.w),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
+                decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(999)),
+                child: Text('${_lines.length} of $_raised items',
+                    style: TextStyle(fontSize: 12.sp, color: AppColors.primary, fontWeight: FontWeight.w700)),
+              ),
+            ],
             const Spacer(),
             if (_nextYear.isNotEmpty)
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
                 decoration: BoxDecoration(
                   color: AppColors.primaryLight,
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(10.r),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
                 ),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.event_note_rounded, size: 15, color: AppColors.accent),
+                  const Icon(Icons.receipt_long_rounded, size: 15, color: AppColors.primary),
                   SizedBox(width: 6.w),
-                  Text('Advance · $_nextYear', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.accent)),
+                  Text('Advance · $_nextYear', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.primary)),
                 ]),
               ),
           ]),
@@ -1226,25 +1500,32 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
         icon: 'tick-circle',
         title: 'No advance fee demands',
         why: _applicable(_student!) == null
-            ? schoolTerm('This student has no next class (final course, or no matching class next year). Set it in Setup → Fee Master → Class Matching.')
+            ? schoolTerm('This student has no next class (final course, or no matching class next year). Set it in Setup → Fee Master → Class Mapping.')
             : schoolTerm('Nothing raised for ${_appName(_applicable(_student!)!)} yet -- save its Advance Fee Definition (Setup -> Fee Master), or add fees in Fee Definition.'),
       );
     }
-    // One card per term, like Fee Collection's fee-group cards.
-    final terms = <String, List<_PayLine>>{};
-    for (final l in _lines) {
-      terms.putIfAbsent('${l.row['afterm']}', () => []).add(l);
-    }
+    // One card per fee group -- one receipt per card.
+    final groups = _groups;
     return Padding(
-      padding: EdgeInsets.fromLTRB(AppUI.cardPad, 12.h, AppUI.cardPad, AppUI.cardPad),
+      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
       child: Container(
         clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppUI.controlRadius + 2),
+          border: Border.all(color: AppColors.cardBorder),
+        ),
         child: Column(children: [
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-              children: [for (final e in terms.entries) _termCard(e.key, e.value)],
+            child: AppVerticalScrollbar(
+              builder: (context, controller) => FocusTraversalGroup(
+                child: ListView.builder(
+                  controller: controller,
+                  padding: EdgeInsets.fromLTRB(12.w, 12.h, 12.w, 6.h),
+                  itemCount: groups.length,
+                  itemBuilder: (_, i) => _groupCard(groups[i]),
+                ),
+              ),
             ),
           ),
           _footer(),
@@ -1253,50 +1534,100 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
     );
   }
 
-  Widget _termCard(String term, List<_PayLine> rows) {
-    final open = rows.where((l) => _num(l.row['balance']) > 0).toList();
-    final all = open.isNotEmpty && open.every((l) => l.ticked);
-    final bal = rows.fold<double>(0, (t, l) => t + _num(l.row['balance']));
-    final collecting = rows.fold<double>(0, (t, l) => t + (double.tryParse(l.pay.text.trim()) ?? 0));
-    final live = collecting > 0;
-    const color = AppColors.accent;
+  /// A fee group's card. Only one is live at a time -- one payment, one
+  /// receipt, one series, one bank account.
+  Widget _groupCard(_AdvGroup b) {
+    final color = b.color;
+    final live = _payFgId == null || b.fgId == _payFgId;
+    final open = b.rows.where((l) => _num(l.row['balance']) > 0).toList();
+    final all = live && open.isNotEmpty && open.every((l) => l.ticked);
+    final bal = b.rows.fold<double>(0, (t, l) => t + _num(l.row['balance']));
+    final collecting = b.rows.fold<double>(0, (t, l) => t + (double.tryParse(l.pay.text.trim()) ?? 0));
+    final noBank = _fgWithoutBank.contains(b.fgId);
+    final noSeries = !_sharedSeries && !_fgWithSeries.contains(b.fgId);
     return Container(
       margin: EdgeInsets.only(bottom: 14.h),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(AppUI.controlRadius),
-        border: Border.all(color: live ? color : AppColors.cardBorder, width: live ? 1.4 : 1),
-        boxShadow: live ? [BoxShadow(color: color.withValues(alpha: 0.10), blurRadius: 10)] : null,
+        borderRadius: BorderRadius.circular(AppUI.controlRadius + 2),
+        border: Border.all(color: live ? color : AppColors.border, width: live ? 1.4 : 1),
+        boxShadow: live ? [BoxShadow(color: color.withValues(alpha: 0.10), blurRadius: 10, offset: const Offset(0, 2))] : null,
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      child: Column(children: [
         Container(
           color: live ? color.withValues(alpha: 0.10) : AppColors.surface,
-          padding: const EdgeInsets.fromLTRB(12, 9, 14, 9),
+          padding: EdgeInsets.fromLTRB(12.w, 9.h, 14.w, 9.h),
           child: Row(children: [
             Container(
               width: 28.w,
               height: 28.w,
               alignment: Alignment.center,
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(7.r), border: Border.all(color: color.withValues(alpha: 0.35))),
-              child: const AppIcon('calendar-1', size: 15, color: color),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(7.r),
+                border: Border.all(color: color.withValues(alpha: 0.35)),
+              ),
+              child: AppIcon(b.icon, size: 15.sp, color: live ? color : AppColors.textLight),
             ),
             SizedBox(width: 10.w),
-            Text(term.toUpperCase(), style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w700, letterSpacing: 0.3, color: color)),
+            Text(b.label,
+                style: TextStyle(fontSize: 13.5.sp, fontWeight: FontWeight.w700, letterSpacing: 0.3, color: live ? color : AppColors.textSecondary)),
             SizedBox(width: 6.w),
-            Text('(${rows.length} items)', style: AppUI.muted),
-            if (live) ...[
+            Text('(${b.rows.length} item${b.rows.length == 1 ? '' : 's'})',
+                style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w600, color: live ? color.withValues(alpha: 0.75) : AppColors.textLight)),
+            SizedBox(width: 10.w),
+            if (live)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6.r)),
+                child: Text('COLLECTING NOW',
+                    style: TextStyle(fontSize: 9.5.sp, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: Colors.white)),
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: _busy ? null : () => _switchPayGroup(b.fgId, selectAll: true),
+                icon: Icon(Icons.swap_horiz, size: 14.sp),
+                label: Text('Collect This Group', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: color,
+                  side: BorderSide(color: color.withValues(alpha: 0.45)),
+                  backgroundColor: Colors.white,
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.symmetric(horizontal: 10.w),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7.r)),
+                ),
+              ),
+            if (noBank || noSeries) ...[
               SizedBox(width: 10.w),
-              AppUI.chip('COLLECTING NOW', AppStatus.info),
+              Tooltip(
+                message: noSeries
+                    ? 'No advance receipt series for ${b.label}. Create one in Setup → Sequence Master → Advance Receipt No.'
+                    : 'No bank account is mapped to ${b.label}, so only Cash can be collected. '
+                        'Map one in Setup → Fee Master → Fee Group for UPI, Online, Cheque or DD.',
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.warningBg,
+                    borderRadius: BorderRadius.circular(6.r),
+                    border: Border.all(color: AppColors.warning.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.warning_amber_rounded, size: 13.sp, color: AppColors.warning),
+                    SizedBox(width: 4.w),
+                    Text(noSeries ? 'No Advance Receipt Series · Create in Sequence Master' : 'No Bank Account · Cash Only',
+                        style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w800, letterSpacing: 0.3, color: AppColors.warning)),
+                  ]),
+                ),
+              ),
             ],
             const Spacer(),
             Text('Balance ', style: TextStyle(fontSize: 11.5.sp, color: AppColors.textLight)),
-            Text('₹${bal.toStringAsFixed(2)}', style: TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
-            if (live) ...[
-              SizedBox(width: 16.w),
-              Text('Collecting ', style: TextStyle(fontSize: 11.5.sp, color: AppColors.textLight)),
-              Text('₹${collecting.toStringAsFixed(2)}', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: color)),
-            ],
+            Text('₹${formatIndianNumber(bal)}', style: TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+            SizedBox(width: 16.w),
+            Text('Collecting ', style: TextStyle(fontSize: 11.5.sp, color: AppColors.textLight)),
+            Text('₹${formatIndianNumber(collecting)}',
+                style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: collecting > 0 ? color : AppColors.textLight)),
           ]),
         ),
         Container(
@@ -1307,39 +1638,48 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
               width: 32.w,
               child: Checkbox(
                 value: all,
-                activeColor: color,
-                visualDensity: VisualDensity.compact,
                 onChanged: open.isEmpty || _busy
                     ? null
-                    : (v) => setState(() {
-                          for (final l in open) {
-                            l.pay.text = v == true ? _num(l.row['balance']).toStringAsFixed(0) : '';
-                          }
-                        }),
+                    : !live
+                        ? (_) => _switchPayGroup(b.fgId, selectAll: true)
+                        : (v) => setState(() {
+                              for (final l in open) {
+                                l.pay.text = v == true ? _amt(_num(l.row['balance'])) : '';
+                              }
+                            }),
+                fillColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.selected) ? color : Colors.transparent),
+                side: const BorderSide(color: AppColors.border),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
               ),
             ),
             _th(schoolTerm('Semester'), 2),
             _th('Fee Type', 3),
             _th('Due Date', 2),
             _th('Fee Amount (₹)', 2, align: TextAlign.right),
-            _th('Paid (₹)', 2, align: TextAlign.right),
             _th('Balance Amount (₹)', 2, align: TextAlign.right),
             _th('Collect Amount (₹)', 3, align: TextAlign.center),
+            _th('Net Amount (₹)', 2, align: TextAlign.right),
           ]),
         ),
-        for (var i = 0; i < rows.length; i++) ...[
-          if (i > 0) const Divider(height: 1, color: AppColors.divider),
-          _row(rows[i], i),
-        ],
+        // A waiting group still shows what is due, faded, until it is collected.
+        Opacity(
+          opacity: live ? 1 : 0.55,
+          child: Column(children: [
+            for (var i = 0; i < b.rows.length; i++) ...[
+              if (i > 0) const Divider(height: 1, color: AppColors.divider),
+              _row(b.rows[i], i, live),
+            ],
+          ]),
+        ),
       ]),
     );
   }
 
-  Widget _row(_PayLine l, int i) {
+  Widget _row(_PayLine l, int i, bool live) {
     final r = l.row;
     final bal = _num(r['balance']);
-    final paid = _num(r['paidamount']);
-    final done = '${r['paidstatus']}' == 'P';
+    final net = double.tryParse(l.pay.text.trim()) ?? 0;
     return Container(
       color: i.isEven ? Colors.white : AppColors.accent.withValues(alpha: 0.05),
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
@@ -1348,51 +1688,113 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
           width: 32.w,
           child: Checkbox(
             value: l.ticked,
-            activeColor: AppColors.accent,
+            onChanged: bal <= 0 || _busy || !live ? null : (v) => setState(() => l.pay.text = v == true ? _amt(bal) : ''),
+            fillColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? AppColors.accent : null),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             visualDensity: VisualDensity.compact,
-            onChanged: bal <= 0 || _busy ? null : (v) => setState(() => l.pay.text = v == true ? bal.toStringAsFixed(0) : ''),
           ),
         ),
         _td('${r['afterm']}', 2, style: AppUI.cell),
         _td('${r['affeetype']}', 3, style: AppUI.cell.copyWith(color: AppColors.textSecondary)),
         _td(_dmy(r['duedate']), 2, style: AppUI.cell.copyWith(color: AppColors.textSecondary)),
-        _td(_num(r['feeamount']).toStringAsFixed(2), 2, align: TextAlign.right, style: AppUI.money),
-        _td(paid > 0 ? paid.toStringAsFixed(2) : '—', 2,
-            align: TextAlign.right,
-            style: paid > 0 ? AppUI.money.copyWith(color: AppColors.success) : AppUI.cell.copyWith(color: AppColors.textLight)),
-        _td(bal.toStringAsFixed(2), 2,
-            align: TextAlign.right, style: AppUI.money.copyWith(color: AppColors.warning)),
+        _td(formatIndianNumber(_num(r['feeamount'])), 2, align: TextAlign.right, style: AppUI.money.copyWith(fontWeight: FontWeight.w500)),
+        _td(formatIndianNumber(bal), 2, align: TextAlign.right, style: AppUI.money.copyWith(color: AppColors.warning)),
         Expanded(
           flex: 3,
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 4.w),
-            child: done
-                ? Center(child: AppUI.chip('PAID', AppStatus.success))
-                : _numField(l.pay, enabled: !_busy),
+            child: _numField(l, enabled: live && !_busy),
           ),
         ),
+        _td(formatIndianNumber(net), 2,
+            align: TextAlign.right, style: AppUI.money.copyWith(color: net > 0 ? AppColors.error : AppColors.textPrimary)),
       ]),
     );
   }
 
-  // Footer: selection count, NET AMOUNT pill, SELECT MODE, pay button.
+  // Footer, as Fee Collection's: selection, what is still due in the other
+  // groups, Net Amount, payment mode, pay.
   Widget _footer() {
-    final n = _lines.where((l) => l.ticked).length;
+    final group = _lines.where(_inPayGroup).toList();
+    final n = group.where((l) => l.ticked).length;
     final total = _total;
     final modeOn = total > 0 && !_busy;
+    // The group being collected has no bank account: Cash only.
+    final cashOnly = _payFgId != null && _fgWithoutBank.contains(_payFgId);
+    if (cashOnly && _mode != null && _mode != 'Cash') _mode = null;
     final canPay = modeOn && _mode != null;
     final cash = _mode == 'Cash';
+    final others = <String, double>{};
+    for (final l in _lines) {
+      if (_inPayGroup(l)) continue;
+      final g = _fgLabel(_fgIdOf(l.row));
+      others[g] = (others[g] ?? 0) + _num(l.row['balance']);
+    }
+    Widget modeText(String m) {
+      final t = m == 'QR/UPI' ? 'QR / UPI' : (m == 'Online' ? _onlineLabel : m);
+      final off = cashOnly && m != 'Cash';
+      return Text(off ? '$t - needs a bank account' : t,
+          overflow: TextOverflow.ellipsis,
+          style: off ? TextStyle(color: AppColors.textLight, fontWeight: FontWeight.w500, fontSize: 12.sp) : null);
+    }
+
+    final field = Container(
+      // Wide enough for "Select payment mode" in full.
+      width: 200.w,
+      height: AppUI.controlHeight(context),
+      padding: EdgeInsets.symmetric(horizontal: 12.w),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppUI.controlRadius),
+        border: Border.all(color: (!modeOn || _mode == null) ? AppColors.border : AppColors.primary.withValues(alpha: 0.55)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: modeOn ? _mode : null,
+          isExpanded: true,
+          isDense: false,
+          hint: _fitLine('Select payment mode', AppUI.fieldText(context).copyWith(color: AppColors.textLight, letterSpacing: 0.3)),
+          icon: const Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 6,
+          style: AppUI.fieldText(context, filled: true).copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.3),
+          items: [
+            for (final m in _modes) DropdownMenuItem(value: m, enabled: !cashOnly || m == 'Cash', child: modeText(m)),
+          ],
+          onChanged: modeOn ? (v) => setState(() => _mode = v) : null,
+        ),
+      ),
+    );
+
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: AppColors.divider)),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(12)),
       ),
       child: Row(children: [
         Icon(Icons.check_circle, size: 17.sp, color: n == 0 ? AppColors.textLight : AppColors.accent),
-        SizedBox(width: 6.w),
-        Text('$n of ${_lines.length} selected', style: AppUI.label),
+        SizedBox(width: 7.w),
+        Text('$n of ${group.length} selected${_payFgId == null ? '' : ' in ${_fgLabel(_payFgId!)}'}', style: AppUI.label),
+        if (others.isNotEmpty) ...[
+          SizedBox(width: 10.w),
+          Flexible(
+            flex: 6,
+            child: Builder(builder: (_) {
+              final dues = others.entries.map((e) => '${e.key} ₹${formatIndianNumber(e.value)}').join(', ');
+              final text = 'Still due: $dues. Collect it separately (own receipt).';
+              return Tooltip(
+                message: text,
+                child: Text(text,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w600, color: AppColors.warning)),
+              );
+            }),
+          ),
+        ],
         const Spacer(),
         if (n > 0) ...[
           Container(
@@ -1400,47 +1802,29 @@ class _AdvanceFeeCollectionScreenState extends State<AdvanceFeeCollectionScreen>
             padding: EdgeInsets.symmetric(horizontal: 16.w),
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(10.r),
-              border: Border.all(color: AppColors.accent.withValues(alpha: 0.30)),
+              color: AppColors.primaryLight,
+              borderRadius: BorderRadius.circular(AppUI.controlRadius),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.30)),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text('Net Amount: ', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.textPrimary, letterSpacing: 0.3)),
-              Text('₹${total.toStringAsFixed(2)}', style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.accent)),
+              Text('Net Amount: ', style: AppUI.label.copyWith(letterSpacing: 0.3)),
+              Text(formatIndianNumber(total), style: AppUI.money.copyWith(fontSize: 16.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
             ]),
           ),
           SizedBox(width: 14.w),
         ],
         SizedBox(width: 6.w),
-        Container(
-          width: 160.w,
-          height: AppUI.controlHeight(context),
-          padding: EdgeInsets.symmetric(horizontal: 12.w),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10.r),
-            border: Border.all(color: (!modeOn || _mode == null) ? AppColors.border : AppColors.accent, width: 1.2),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _mode,
-              isExpanded: true,
-              hint: Text('Select payment mode', style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w600, color: AppColors.textSecondary, letterSpacing: 0.3)),
-              items: [
-                for (final m in _modes)
-                  DropdownMenuItem(value: m, child: Text(m == 'QR/UPI' ? 'QR / UPI' : m, style: TextStyle(fontSize: 13.sp, fontWeight: FontWeight.w700, color: AppColors.accent))),
-              ],
-              onChanged: modeOn ? (v) => setState(() => _mode = v) : null,
-            ),
-          ),
-        ),
+        modeOn ? field : Tooltip(message: 'Tick a fee and enter a collect amount first.', child: field),
         SizedBox(width: 10.w),
-        ElevatedButton.icon(
-          onPressed: canPay ? _onPay : null,
-          icon: _busy
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textLight))
-              : Icon(_mode == 'Paytm' ? Icons.open_in_new : Icons.send_rounded, size: 16),
-          label: Text(cash ? 'Save & Collect' : 'Proceed to Pay'),
+        Tooltip(
+          message: n == 0 ? 'Tick at least one due.' : (_mode == null ? 'Select a payment mode first.' : ''),
+          child: ElevatedButton.icon(
+            onPressed: canPay ? _onPay : null,
+            icon: _busy
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textLight))
+                : Icon(_mode == 'Paytm' || _mode == 'Online' ? Icons.open_in_new : Icons.send, size: AppBtn.iconSize(context)),
+            label: Text(cash ? 'Save & Collect' : 'Proceed to Pay'),
+          ),
         ),
       ]),
     );

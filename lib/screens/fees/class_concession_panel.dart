@@ -11,6 +11,7 @@ import '../../utils/formatters.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Section-wise concession (school), as the old product's Cons_FeeInfo +
 /// sp_concessprocess: for a section and a concession CATEGORY set the
@@ -121,6 +122,9 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
       _rates.clear();
       for (final x in (m['fee_lines'] as List? ?? const [])) {
         final line = Map<String, dynamic>.from(x as Map);
+        // Whole Section is for the REGULAR concession only; arrears are
+        // written off one student at a time (user, 2026-11-14).
+        if ('${line['seqtype']}' == 'ARREAR') continue;
         final rate = _Rate(line);
         final s = saved.where((v) =>
             ('${v['seqtype'] ?? 'REGULAR'}' == 'ARREAR') == rate.arrear &&
@@ -216,17 +220,22 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
           if ((x as Map)['error'] == null && '${x['seqtype'] ?? 'REGULAR'}' == type) x,
       ].length;
 
+  static int _pendingCount(Map<String, dynamic> m) => [
+        for (final x in (m['items'] as List? ?? const []))
+          if ((x as Map)['pending'] == true) x,
+      ].length;
+
   Future<void> _apply() async {
     final todo = _todo;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Apply Concession'),
-        content: Text('Give ${todo.length} student(s) of category $_catName a concession of ₹${_money(_todoTotal)} in total?\n\n'
-            'Each student gets their own voucher -- CON... for the regular fees, AC... for arrears -- the same as a single-student concession.'),
+        title: const Text('Send for Approval'),
+        content: Text('Send a concession of ₹${_money(_todoTotal)} in total for ${todo.length} student(s) of category $_catName for approval?\n\n'
+            'Each student is a separate request in Fees → Concession Approval; their fees change only when it is approved.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: _solidBtn(), child: const Text('Apply')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: _solidBtn(), child: const Text('Send')),
         ],
       ),
     );
@@ -238,7 +247,8 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
       final m = Map<String, dynamic>.from(res as Map);
       final fails = [for (final x in (m['items'] as List? ?? const [])) if ((x as Map)['error'] != null) x];
       _snack(
-          '${_count(m, 'REGULAR')} concession (CON) + ${_count(m, 'ARREAR')} arrear concession (AC) voucher(s) made, ₹${_money(_num(m['total']))}'
+          '${_count(m, 'REGULAR') - _pendingCount(m)} concession voucher(s) made, ₹${_money(_num(m['total']))}'
+          '${_pendingCount(m) > 0 ? ' -- ${_pendingCount(m)} sent for approval (Fees → Concession Approval)' : ''}'
           '${fails.isEmpty ? '' : ' -- ${fails.length} failed: ${fails.map((f) => '${f['stuadmno']}: ${f['error']}').join('; ')}'}',
           fails.isEmpty ? AppColors.success : AppColors.warning);
       await _doPreview();
@@ -275,7 +285,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
         child,
       ]);
 
-  Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?> onChanged) => DropdownButtonFormField<T>(
+  Widget _drop<T>(String hint, T? value, List<(T, String)> items, ValueChanged<T?> onChanged) => AppDropdownField<T>(
         key: ValueKey('$hint-$value-${items.length}'),
         initialValue: items.any((e) => e.$1 == value) ? value : null,
         isExpanded: true,
@@ -331,7 +341,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
 
   Widget _flag(int v, ValueChanged<int> on, List<String> names) => SizedBox(
         width: 120.w,
-        child: DropdownButtonFormField<int>(
+        child: AppDropdownField<int>(
           initialValue: v,
           isExpanded: true,
           dropdownColor: Colors.white,
@@ -455,7 +465,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
   Widget _ratesTable() => _tableCard(
         icon: 'receipt-discount',
         title: 'Concession per Fee Line',
-        trailing: "₹ = fixed amount  ·  % = of each student's fee  ·  arrear lines get their own AC voucher",
+        trailing: "₹ = fixed amount  ·  % = of each student's fee",
         head: Row(children: [
           _h(schoolTerm('Term'), 2),
           _h('Fee Type', 3),
@@ -508,7 +518,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
             child: Row(children: [
               SizedBox(
                 width: 64.w,
-                child: DropdownButtonFormField<String>(
+                child: AppDropdownField<String>(
                   initialValue: r.type,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -647,7 +657,7 @@ class _ClassConcessionPanelState extends State<ClassConcessionPanel> {
             icon: _busy
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.done_all, size: 18),
-            label: Text(_todo.isEmpty ? 'Apply Concession' : 'Apply to ${_todo.length}  ·  ₹${_money(_todoTotal)}'),
+            label: Text(_todo.isEmpty ? 'Send for Approval' : 'Send ${_todo.length} for approval  ·  ₹${_money(_todoTotal)}'),
             style: _solidBtn(),
           ),
         ]),

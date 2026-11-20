@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/auth_provider.dart';
 import '../../services/device_service.dart';
 import '../../services/supabase_service.dart';
+import '../../services/update_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -82,141 +82,118 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Matches the sign-in screen: the school painting under a light wash,
+    // the logo on a white tile with a marigold ring, the brand in Fraunces.
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF7A1F2B),
-              Color(0xFF571520),
-              Color(0xFF3D0F17),
-            ],
-          ),
+      backgroundColor: AppColors.loginBg,
+      body: Stack(fit: StackFit.expand, children: [
+        Image.asset(
+          'assets/images/login_bg.jpg',
+          fit: BoxFit.cover,
+          alignment: const Alignment(0, 0.3),
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
         ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(flex: 3),
-              FadeInDown(
-                duration: const Duration(milliseconds: 800),
-                child: AnimatedBuilder(
-                  animation: _pulseController,
-                  builder: (context, child) {
-                    return Container(
-                      width: 200.w,
-                      height: 200.h,
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(32.r),
-                        border: Border.all(
-                          color: AppColors.accent.withValues(
-                            alpha: 0.3 + (_pulseController.value * 0.2),
-                          ),
-                          width: 2,
+        ColoredBox(color: AppColors.loginBg.withValues(alpha: 0.78)),
+        Column(
+          children: [
+            const Spacer(flex: 3),
+            FadeInDown(
+              duration: const Duration(milliseconds: 800),
+              child: AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) => Container(
+                  width: 168,
+                  height: 168,
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(36),
+                    border: Border.all(color: AppColors.gold, width: 3),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryDark.withValues(alpha: 0.18 + _pulseController.value * 0.12),
+                        blurRadius: 40,
+                        spreadRadius: -6,
+                        offset: const Offset(0, 18),
+                      ),
+                    ],
+                  ),
+                  child: child,
+                ),
+                child: Image.asset(
+                  'assets/images/app_logo_mark.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.school_rounded, size: 60, color: AppColors.primary),
+                ),
+              ),
+            ),
+            const SizedBox(height: 32),
+            FadeInUp(
+              delay: const Duration(milliseconds: 400),
+              duration: const Duration(milliseconds: 800),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(
+                    text: 'FIT ',
+                    style: AppFonts.heading(size: 56, weight: FontWeight.w700, color: AppColors.primaryDark, height: 1),
+                  ),
+                  TextSpan(
+                    text: 'School',
+                    style: AppFonts.heading(size: 56, weight: FontWeight.w700, color: AppColors.goldDark, height: 1),
+                  ),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FadeInUp(
+              delay: const Duration(milliseconds: 600),
+              duration: const Duration(milliseconds: 800),
+              child: Text(
+                'SCHOOL ERP',
+                style: AppFonts.body(size: 15, weight: FontWeight.w800, color: AppColors.ink2, letterSpacing: 4),
+              ),
+            ),
+            const Spacer(flex: 2),
+            FadeInUp(
+              delay: const Duration(milliseconds: 800),
+              duration: const Duration(milliseconds: 600),
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: 240,
+                    child: AnimatedBuilder(
+                      animation: _progressController,
+                      builder: (context, child) => ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: _progressController.value,
+                          backgroundColor: AppColors.primarySoft,
+                          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                          minHeight: 4,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.accent.withValues(
-                              alpha: 0.1 + (_pulseController.value * 0.1),
-                            ),
-                            blurRadius: 40,
-                            spreadRadius: 10,
-                          ),
-                        ],
-                      ),
-                      padding: EdgeInsets.all(20.w),
-                      child: Image.asset(
-                        'assets/images/educore360_logo.png',
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => Icon(
-                          Icons.school_rounded,
-                          size: 60.sp,
-                          color: AppColors.accent,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(height: 32.h),
-              FadeInUp(
-                delay: const Duration(milliseconds: 400),
-                duration: const Duration(milliseconds: 800),
-                child: Text(
-                  'EduCore360',
-                  style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -1.w,
-                      ),
-                ),
-              ),
-              SizedBox(height: 8.h),
-              FadeInUp(
-                delay: const Duration(milliseconds: 600),
-                duration: const Duration(milliseconds: 800),
-                child: Text(
-                  'Institution Administration Platform',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: AppColors.textLight.withValues(alpha: 0.8),
-                        letterSpacing: 1.w,
-                      ),
-                ),
-              ),
-              const Spacer(flex: 2),
-              FadeInUp(
-                delay: const Duration(milliseconds: 800),
-                duration: const Duration(milliseconds: 600),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      width: 200.w,
-                      child: AnimatedBuilder(
-                        animation: _progressController,
-                        builder: (context, child) {
-                          return ClipRRect(
-                            borderRadius: BorderRadius.circular(4.r),
-                            child: LinearProgressIndicator(
-                              value: _progressController.value,
-                              backgroundColor:
-                                  Colors.white.withValues(alpha: 0.1),
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.accent.withValues(alpha: 0.8),
-                              ),
-                              minHeight: 3.h,
-                            ),
-                          );
-                        },
                       ),
                     ),
-                    SizedBox(height: 16.h),
-                    Text(
-                      'Initializing...',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: AppColors.textLight.withValues(alpha: 0.5),
-                          ),
-                    ),
-                  ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text('Initializing…', style: AppFonts.body(size: 14, weight: FontWeight.w600, color: AppColors.ink2)),
+                ],
+              ),
+            ),
+            const Spacer(),
+            FadeIn(
+              delay: const Duration(milliseconds: 1000),
+              child: FutureBuilder<String>(
+                future: UpdateService.currentVersion(),
+                builder: (context, snap) => Text(
+                  snap.hasData && snap.data!.isNotEmpty ? 'Version ${snap.data}' : '',
+                  style: AppFonts.body(size: 13, color: AppColors.ink3),
                 ),
               ),
-              const Spacer(),
-              FadeIn(
-                delay: const Duration(milliseconds: 1000),
-                child: Text(
-                  'v1.0.0',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textLight.withValues(alpha: 0.3),
-                      ),
-                ),
-              ),
-              SizedBox(height: 32.h),
-            ],
-          ),
+            ),
+            const SizedBox(height: 32),
+          ],
         ),
-      ),
+      ]),
     );
   }
 }

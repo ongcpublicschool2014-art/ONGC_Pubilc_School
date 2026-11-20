@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -18,6 +19,8 @@ import '../../models/admission_model.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_search_field.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// Class (school: Section) Allocation -- places admissions saved without a
 /// class and moves them into the year's students/parents/parentdetail tables.
@@ -81,7 +84,8 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         AdmissionService.getAdmissions(insId),
         SupabaseService.fromSchema('course').select('cour_id, courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
         SupabaseService.fromSchema('class').select('claname, cour_id').eq('ins_id', insId).eq('activestatus', 1),
-        SupabaseService.fromSchema('students').select('stuclass').eq('ins_id', insId).eq('activestatus', 1),
+        // Every row: a plain select stops at 1,000 (the school has more students).
+        SupabaseService.fetchAll(() => SupabaseService.fromSchema('students').select('stuclass').eq('ins_id', insId).eq('activestatus', 1)),
         SupabaseService.getInstitutionInfo(insId),
       ]);
       if (!mounted) return;
@@ -270,7 +274,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
                 Text(schoolTerm('Allocate the ${rows.length} ticked ${rows.length == 1 ? 'student' : 'students'} of ${courses.first} to one class.'),
                     style: AppUI.muted),
                 SizedBox(height: 14.h),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   initialValue: picked,
                   isExpanded: true,
                   style: AppUI.fieldText(ctx, filled: picked != null),
@@ -340,7 +344,11 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     await _load();
     if (!mounted) return;
     if (failures.isEmpty) {
-      _snack('$done ${done == 1 ? 'student' : 'students'} allocated and added to Students.', AppColors.success);
+      // Section Allocation creates no fee demand on purpose; say so, or a
+      // mid-year student shows nothing due at Fee Collection.
+      _snack('$done ${done == 1 ? 'student' : 'students'} allocated and added to Students. '
+          'No fee demand was created: add their fees from Fee Collection -> Fee Definition or Fee Demand Import.',
+          AppColors.success);
     } else {
       await showDialog<void>(
         context: context,
@@ -430,7 +438,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       _snack('Nothing to export.', AppColors.warning);
       return;
     }
-    final path = await FilePicker.platform.saveFile(
+    final path = await pickSavePath(
       dialogTitle: schoolTerm('Save Class Allocation'),
       fileName: '$_fileStem.xlsx',
       type: FileType.custom,
@@ -447,7 +455,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
       final hdr = xl.CellStyle(
         bold: true,
         fontSize: 10,
-        backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+        backgroundColorHex: XlTheme.headerBg,
         fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
       );
       void put(int col, int row, String text, [xl.CellStyle? style]) {
@@ -562,19 +570,24 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
     return Row(children: [
       AppUI.iconTile('book-1'),
       SizedBox(width: 12.w),
-      Text(schoolTerm('Class Allocation'), style: AppUI.cardTitle),
-      SizedBox(width: 14.w),
-      Flexible(
-        child: Text.rich(
-          TextSpan(style: crumb, children: [
-            const TextSpan(text: 'Admission  ›  '),
-            TextSpan(text: '${schoolTerm('Class Allocation')}  ›  '),
-            TextSpan(text: _status == _Status.allocated ? 'Allocated' : _status == _Status.all ? 'All' : 'Pending Allocation'),
-          ]),
-          overflow: TextOverflow.ellipsis,
-        ),
+      // Title with the breadcrumb under it, so the crumb gets the title's
+      // whole column instead of the gap left beside it by the dropdowns.
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(schoolTerm('Class Allocation'), style: AppUI.cardTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+          SizedBox(height: 2.h),
+          Text.rich(
+            TextSpan(style: crumb, children: [
+              const TextSpan(text: 'Admission  ›  '),
+              TextSpan(text: '${schoolTerm('Class Allocation')}  ›  '),
+              TextSpan(text: _status == _Status.allocated ? 'Allocated' : _status == _Status.all ? 'All' : 'Pending Allocation'),
+            ]),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ]),
       ),
-      const Spacer(),
+      SizedBox(width: 14.w),
       SizedBox(width: 170.w, child: _courseDropdown()),
       SizedBox(width: AppBtn.gap(context)),
       SizedBox(width: 190.w, child: _orderDropdown()),
@@ -604,7 +617,14 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         child: _stat('layer', schoolTerm('Classes'), '${_sectionsInScope.length}', AppColors.demand, AppColors.surface,
             trailing: TextButton(
               onPressed: _showSections,
-              child: Text(schoolTerm('View Classes')),
+              // Compact, so it fits the value's line without growing the card.
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: EdgeInsets.symmetric(horizontal: 6.w),
+                minimumSize: Size.zero,
+              ),
+              child: Text(schoolTerm('View Classes'), maxLines: 1, overflow: TextOverflow.ellipsis),
             )),
       ),
     ]);
@@ -620,12 +640,16 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         SizedBox(width: 12.w),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(label.toUpperCase(), style: AppUI.caps, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(label.toUpperCase(), style: AppUI.caps, maxLines: 2, overflow: TextOverflow.ellipsis),
             SizedBox(height: 4.h),
-            Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+            // The trailing link sits on the value's line, so the CAPS label
+            // keeps the card's full width instead of being cut beside it.
+            Row(children: [
+              Text(value, style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+              if (trailing != null) ...[SizedBox(width: 8.w), Expanded(child: Align(alignment: Alignment.centerRight, child: trailing))],
+            ]),
           ]),
         ),
-        if (trailing != null) trailing,
       ]),
     );
   }
@@ -663,8 +687,8 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
           const PopupMenuDivider(),
           PopupMenuItem(enabled: false, height: 28, child: Text('GENDER', style: AppUI.caps)),
           _check('g', 'All', _gender == null),
-          _check('gM', 'Male', _gender == 'M'),
-          _check('gF', 'Female', _gender == 'F'),
+          _check('gM', kBoyLabel, _gender == 'M'),
+          _check('gF', kGirlLabel, _gender == 'F'),
           _check('gT', 'Other', _gender == 'T'),
         ],
         child: Container(
@@ -800,7 +824,13 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   Widget _row(AdmissionModel a, int index) {
     final cell = AppUI.cell;
     final pending = a.isPending;
-    final options = _classNamesFor(a.courname);
+    // A pre-admission (e.g. into XI before the results) may be placed in its
+    // standard only: the principal allots the section later (Admission >
+    // Section pending tab). The standard's own name is that choice.
+    final stdOnly = isSchool && (a.preadmission ?? 0) == 1 && (a.courname ?? '').trim().isNotEmpty
+        ? a.courname!.trim()
+        : null;
+    final options = [if (stdOnly != null) stdOnly, ..._classNamesFor(a.courname)];
     final chosen = _rowClass[a.admId];
     return Container(
       decoration: BoxDecoration(
@@ -823,7 +853,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
         Padding(
           padding: EdgeInsets.only(right: 16.w),
           child: pending
-              ? DropdownButtonFormField<String>(
+              ? AppDropdownField<String>(
                   key: ValueKey('cls-${a.admId}-$chosen'),
                   initialValue: options.contains(chosen) ? chosen : null,
                   isExpanded: true,
@@ -836,7 +866,20 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
                   hint: Text(schoolTerm('Select class'), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                   items: [
                     for (final e in options)
-                      DropdownMenuItem(value: e, child: Text(e, style: AppUI.fieldText(context))),
+                      DropdownMenuItem(
+                          value: e,
+                          child: Text(e == stdOnly ? '$e (section later)' : e,
+                              overflow: TextOverflow.ellipsis,
+                              style: e == stdOnly
+                                  ? AppUI.fieldText(context).copyWith(color: AppColors.goldInk, fontWeight: FontWeight.w700)
+                                  : AppUI.fieldText(context))),
+                  ],
+                  selectedItemBuilder: (context) => [
+                    for (final e in options)
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(e == stdOnly ? '$e (section later)' : e,
+                              maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true))),
                   ],
                   onChanged: (v) => _setSection(a, v),
                 )
@@ -904,7 +947,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   Widget _courseDropdown() {
     final names = _courseNames;
     final allLabel = schoolTerm('All Courses');
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       key: ValueKey('course-$_selectedCourse-${names.length}'),
       initialValue: _selectedCourse ?? '',
       isExpanded: true,
@@ -932,7 +975,7 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   }
 
   Widget _orderDropdown() {
-    return DropdownButtonFormField<String>(
+    return AppDropdownField<String>(
       initialValue: _orderBy,
       isExpanded: true,
       dropdownColor: Colors.white,

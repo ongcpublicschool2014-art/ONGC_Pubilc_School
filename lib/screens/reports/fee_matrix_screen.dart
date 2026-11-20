@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -16,6 +17,7 @@ import '../../utils/report_pdf_export.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../utils/save_path.dart';
 
 /// FEE MATRIX FOR <year> -- the old product's "Fee Matrix": every line of
 /// the Section Fee Demand as a matrix, grouped by term:
@@ -260,7 +262,7 @@ class _FeeMatrixScreenState extends State<FeeMatrixScreen> {
     if (_lines.isEmpty) return _snack('Nothing to export yet.', AppColors.warning);
     setState(() => _exporting = true);
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: 'Save Fee Matrix',
         fileName: 'Fee_Matrix_${_year.replaceAll(RegExp(r'[^0-9A-Za-z]+'), '_')}.xlsx',
         type: FileType.custom,
@@ -272,7 +274,7 @@ class _FeeMatrixScreenState extends State<FeeMatrixScreen> {
       final sheet = book['Fee Matrix'];
       book.delete('Sheet1');
       final bold = xl.CellStyle(bold: true, fontSize: 11);
-      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: xl.ExcelColor.fromHexString('#F2F4F7'), textWrapping: xl.TextWrapping.WrapText);
+      final hdr = xl.CellStyle(bold: true, fontSize: 10, backgroundColorHex: XlTheme.headerBg, fontColorHex: XlTheme.headerFg, textWrapping: xl.TextWrapping.WrapText);
       void put(int c, int r, String v, [xl.CellStyle? st, bool number = false]) {
         final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: c, rowIndex: r));
         final n = number ? double.tryParse(v.replaceAll(',', '').replaceAll('*', '').trim()) : null;
@@ -427,7 +429,7 @@ class _FeeMatrixScreenState extends State<FeeMatrixScreen> {
           Expanded(child: AppUI.kpi(icon: 'people', label: 'Students', value: '$_students', sub: 'Active, without TC students')),
           SizedBox(width: 12.w),
           Expanded(
-            child: AppUI.kpi(icon: 'receipt-2', label: 'Regular Fees', value: '₹${formatIndianNumber(_sumType('REG'))}', sub: '$regular fee lines', tint: AppColors.demand),
+            child: AppUI.kpi(icon: 'receipt-2', label: 'Regular Fees', value: '₹${formatIndianNumber(_sumType('REG'))}', sub: '$regular fee line${regular == 1 ? '' : 's'}', tint: AppColors.demand),
           ),
           SizedBox(width: 12.w),
           Expanded(
@@ -435,7 +437,7 @@ class _FeeMatrixScreenState extends State<FeeMatrixScreen> {
                 icon: 'receipt-discount',
                 label: 'Optional Fees',
                 value: '₹${formatIndianNumber(_sumType('OPT'))}',
-                sub: '${_lines.length - regular} fee lines · opted-in students',
+                sub: '${_lines.length - regular} fee line${_lines.length - regular == 1 ? '' : 's'} · opted-in students',
                 tint: AppColors.teal),
           ),
           SizedBox(width: 12.w),

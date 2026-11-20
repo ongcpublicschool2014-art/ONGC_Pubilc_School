@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -14,6 +15,11 @@ import '../../utils/friendly_error.dart';
 import '../../utils/report_pdf_export.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
+import '../../utils/save_path.dart';
+
+/// Count columns: Boys / Girls on the school database, Male / Female on a college.
+String get _boys => isSchool ? 'Boys' : 'Male';
+String get _girls => isSchool ? 'Girls' : 'Female';
 
 /// ADMISSION ABSTRACT — how many students each course has admitted, split by
 /// sex, as at a date. One row per course, then a grand total.
@@ -203,8 +209,8 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
         headers: [
           AppText.serialNo,
           schoolTerm('Course'),
-          'Male',
-          'Female',
+          _boys,
+          _girls,
           if (anyOther) 'Other',
           'Total',
         ],
@@ -338,7 +344,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
 
   Future<void> _export(List<_Row> rows) async {
     String safe(String s) => s.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
-    final path = await FilePicker.platform.saveFile(
+    final path = await pickSavePath(
       dialogTitle: 'Save Admission Abstract',
       fileName: 'Admission_Abstract_${safe(_dmy(_from))}_${safe(_dmy(_to))}.xlsx',
       type: FileType.custom,
@@ -354,7 +360,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
     final hdr = xl.CellStyle(
       bold: true,
       fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
     final totalStyle = xl.CellStyle(bold: true, fontSize: 10);
@@ -379,8 +385,8 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
     final headers = <String>[
       AppText.serialNo,
       schoolTerm('Course'),
-      'Male',
-      'Female',
+      _boys,
+      _girls,
       if (anyOther) 'Other',
       'Total',
     ];
@@ -570,7 +576,7 @@ class _AdmissionAbstractScreenState extends State<AdmissionAbstractScreen> {
         Container(
           decoration: AppUI.tableHeadBar,
           padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
-          child: Row(children: row(AppText.serialNo, schoolTerm('Course'), 'Male', 'Female', 'Other', 'Total', head: true)),
+          child: Row(children: row(AppText.serialNo, schoolTerm('Course'), _boys, _girls, 'Other', 'Total', head: true)),
         ),
         const Divider(height: 1),
         Expanded(

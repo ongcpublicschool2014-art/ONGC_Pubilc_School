@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:excel/excel.dart' as xl;
+import '../../utils/excel_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -17,6 +18,9 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/pill_tab.dart';
 import 'admission_abstract_screen.dart';
+import 'class_strength_screen.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// ADMISSION REGISTER — the admissions taken in a date range, one row per
 /// student, with the columns the office chooses and in the order it chooses.
@@ -54,13 +58,19 @@ class _Field {
 
 String _s(Object? v) => (v ?? '').toString().trim();
 
-/// 'yyyy-MM-dd...' -> 'dd/MM/yyyy', which is how the register has always read.
+/// 'yyyy-MM-dd...' -> 'dd-MM-yyyy'.
 String _d(Object? v) {
   final s = _s(v);
   if (s.length < 10) return '';
   final y = s.substring(0, 4), m = s.substring(5, 7), d = s.substring(8, 10);
   return '$d-$m-$y';
 }
+
+/// ordid as an int; blanks sort last.
+int _ord(Object? v) => v is num ? v.toInt() : (int.tryParse(_s(v)) ?? 9999);
+
+/// A numeric column as an int; blank is 0.
+int _num(Object? v) => v is num ? v.toInt() : (int.tryParse(_s(v)) ?? 0);
 
 Map<String, dynamic> _tcOf(Map<String, dynamic> r) =>
     (r['_tc'] as Map<String, dynamic>?) ?? const {};
@@ -192,11 +202,12 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
     with SingleTickerProviderStateMixin {
   // The register lists the students; the abstract counts them. One menu entry,
   // two views of the same admissions.
-  late final TabController _tabs = TabController(length: 2, vsync: this);
-  static const _tabLabels = ['Register', 'Abstract'];
-  static const _tabIcons = ['book-1', 'chart-2'];
+  late final TabController _tabs = TabController(length: 3, vsync: this);
+  static const _tabLabels = ['Register', 'Abstract', 'Class Strength'];
+  static const _tabIcons = ['book-1', 'chart-2', 'people'];
 
   int get _insId => context.read<AuthProvider>().insId ?? 1;
+  String get _yearLabel => _s(context.read<AuthProvider>().yearLabel);
 
   bool _loading = true;
   bool _running = false;
@@ -258,7 +269,8 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
   @override
   void initState() {
     super.initState();
-    // The academic year the old dialog defaulted to: this May to next May.
+    // Fallback window, as the old dialog had it: this May to next May.
+    // _loadMasters replaces it with the logged-in year's dates.
     final now = DateTime.now();
     _from = DateTime(now.year, 5, 6);
     if (now.isBefore(_from)) _from = DateTime(now.year - 1, 5, 6);
@@ -305,13 +317,29 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               .eq('ins_id', insId)
               .eq('activestatus', 1),
         SupabaseService.getInstitutionInfo(insId),
+        _loadYearDates(insId),
       ]);
       if (!mounted) return;
       final info = res[3] as ({String? name, String? logo, String? address, String? mobile, String? email});
+      final yearDates = res[4] as (DateTime, DateTime)?;
       setState(() {
+        if (yearDates != null) {
+          _from = yearDates.$1;
+          _to = yearDates.$2;
+        }
+        // Master-data order: standards by ordid, sections by (standard, section) ordid.
         _courseRows = List<Map<String, dynamic>>.from(res[0] as List)
-          ..sort((a, b) => _s(a['courname']).compareTo(_s(b['courname'])));
-        _classRows = List<Map<String, dynamic>>.from(res[1] as List);
+          ..sort((a, b) {
+            final c = _ord(a['ordid']).compareTo(_ord(b['ordid']));
+            return c != 0 ? c : _s(a['courname']).compareTo(_s(b['courname']));
+          });
+        final courOrd = {for (final c in _courseRows) c['cour_id']: _ord(c['ordid'])};
+        _classRows = List<Map<String, dynamic>>.from(res[1] as List)
+          ..sort((a, b) {
+            var c = (courOrd[a['cour_id']] ?? 9999).compareTo(courOrd[b['cour_id']] ?? 9999);
+            if (c == 0) c = _ord(a['ordid']).compareTo(_ord(b['ordid']));
+            return c != 0 ? c : _s(a['claname']).compareTo(_s(b['claname']));
+          });
         _admTypes = (res[2] as List)
             .map((e) => _s(e['admname']))
             .where((s) => s.isNotEmpty)
@@ -339,6 +367,28 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
         _loading = false;
         _loadError = friendlyError(e);
       });
+    }
+  }
+
+  /// Start and end of the logged-in academic year, or null when it is not
+  /// found (the May-to-May default then stays).
+  Future<(DateTime, DateTime)?> _loadYearDates(int insId) async {
+    final label = _yearLabel;
+    if (label.isEmpty) return null;
+    try {
+      final rows = await SupabaseService.client
+          .from('institutionyear')
+          .select('iyrstadate, iyrenddate')
+          .eq('ins_id', insId)
+          .eq('yrlabel', label)
+          .limit(1);
+      if (rows.isEmpty) return null;
+      final start = DateTime.tryParse(_s(rows.first['iyrstadate']));
+      final end = DateTime.tryParse(_s(rows.first['iyrenddate']));
+      if (start == null || end == null) return null;
+      return (start, end);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -539,10 +589,15 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       // the rolls now" is not a period, and filtering it by admdate would drop
       // every senior student.
       if (_mode == 'NEW') {
-        q = q.gte('admdate', _ymd(_from)).lte('admdate', _ymd(_to));
+        q = q
+            .gte('admdate', _ymd(_from))
+            .lte('admdate', _ymd(_to))
+            .neq('admstatus', 'CANCELLED');
+        // Standard / section filters run here for NEW only. ACTIVE takes them
+        // from the students rows below, which follow Section Transfer.
+        if (_s(_course).isNotEmpty) q = q.eq('courname', _course!);
+        if (_classes.isNotEmpty) q = q.inFilter('stuclass', _classes.toList());
       }
-      if (_s(_course).isNotEmpty) q = q.eq('courname', _course!);
-      if (_classes.isNotEmpty) q = q.inFilter('stuclass', _classes.toList());
       if (!isSchool && _s(_admType).isNotEmpty) {
         q = q.eq('admname', _admType!);
       }
@@ -554,23 +609,35 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       // is taken off the roll in the year schema, and admission keeps the
       // record of the admission itself.
       if (_mode == 'ACTIVE') {
-        final onRoll = <String>{};
+        // Current standard / section per reg no, from this year's students.
+        final onRoll = <String, Map<String, dynamic>>{};
         try {
           final stu = await SupabaseService.fetchAll(() => SupabaseService
               .fromSchema('students')
-              .select('stuadmno')
+              .select('stuadmno, stuclass, courname')
               .eq('ins_id', insId)
-              .eq('activestatus', 1));
+              .eq('activestatus', 1)
+              .eq('preadmission', 0));
           for (final r in stu) {
             final k = _s(r['stuadmno']);
-            if (k.isNotEmpty) onRoll.add(k);
+            if (k.isNotEmpty) onRoll[k] = r;
           }
         } catch (e) {
           _snack('Could not load this year\'s students. ${friendlyError(e)}', AppColors.error);
           setState(() => _running = false);
           return;
         }
-        rows = rows.where((r) => onRoll.contains(_s(r['admno']))).toList();
+        final course = _s(_course).toUpperCase();
+        final classes = _classes.map((c) => c.toUpperCase()).toSet();
+        rows = [
+          for (final r in rows)
+            if (onRoll[_s(r['admno'])] case final st?)
+              {...r, 'courname': _s(st['courname']), 'stuclass': _s(st['stuclass'])},
+        ]
+            .where((r) =>
+                (course.isEmpty || _s(r['courname']).toUpperCase() == course) &&
+                (classes.isEmpty || classes.contains(_s(r['stuclass']).toUpperCase())))
+            .toList();
       }
 
       // TC rows, keyed by reg no. Needed both for the TC columns and for the
@@ -579,18 +646,21 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       try {
         final tcRows = await SupabaseService.fetchAll(() => SupabaseService
             .fromSchema('tc_entry')
-            .select('stuadmno, tcno, tcdate, remarks, tc_id')
+            .select('stuadmno, tcno, tcdate, remarks, tc_id, status')
             .eq('ins_id', insId)
             .eq('activestatus', 1));
-        // Ascending tc_id so the latest write wins, and only rows that carry a
-        // number count -- tc_entry is append-only and a re-activation appends a
-        // row with no tcno.
-        tcRows.sort((a, b) => ((a['tc_id'] as num?) ?? 0).compareTo((b['tc_id'] as num?) ?? 0));
+        // The latest row per reg no decides. A re-activation appends a row
+        // with status 1 and no tcno, which cancels the earlier TC.
+        final latest = <String, Map<String, dynamic>>{};
         for (final t in tcRows) {
           final k = _s(t['stuadmno']);
-          if (k.isEmpty || _s(t['tcno']).isEmpty) continue;
-          tcByAdmno[k] = t;
+          if (k.isEmpty) continue;
+          final prev = latest[k];
+          if (prev == null || _num(t['tc_id']) > _num(prev['tc_id'])) latest[k] = t;
         }
+        latest.forEach((k, t) {
+          if (_s(t['tcno']).isNotEmpty && _num(t['status']) != 1) tcByAdmno[k] = t;
+        });
       } catch (_) {
         // tc_entry missing on this schema: the TC columns print blank and the
         // TC filter has nothing to exclude, which is the honest result.
@@ -604,7 +674,11 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
       }
 
       if (out.isEmpty) {
-        _snack('No admissions in this date range for these filters. Widen the dates or change the filters.', AppColors.warning);
+        _snack(
+            _mode == 'ACTIVE'
+                ? 'No students on the rolls for these filters. Change the filters and try again.'
+                : 'No admissions in this date range for these filters. Widen the dates or change the filters.',
+            AppColors.warning);
         return;
       }
 
@@ -638,6 +712,25 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
     return 'ADMISSION REGISTER';
   }
 
+  /// The line under the title: the date range, or the year for the roll list.
+  String get _periodLine {
+    if (_mode == 'ACTIVE') {
+      return _yearLabel.isEmpty
+          ? 'Students on the rolls'
+          : 'Students on the rolls — Academic Year $_yearLabel';
+    }
+    return 'From : ${_dmy(_from)}  To : ${_dmy(_to)}';
+  }
+
+  /// File name without extension. The roll list has no date range.
+  String _fileBase(String scopeName) {
+    String safe(String s) => s.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    if (_mode == 'ACTIVE') {
+      return 'Admission_Register_Active_$scopeName${_yearLabel.isEmpty ? '' : '_${safe(_yearLabel)}'}';
+    }
+    return 'Admission_Register_${scopeName}_${safe(_dmy(_from))}_${safe(_dmy(_to))}';
+  }
+
   /// The same rows as the Excel sheet, laid out for paper.
   Future<void> _exportPdf(List<Map<String, dynamic>> rows) async {
     final fields = _picked.map(_field).toList();
@@ -649,12 +742,12 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
             : 'All';
     final ok = await saveReportPdf(
       context,
-      fileName: 'Admission_Register_${scopeName}_${safe(_dmy(_from))}_${safe(_dmy(_to))}',
+      fileName: _fileBase(scopeName),
       insName: _insName,
       insAddress: _insAddress,
       insCity: _insCity,
       title: _titleLine,
-      subtitle: 'From : ${_dmy(_from)}  To : ${_dmy(_to)}',
+      subtitle: _periodLine,
       headers: [AppText.serialNo, ...fields.map(_fieldLabel)],
       rows: [
         for (var i = 0; i < rows.length; i++)
@@ -673,9 +766,9 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
         : _s(_course).isNotEmpty
             ? safe(_course!)
             : 'All';
-    final path = await FilePicker.platform.saveFile(
+    final path = await pickSavePath(
       dialogTitle: 'Save Admission Register',
-      fileName: 'Admission_Register_${scopeName}_${safe(_dmy(_from))}_${safe(_dmy(_to))}.xlsx',
+      fileName: '${_fileBase(scopeName)}.xlsx',
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
     );
@@ -689,7 +782,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
     final hdr = xl.CellStyle(
       bold: true,
       fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString('#2D3748'),
+      backgroundColorHex: XlTheme.headerBg,
       fontColorHex: xl.ExcelColor.fromHexString('#FFFFFF'),
     );
 
@@ -704,7 +797,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
     if (_insAddress.isNotEmpty) put(2, 1, _insAddress.toUpperCase(), bold);
     if (_insCity.isNotEmpty) put(2, 2, _insCity.toUpperCase(), bold);
     put(2, 3, _titleLine, bold);
-    put(2, 4, 'From : ${_dmy(_from)}  To : ${_dmy(_to)}', bold);
+    put(2, 4, _periodLine, bold);
 
     const headerRow = 6; // row 7 in Excel's own numbering
     final fields = _picked.map(_field).toList();
@@ -764,6 +857,8 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
               // Its own screen still, just reached from here: the abstract
               // loads its own masters and owns its own filters.
               const AdmissionAbstractScreen(),
+              // The old "Strength with Tc" sheet: opening, new, TC per section.
+              const ClassStrengthScreen(),
             ],
           ),
         ),
@@ -881,7 +976,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
           SizedBox(width: 12.w),
           Expanded(
             flex: 2,
-            child: _labeled('Admission Type', DropdownButtonFormField<String?>(
+            child: _labeled('Admission Type', AppDropdownField<String?>(
               key: ValueKey('admtype-${_admType ?? ''}'),
               initialValue: _admTypes.contains(_admType) ? _admType : null,
               isExpanded: true,
@@ -901,7 +996,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
         SizedBox(height: 10.h),
         Row(children: [
           Expanded(
-            child: _labeled(schoolTerm('Course'), DropdownButtonFormField<String?>(
+            child: _labeled(schoolTerm('Course'), AppDropdownField<String?>(
               key: ValueKey('course-${_course ?? ''}'),
               initialValue: _courseNames.contains(_course) ? _course : null,
               isExpanded: true,
@@ -925,7 +1020,7 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
           Expanded(child: _labeled(schoolTerm('Class'), _classPicker())),
           SizedBox(width: 12.w),
           Expanded(
-            child: _labeled('Sort By', DropdownButtonFormField<String>(
+            child: _labeled('Sort By', AppDropdownField<String>(
               initialValue: _orderKey,
               isExpanded: true,
               isDense: true,

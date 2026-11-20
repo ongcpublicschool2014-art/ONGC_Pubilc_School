@@ -16,6 +16,7 @@ import '../../utils/friendly_error.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/formatters.dart';
 import '../../utils/school_terms.dart';
+import '../../utils/save_path.dart';
 
 class BankReconciliationScreen extends StatefulWidget {
   const BankReconciliationScreen({super.key});
@@ -49,6 +50,12 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
   /// recon_status 'P' exactly as a fee or misc receipt is, so it belongs on this
   /// screen -- before this it was written pending and had nowhere to be settled.
   static bool _isAdvance(Map<String, dynamic> p) => p['adv_id'] != null;
+
+  /// A receipt-type tag that shrinks rather than overflowing a narrow
+  /// RECEIPT NO cell into the next column.
+  static Widget _fitChip(Widget chip) => Flexible(
+        child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: chip),
+      );
 
   /// Payment methods whose bank line is identified by a REFERENCE (UTR / txn
   /// id) rather than a cheque number.
@@ -135,7 +142,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
               .eq('ins_id', insId).eq('paystatus', 'C').eq('recon_status', 'P').eq('activestatus', 1).order('paydate', ascending: false),
           SupabaseService.fromSchema('payment')
               .select('pay_id, paynumber, transtotalamount, paydate, paymethod, payreference, stu_id, createdby, recon_status, reconciled_by, reconciled_date, bank_reference')
-              .eq('ins_id', insId).eq('paystatus', 'C').eq('recon_status', 'R').eq('activestatus', 1).order('reconciled_date', ascending: false).limit(100),
+              .eq('ins_id', insId).inFilter('paystatus', ['C', 'R']).eq('recon_status', 'R').eq('activestatus', 1).order('reconciled_date', ascending: false).limit(100),
         ]);
         pending = results[0]; reconciled = results[1];
         final allPayments = [...pending, ...reconciled];
@@ -312,7 +319,7 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
 
   Future<void> _downloadSampleTemplate() async {
     try {
-      final result = await FilePicker.platform.saveFile(
+      final result = await pickSavePath(
         dialogTitle: 'Save Bank Statement Template',
         fileName: 'bank_statement_template.csv',
         type: FileType.custom,
@@ -827,6 +834,23 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
             br['matched_pay_id'] = matchedId;
             br['match_type'] = 'Paytm Order + Amount Match';
             usedPayIds.add(matchedId);
+          } else if (orderId.isNotEmpty) {
+            // One online payment for fees of two or more fee groups is ONE
+            // gateway transaction but one receipt per group, all carrying the
+            // same order id. The statement line is their total.
+            final group = _pendingPayments
+                .where((p) => !_isMisc(p) && !_isAdvance(p) &&
+                    (p['payorderid']?.toString().trim() ?? '') == orderId &&
+                    !usedPayIds.contains(p['pay_id']))
+                .toList();
+            final sum = group.fold<double>(0, (s, p) => s + ((p['transtotalamount'] as num?)?.toDouble() ?? 0));
+            if (group.length > 1 && (sum - amount).abs() < 0.01) {
+              final ids = [for (final p in group) p['pay_id'] as int];
+              br['matched_pay_id'] = ids.first;
+              br['matched_pay_ids'] = ids;
+              br['match_type'] = 'Online Order + Amount Match (${ids.length} receipts)';
+              usedPayIds.addAll(ids);
+            }
           }
         }
       }
@@ -1279,7 +1303,10 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                                 },
                                 activeColor: AppColors.accent,
                               )),
-                              Expanded(flex: 2, child: Text('RECEIPT NO', style: AppUI.tableHead)),
+                              // Wider than the other short columns: the number
+                              // can carry a Misc / Advance tag beside it.
+                              Expanded(flex: 3, child: Text('RECEIPT NO', style: AppUI.tableHead)),
+                              SizedBox(width: 12.w),
                               Expanded(flex: 3, child: Text('STUDENT', style: AppUI.tableHead)),
                               Expanded(flex: 2, child: Text(schoolTerm('CLASS'), style: AppUI.tableHead)),
                               Expanded(flex: 2, child: Text('AMOUNT', textAlign: TextAlign.right, style: AppUI.tableHead)),
@@ -1318,22 +1345,24 @@ class _BankReconciliationScreenState extends State<BankReconciliationScreen> wit
                                           },
                                           activeColor: AppColors.accent,
                                         )),
-                                        Expanded(flex: 2, child: Row(children: [
+                                        Expanded(flex: 3, child: Row(children: [
                                           Flexible(child: Text(p['paynumber']?.toString() ?? '-', style: AppUI.cell, overflow: TextOverflow.ellipsis)),
                                           // Fee and misc receipts share one FCxx/ series, so the
                                           // number alone does not say which this is -- and they
                                           // settle through different tables.
                                           if (_isMisc(p)) ...[
                                             SizedBox(width: 6.w),
-                                            AppUI.chip('Misc', AppStatus.info),
+                                            _fitChip(AppUI.chip('Misc', AppStatus.info)),
                                           ],
                                           // An advance carries its own ADxx/ series, but the tag
                                           // still earns its place: it says which table settles it.
                                           if (_isAdvance(p)) ...[
                                             SizedBox(width: 6.w),
-                                            AppUI.chip('Advance', AppStatus.warning),
+                                            _fitChip(AppUI.chip('Advance', AppStatus.warning)),
                                           ],
                                         ])),
+                                        // Gap so the tag never touches the student name.
+                                        SizedBox(width: 12.w),
                                         Expanded(flex: 3, child: Text(p['student_display']?.toString() ?? '-', style: AppUI.cell)),
                                         Expanded(flex: 2, child: Text((p['stuclass']?.toString().trim().isNotEmpty ?? false) ? p['stuclass'].toString() : '-', style: AppUI.cell, overflow: TextOverflow.ellipsis)),
                                         Expanded(flex: 2, child: Text('${formatIndianNumber((p['transtotalamount'] as num?)?.toDouble() ?? 0)}', textAlign: TextAlign.right, style: AppUI.money)),

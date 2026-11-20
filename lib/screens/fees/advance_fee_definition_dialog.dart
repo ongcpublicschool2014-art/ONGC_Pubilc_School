@@ -11,6 +11,7 @@ import '../../utils/friendly_error.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Advance Fee Definition for ONE student -- the advance counterpart of Fee
 /// Collection's Student Fee Definition. Two sets, as there:
@@ -231,7 +232,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
           content: SizedBox(
             width: 380,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              DropdownButtonFormField<String>(
+              AppDropdownField<String>(
                 initialValue: term,
                 isExpanded: true,
                 style: AppUI.fieldText(ctx),
@@ -240,7 +241,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
                 onChanged: (v) => setLocal(() => term = v),
               ),
               SizedBox(height: 10.h),
-              DropdownButtonFormField<String>(
+              AppDropdownField<String>(
                 initialValue: fee,
                 isExpanded: true,
                 style: AppUI.fieldText(ctx),
@@ -461,7 +462,7 @@ class _AdvanceFeeDefinitionDialogState extends State<AdvanceFeeDefinitionDialog>
             ? AppUI.empty(
                 title: 'No advance fees listed',
                 why: widget.nextClaId == null
-                    ? schoolTerm('This class has no Class Matching. Set it in Setup → Fee Master → Class Matching, or use Add Fee.')
+                    ? schoolTerm('This class has no Class Mapping. Set it in Setup → Fee Master → Class Mapping, or use Add Fee.')
                     : 'No advance fees defined for ${widget.nextClassName} -- use Add Fee.',
                 icon: 'receipt-item')
             : ListView.separated(

@@ -20,8 +20,14 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
 import '../../widgets/paytm_checkout_dialog.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import '../../services/pending_collection_sweep.dart';
 import '../../utils/school_terms.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../services/online_payment_service.dart';
+import '../../utils/payment_gateways.dart';
+import '../../widgets/online_collect.dart';
+import '../../utils/save_path.dart';
 
 /// Advance Collection (Fees → Advance Collection).
 ///
@@ -192,9 +198,30 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
   bool _saving = false;
   String? _loadError;
 
+
+  // The school's gateway (Setup > Payment Gateways). When there is one, the
+  // "Online" mode collects through it and the SERVER saves the collection once
+  // the gateway confirms the money. The old "Paytm" mode is not offered.
+  OnlineGateway? _onlineGateway;
+
+  Future<void> _loadOnlineGateway() async {
+    OnlineGateway? g;
+    try {
+      g = await OnlinePaymentService.gatewayFor();
+    } catch (_) {
+      g = const OnlineGateway(0, '', 'Online', ''); // could not tell: the server decides
+    }
+    if (mounted) setState(() => _onlineGateway = g);
+  }
+
+  String get _onlineLabel => _onlineGateway == null || _onlineGateway!.provider.isEmpty
+      ? 'Online'
+      : 'Online (${pgProvider(_onlineGateway!.provider)?.name ?? _onlineGateway!.name})';
+
   @override
   void initState() {
     super.initState();
+    _loadOnlineGateway();
     // Recover anything Paytm confirmed after a counter walked away.
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _sweepPendingCollections());
@@ -455,6 +482,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
       case 'QR/UPI':
         return 'upi';
       case 'Paytm':
+      case 'Online':
         return 'Online Transfer';
       case 'Cheque':
         return 'cheque';
@@ -619,13 +647,17 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
     if (!_routing.hasBank) {
       _snack(
           'No bank account is mapped to ${_routing.fgName}. Map one in '
-          'Setup → Bank Accounts → Fee Group Assignments before collecting.',
+          'Setup → Fee Master → Fee Group before collecting.',
           AppColors.error);
       return;
     }
     // Paytm takes the money BEFORE the receipt exists. The other non-cash modes
     // only record a reference the cashier types in, so they keep the dialog.
     // Same split as Misc Collection.
+    if (_paymode == 'Online') {
+      await _collectOnline();
+      return;
+    }
     if (_paymode == 'Paytm') {
       final ref = await _payWithPaytm(_amount);
       if (ref == null) return; // not confirmed -- nothing is saved
@@ -642,6 +674,47 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
     await _save();
   }
 
+
+  /// Online through the school's gateway: the server saves the advance once
+  /// the gateway confirms the money (also if this window is closed).
+  Future<void> _collectOnline() async {
+    final amount = _amount;
+    if (amount <= 0) {
+      _snack('Enter an amount before paying', AppColors.warning);
+      return;
+    }
+    final header = _intentHeader('', amount)
+      ..['paymethod'] = 'Online Transfer'
+      ..['payreference'] = null
+      ..['payorderid'] = null
+      ..['paybankname'] = (pgProvider(_onlineGateway?.provider ?? '')?.name ?? 'ONLINE').toUpperCase();
+    final advType = _advType;
+    final receiptLines = <ReceiptFeeItem>[
+      if (advType == 'A')
+        for (final l in _validLines)
+          ReceiptFeeItem(type: l.feeType.trim(), amount: double.tryParse(l.amount.text.trim()) ?? 0)
+      else
+        ReceiptFeeItem(type: _fixedHeadName, amount: amount),
+    ];
+    setState(() => _saving = true);
+    final r = await collectOnline(
+      context,
+      kind: 'ADVANCE',
+      stuId: int.tryParse('${_student?['stu_id'] ?? ''}'),
+      header: header,
+      lines: _intentLines(),
+      payerName: '${_student?['stuname'] ?? ''}',
+      merchantName: context.read<AuthProvider>().insName ?? '',
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (r?.status == 'C') {
+      _savedReconStatus = 'P';
+      _showSuccessDialog(r!.receiptNumbers, amount, receiptLines, 'P');
+      await _loadAdvances();
+      _syncDate();
+    }
+  }
 
   /// Recover any misc/advance Paytm collection a counter never finished.
   ///
@@ -1268,7 +1341,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                         try {
                           final pdf = await buildReceiptPdf(data);
                           final bytes = await pdf.save();
-                          final res = await FilePicker.platform.saveFile(
+                          final res = await pickSavePath(
                             dialogTitle: 'Save Receipt PDF',
                             fileName:
                                 'Receipt_${data.receiptNo.replaceAll('/', '_')}.pdf',
@@ -1291,7 +1364,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                       onPressed: () async {
                         try {
                           await Printing.layoutPdf(
-                            format: a5PageFormat,
+                            format: await receiptPaper(),
                             onLayout: (fmt) async =>
                                 (await buildReceiptPdf(data, pageFormat: fmt)).save(),
                             name: 'Receipt_${data.receiptNo.replaceAll('/', '_')}',
@@ -1323,7 +1396,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                             blurRadius: 10,
                             offset: const Offset(0, 2)),
                       ]),
-                      child: ReceiptWidget(data: data),
+                      child: ReceiptPreview(data: data),
                     ),
                   ),
                 ),
@@ -1711,15 +1784,15 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
               'from its fee group\'s own series, so it is refused until one '
               'exists. Create it in Setup → Sequence Master → Receipt Sequence.'
           : bad
-          ? 'No bank account is mapped to ${r.fgName}. Map one in Setup → Bank '
-              'Accounts → Fee Group Assignments before collecting.'
+          ? 'No bank account is mapped to ${r.fgName}. Map one in Setup → Fee '
+              'Master → Fee Group before collecting.'
           : r.hasMerchant
               ? 'Cash and cheque are banked into ${r.bankName}. An online '
                   'payment settles to merchant ${r.paytmMid}, which is '
                   'registered against that account.'
               : '${r.bankName} has no Paytm merchant ID, so online payments '
                   'settle to the institution\'s default merchant account. '
-                  'Set the Paytm MID in Setup → Bank Accounts.',
+                  'Set the Paytm MID in Setup → Fee Master → Fee Group → Manage bank accounts.',
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(bad ? Icons.warning_amber_rounded : Icons.account_balance,
             size: 13.sp, color: colour),
@@ -1804,7 +1877,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
             width: 200.w,
             child: _labeled(
                 schoolTerm('Course'),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   // FormField.initialValue is read once, in initState — a
                   // rebuild with a new value is ignored. Keying on the value
                   // forces a fresh field so a course set from the picked
@@ -1830,7 +1903,7 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
             width: 180.w,
             child: _labeled(
                 schoolTerm('Class'),
-                DropdownButtonFormField<String>(
+                AppDropdownField<String>(
                   key: ValueKey('adv-class-${_selectedCourse ?? ''}-${_selectedClass ?? ''}'),
                   initialValue: _classesFor(_selectedCourse).contains(_selectedClass)
                       ? _selectedClass
@@ -2377,12 +2450,13 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                   letterSpacing: 0.3),
               // Same five modes as Misc Collection and Fee Collection, in the
               // same order. Paytm runs the real gateway (see _payWithPaytm).
-              items: const [
-                DropdownMenuItem(value: 'Cash', child: Text('Cash')),
-                DropdownMenuItem(value: 'QR/UPI', child: Text('QR / UPI')),
-                DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
-                DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
-                DropdownMenuItem(value: 'DD', child: Text('DD')),
+              items: [
+                const DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                const DropdownMenuItem(value: 'QR/UPI', child: Text('QR / UPI')),
+                if (_onlineGateway != null)
+                  DropdownMenuItem(value: 'Online', child: Text(_onlineLabel, overflow: TextOverflow.ellipsis)),
+                const DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
+                const DropdownMenuItem(value: 'DD', child: Text('DD')),
               ],
               onChanged: _saving ? null : (v) => setState(() => _paymode = v),
             ),
@@ -2396,10 +2470,10 @@ class _AdvanceCollectionScreenState extends State<AdvanceCollectionScreen> {
                     width: 15,
                     height: 15,
                     child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textLight))
-                : Icon(_paymode == 'Paytm' ? Icons.open_in_new : Icons.send, size: 16.sp),
+                : Icon(_paymode == 'Paytm' || _paymode == 'Online' ? Icons.open_in_new : Icons.send, size: 16.sp),
             label: Text(_saving
                 ? 'Saving…'
-                : (_paymode == 'Paytm' ? 'Proceed to Pay' : 'Collect Advance')),
+                : (_paymode == 'Paytm' || _paymode == 'Online' ? 'Proceed to Pay' : 'Collect Advance')),
         ),
       ]),
     );

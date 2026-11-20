@@ -15,6 +15,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/student_avatar.dart';
 import '../../utils/school_terms.dart';
 import '../../utils/app_text.dart';
+import '../../widgets/app_dropdown_field.dart';
 
 /// Fee Concession — two views:
 ///   • LIST   : every persisted concession record across the institution, with
@@ -61,7 +62,9 @@ class _ConRow {
   // duplicate voucher). Editable only when it's collectible with an unpaid
   // balance and nothing has been applied yet.
   bool get isApplied => appliedAmount > 0.009;
-  bool get editable => (feeAmount - paidAmount) > 0.009 && !isApplied;
+  bool get editable => (feeAmount - paidAmount) > 0.009 && !isApplied && pendingAmount == null;
+  /// A concession on this line is waiting in Concession Approval.
+  double? pendingAmount;
 
   double get concession {
     final c = double.tryParse(conCtrl.text.trim()) ?? 0;
@@ -99,6 +102,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   String? _selectedCourse;
   String? _selectedClass;
   List<Map<String, dynamic>> _filteredStudents = [];
+  bool _studentsLoading = false;
+  int _filterReq = 0; // drops a slower, older filter load
   /// Every active student — the Student search falls back to this when no
   /// Course/Class filter is set.
   List<Map<String, dynamic>> _allStudents = [];
@@ -121,6 +126,15 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   String? _dSem, _dFeeType; // Step-2 filters
   final TextEditingController _pctCtrl = TextEditingController(); // concession %
   String? _dConType; // Step-2 Concession Type = the category applied on Save
+  // Regular Concession / Arrear Write-off -- handled separately (user,
+  // 2026-11-14), chosen at the top: the records listed, the student's lines
+  // shown and the voucher series (CONNO for regular, ARRCONNO for arrear --
+  // the old product's separate arrear voucher / "Arrear Fee Write Off").
+  String _dSeqType = 'REGULAR';
+  bool get _arrear => _dSeqType == 'ARREAR';
+  /// Vouchers that are arrear write-offs (their lines are arrear demands).
+  Set<int> _arrearHdr = {};
+  bool _isArrearRec(Map<String, dynamic> r) => _arrearHdr.contains((r['con_hdr_id'] as num?)?.toInt());
 
   @override
   void initState() {
@@ -180,6 +194,23 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     } catch (e) {
       if (mounted) setState(() { _listLoading = false; _error = friendlyError(e); });
     }
+    // Arrear write-offs: the vouchers whose lines are arrear demands (the
+    // voucher itself does not say).
+    try {
+      final arr = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('feedemand')
+          .select('dem_id').eq('ins_id', _insId).eq('demseqtype', 'ARREAR').order('dem_id'));
+      final ids = arr.map((d) => (d['dem_id'] as num?)?.toInt()).whereType<int>().toSet();
+      var hdr = <int>{};
+      if (ids.isNotEmpty) {
+        final det = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('concessiondetail')
+            .select('con_hdr_id, dem_id').eq('ins_id', _insId).eq('activestatus', 1).order('cond_id'));
+        hdr = {
+          for (final d in det)
+            if (ids.contains((d['dem_id'] as num?)?.toInt()) && d['con_hdr_id'] != null) (d['con_hdr_id'] as num).toInt(),
+        };
+      }
+      if (mounted) setState(() => _arrearHdr = hdr);
+    } catch (_) {}
     // Every active student, so the Student box can be searched without first
     // picking a Course/Class. fetchAll: a plain select stops at 1000 rows.
     try {
@@ -212,27 +243,37 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
         (s) => s);
   }
 
+  /// The students of the chosen Standard / Section -- listed on the left so
+  /// one can be picked (user, 2026-11-14: "when i selects students not
+  /// listing the students").
   Future<void> _loadFromFilter() async {
+    final req = ++_filterReq;
     if (_selectedCourse == null && _selectedClass == null) {
-      if (mounted) setState(() => _filteredStudents = []);
+      if (mounted) setState(() { _filteredStudents = []; _studentsLoading = false; });
       return;
     }
+    setState(() { _filteredStudents = []; _studentsLoading = true; _error = null; });
     try {
-      var query = SupabaseService.fromSchema('students')
-          .select('stu_id, stuname, stuadmno, stuclass, courname, stuphoto')
-          .eq('ins_id', _insId)
-          .eq('activestatus', 1)
-          .eq('preadmission', 0);  // next year's intake: advance screens only
-      if (_selectedCourse != null) query = query.eq('courname', _selectedCourse!);
-      if (_selectedClass != null) query = query.eq('stuclass', _selectedClass!);
-      final rows = await query.order('stuname', ascending: true).limit(500);
+      final course = _selectedCourse, section = _selectedClass;
+      final rows = await SupabaseService.fetchAll(() {
+        var query = SupabaseService.fromSchema('students')
+            .select('stu_id, stuname, stuadmno, stuclass, courname, stuphoto')
+            .eq('ins_id', _insId)
+            .eq('activestatus', 1)
+            .eq('preadmission', 0);  // next year's intake: advance screens only
+        if (course != null) query = query.eq('courname', course);
+        if (section != null) query = query.eq('stuclass', section);
+        return query.order('stuname', ascending: true);
+      });
       final seen = <String>{};
       final deduped = <Map<String, dynamic>>[];
-      for (final s in List<Map<String, dynamic>>.from(rows)) {
+      for (final s in rows) {
         if (seen.add(s['stu_id']?.toString() ?? '')) deduped.add(s);
       }
-      if (mounted) setState(() => _filteredStudents = deduped);
-    } catch (_) {}
+      if (mounted && req == _filterReq) setState(() { _filteredStudents = deduped; _studentsLoading = false; });
+    } catch (e) {
+      if (mounted && req == _filterReq) setState(() { _studentsLoading = false; _error = friendlyError(e); });
+    }
   }
 
   // ── detail view: load the student's fee demands (editable) ────────────────
@@ -249,6 +290,21 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     });
     if (!student.containsKey('stuphoto')) _loadStudentPhoto(student['stu_id']);
     await _loadDemands();
+  }
+
+  /// Regular <-> Arrear: a voucher is one or the other, so amounts typed but
+  /// not saved for the other type are cleared rather than left hidden.
+  void _setSeqType(String type) {
+    if (type == _dSeqType) return;
+    setState(() {
+      for (final r in _demandRows.where((r) => r.editable)) {
+        r.conCtrl.text = '';
+      }
+      _dSeqType = type;
+      if (type == 'ARREAR') _mode = 'student'; // write-off is per student
+      _dSem = _dFeeType = null;
+      _page = 0;
+    });
   }
 
   /// A record opened from the concession list has no stuphoto column; look it
@@ -301,6 +357,23 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
         final cid = (e as Map)['con_id'];
         if (cid != null) { existing = cid.toString(); break; }
       }
+      // Lines already waiting for approval are shown as pending, locked.
+      try {
+        final stuId = _student?['stu_id'];
+        if (stuId != null && SupabaseService.sessionToken != null) {
+          final pend = await SupabaseService.client.rpc('concession_pending_lines',
+              params: {'p_token': SupabaseService.sessionToken, 'p_stu_id': stuId});
+          for (final x in (pend as List? ?? const [])) {
+            final m = x as Map;
+            final dem = (m['dem_id'] as num?)?.toInt();
+            for (final row in list.where((row) => row.demId == dem)) {
+              row.pendingAmount = (m['conamount'] as num?)?.toDouble() ?? 0;
+            }
+          }
+        }
+      } catch (_) {
+        // college / older database: no approval step
+      }
       if (!mounted) return;
       setState(() {
         _demandRows = list;
@@ -324,10 +397,12 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   }
 
   void _clearFilters() {
+    _filterReq++;
     setState(() {
       _selectedCourse = null;
       _selectedClass = null;
       _filteredStudents = [];
+      _studentsLoading = false;
       _page = 0;
       _error = null;
       if (_view == 'detail') { _dSem = _dFeeType = null; }
@@ -337,18 +412,19 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   // ── list filtering + KPIs ─────────────────────────────────────────────────
   List<Map<String, dynamic>> get _filteredList {
     return _allCon.where((r) {
+      if (_isArrearRec(r) != _arrear) return false;
       if (_selectedCourse != null && (r['courname']?.toString() != _selectedCourse)) return false;
       if (_selectedClass != null && (r['stuclass']?.toString() != _selectedClass)) return false;
       return true;
     }).toList();
   }
 
-  /// Students offered by the Student search. Course/Class narrow it when set,
-  /// but an empty filter still searches everyone.
-  List<Map<String, dynamic>> get _studentPool {
-    if (_filteredStudents.isNotEmpty) return _filteredStudents;
-    return _allStudents;
-  }
+  /// A Standard or Section is chosen: the list shows its students.
+  bool get _byFilter => _selectedCourse != null || _selectedClass != null;
+
+  /// Students offered by the Student search: those of the chosen Standard /
+  /// Section, or everyone when none is chosen.
+  List<Map<String, dynamic>> get _studentPool => _byFilter ? _filteredStudents : _allStudents;
 
   double _sum(List<Map<String, dynamic>> rows, String key) =>
       rows.fold(0.0, (s, r) => s + ((r[key] as num?)?.toDouble() ?? 0));
@@ -374,14 +450,15 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     });
   }
 
-  List<_ConRow> get _filteredDemands => _demandRows.where((r) {
+  /// The chosen type's lines (Regular or Arrear).
+  Iterable<_ConRow> get _typeRows => _demandRows.where((r) => r.seqType == _dSeqType);
+
+  List<_ConRow> get _filteredDemands => _typeRows.where((r) {
         if (_dSem != null && r.term != _dSem) return false;
         if (_dFeeType != null && r.feeType != _dFeeType) return false;
         return true;
       }).toList();
 
-  List<String> get _terms => (_demandRows.map((r) => r.term).where((s) => s.isNotEmpty).toSet().toList()..sort());
-  List<String> get _feeTypes => (_demandRows.map((r) => r.feeType).where((s) => s.isNotEmpty).toSet().toList()..sort());
 
   // ── save ──────────────────────────────────────────────────────────────────
   // True if a numbering sequence with this actname (e.g. CONNO) is configured.
@@ -397,17 +474,20 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
 
   Future<void> _saveConcession() async {
     if (_student == null) return;
-    final lines = _demandRows.where((r) => r.editable && r.concession > 0).toList();
+    final arrear = _dSeqType == 'ARREAR';
+    final lines = _typeRows.where((r) => r.editable && r.concession > 0).toList();
     if (lines.isEmpty) {
-      _popup('Nothing to Apply', 'Enter a concession amount on at least one unpaid fee line.', AppColors.warning, Icons.warning_amber_rounded);
+      _popup('Nothing to Apply', 'Enter a concession amount on at least one unpaid ${arrear ? 'arrear ' : ''}fee line.', AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
     if (_dConType == null || _dConType!.isEmpty) {
       _popup('Concession Category Required', 'Select a concession category under "Filter Concession" first. It is applied to these lines.', AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
-    if (!await _hasSequence('CONNO')) {
-      _popup('Sequence Required', 'Create a Concession No sequence in Setup → Fee Master → Concession No first.', AppColors.warning, Icons.warning_amber_rounded);
+    if (!await _hasSequence(arrear ? 'ARRCONNO' : 'CONNO')) {
+      _popup('Sequence Required',
+          'Create the ${arrear ? 'Arrear' : 'Regular'} concession series in Setup → Sequence Master → Concession No (Concession Type: ${arrear ? 'Arrear' : 'Regular'}) first.',
+          AppColors.warning, Icons.warning_amber_rounded);
       return;
     }
     setState(() => _detailSaving = true);
@@ -428,6 +508,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       final types = byType.keys.toList()
         ..sort((a, b) => a == b ? 0 : (a == 'REGULAR' ? -1 : 1));
 
+      var sentForApproval = 0;
       for (final type in types) {
         final group = byType[type]!;
         final totalFee = group.fold(0.0, (s, r) => s + r.feeAmount);
@@ -466,9 +547,11 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
             .toList();
 
         if (token != null && token.isNotEmpty) {
-          await SupabaseService.client.rpc('process_concession', params: {
+          final res = await SupabaseService.client.rpc('process_concession', params: {
             'p_token': token, 'p_header': header, 'p_lines': detailLines,
           });
+          // Negative = it went for approval (school_concession_approval.sql).
+          if (res is num && res < 0) sentForApproval++;
         } else {
           for (final r in group) {
             await SupabaseService.applyConcession(
@@ -479,9 +562,11 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       if (!mounted) return;
       setState(() => _detailSaving = false);
       _snack(
-          types.length > 1
-              ? 'Concession saved for ${_student!['stuname']} — separate vouchers for Regular and Arrear.'
-              : 'Concession saved for ${_student!['stuname']}.',
+          sentForApproval > 0
+              ? '${_arrear ? 'Arrear write-off' : 'Concession'} for ${_student!['stuname']} sent for approval -- it reduces the fees once approved in Fees → Concession Approval.'
+              : types.length > 1
+                  ? 'Concession saved for ${_student!['stuname']} — separate vouchers for Regular and Arrear.'
+                  : '${_arrear ? 'Arrear write-off' : 'Concession'} saved for ${_student!['stuname']}.',
           AppColors.success);
       await _loadDemands();
       // the list on the left shows the new voucher straight away
@@ -515,6 +600,13 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   InputDecoration _fieldDec(String hint) => AppUI.field(context, hint);
 
   TextStyle _fieldTextStyle() => AppUI.fieldText(context);
+
+  /// One line of dropdown text that shrinks to fit instead of wrapping onto
+  /// a clipped second line.
+  Widget _fitLine(String text) => Align(
+        alignment: Alignment.centerLeft,
+        child: AppFitText(text, style: _fieldTextStyle()),
+      );
 
   // Concession category is a label, not a status: one neutral/info pill for
   // every category (the text carries the meaning).
@@ -569,11 +661,26 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
               SizedBox(height: 2.h),
               Text(_mode == 'section'
                       ? schoolTerm('Concession for every student of a class with a concession category')
-                      : "Apply concession against a student's fee demands",
+                      : _arrear
+                          ? "Write off a student's arrear (previous year) dues"
+                          : "Apply concession against a student's fee demands",
                   style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
             ]),
           ),
-          if (isSchool)
+          // Regular Concession: one student or a whole section. Arrear
+          // Write-off: one student only (user, 2026-11-14).
+          ...[
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'REGULAR', label: Text('Regular Concession'), icon: Icon(Icons.discount_outlined, size: 16)),
+                ButtonSegment(value: 'ARREAR', label: Text('Arrear Write-off'), icon: Icon(Icons.history, size: 16)),
+              ],
+              selected: {_dSeqType},
+              onSelectionChanged: (v) => _setSeqType(v.first),
+            ),
+          ],
+          if (isSchool && !_arrear) ...[
+            SizedBox(width: 10.w),
             SegmentedButton<String>(
               segments: [
                 const ButtonSegment(value: 'student', label: Text('Single Student'), icon: Icon(Icons.person_outline, size: 16)),
@@ -582,16 +689,20 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
               selected: {_mode},
               onSelectionChanged: (v) => setState(() => _mode = v.first),
             ),
+          ],
         ]),
       );
 
   Widget _masterDetail() {
     final filtered = _filteredList;
     final picked = _view == 'detail' && _student != null;
+    final byFilter = _byFilter;
     return AppMasterDetail(
-      listTitle: 'Concessions',
-      listIcon: 'discount-shape',
-      listSubtitle: 'Search for a student to apply a new concession',
+      listTitle: byFilter ? 'Students' : (_arrear ? 'Arrear Write-offs' : 'Concessions'),
+      listIcon: byFilter ? 'people' : 'discount-shape',
+      listSubtitle: byFilter
+          ? (_arrear ? 'Pick a student to write off arrears' : 'Pick a student to apply a concession')
+          : (_arrear ? 'Search for a student to write off arrears' : 'Search for a student to apply a new concession'),
       listActions: [
         TextButton.icon(
           onPressed: _clearFilters,
@@ -601,8 +712,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       ],
       search: _studentSearch(),
       filters: [_courseClassFilters()],
-      list: _recordList(filtered),
-      footer: _recordFooter(filtered.length),
+      list: byFilter ? _studentList() : _recordList(filtered),
+      footer: _recordFooter(byFilter ? _filteredStudents.length : filtered.length),
       detail: picked ? _detailBody() : null,
       emptyDetail: _overview(filtered),
       showDetail: picked,
@@ -673,19 +784,22 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
 
   Widget _courseClassFilters() => Row(children: [
         Expanded(
-          child: DropdownButtonFormField<String>(
+          child: AppDropdownField<String>(
             initialValue: _courseNames.contains(_selectedCourse) ? _selectedCourse : null,
             isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('All Courses')),
             items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All Courses'))), ..._courseNames.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
+            // The shown value stays on one line and shrinks to fit, not "All" + a clipped "Standards".
+            selectedItemBuilder: (_) => [_fitLine(schoolTerm('All Courses')), for (final s in _courseNames) _fitLine(s)],
             onChanged: (v) => setState(() { _selectedCourse = v; if (_selectedClass != null && !_classNamesFor(v).contains(_selectedClass)) _selectedClass = null; _page = 0; _loadFromFilter(); }),
           ),
         ),
         SizedBox(width: 10.w),
         Expanded(
-          child: DropdownButtonFormField<String>(
+          child: AppDropdownField<String>(
             initialValue: _classNamesFor(_selectedCourse).contains(_selectedClass) ? _selectedClass : null,
             isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec(schoolTerm('All Classes')),
             items: [DropdownMenuItem<String>(value: null, child: Text(schoolTerm('All Classes'))), ..._classNamesFor(_selectedCourse).map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
+            selectedItemBuilder: (_) => [_fitLine(schoolTerm('All Classes')), for (final s in _classNamesFor(_selectedCourse)) _fitLine(s)],
             onChanged: (v) => setState(() { _selectedClass = v; _page = 0; _loadFromFilter(); }),
           ),
         ),
@@ -701,7 +815,7 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     if (filtered.isEmpty) {
       return Center(
         child: SingleChildScrollView(
-          child: EmptyState(icon: 'receipt-discount', title: 'No concession records', subtitle: _error ?? 'Search a student above to apply a concession', action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text(AppText.clearFilters))),
+          child: EmptyState(icon: 'receipt-discount', title: _arrear ? 'No arrear write-offs' : 'No concession records', subtitle: _error ?? (_arrear ? 'Search a student above to write off arrears' : 'Search a student above to apply a concession'), action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text(AppText.clearFilters))),
         ),
       );
     }
@@ -714,6 +828,64 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       itemCount: pageRows.length,
       separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
       itemBuilder: (_, i) => _recordTile(pageRows[i]),
+    );
+  }
+
+  /// The students of the chosen Standard / Section, with the concession each
+  /// already has this year. Tapping one opens their fee demands on the right.
+  Widget _studentList() {
+    if (_studentsLoading) return const AppLoading(label: 'Loading students…');
+    final rows = _filteredStudents;
+    if (rows.isEmpty) {
+      final where = _selectedClass ?? _selectedCourse ?? '';
+      return Center(
+        child: SingleChildScrollView(
+          child: EmptyState(icon: 'people', title: 'No students', subtitle: _error ?? 'No active student is in $where.', action: OutlinedButton.icon(onPressed: _clearFilters, icon: const AppIcon('refresh', size: 15, color: AppColors.primary), label: const Text(AppText.clearFilters))),
+        ),
+      );
+    }
+    final given = <String, double>{};
+    for (final c in _allCon.where((c) => _isArrearRec(c) == _arrear)) {
+      final k = c['stu_id']?.toString() ?? '';
+      given[k] = (given[k] ?? 0) + ((c['totalconcession'] as num?)?.toDouble() ?? 0);
+    }
+    final pageCount = (rows.length / _pageSize).ceil();
+    if (_page >= pageCount) _page = pageCount - 1;
+    final start = _page * _pageSize;
+    final pageRows = rows.sublist(start, (start + _pageSize).clamp(0, rows.length));
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: pageRows.length,
+      separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
+      itemBuilder: (_, i) {
+        final s = pageRows[i];
+        final sel = _view == 'detail' && _student != null && _student!['stu_id']?.toString() == s['stu_id']?.toString();
+        final cls = [s['courname'], s['stuclass']].map((e) => e?.toString().trim() ?? '').where((x) => x.isNotEmpty).join(' / ');
+        final amt = given[s['stu_id']?.toString() ?? ''] ?? 0;
+        return Material(
+          color: sel ? AppColors.primaryLight : Colors.white,
+          child: InkWell(
+            onTap: () => _openDetail(s),
+            hoverColor: AppColors.primaryLight.withValues(alpha: 0.6),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: AppUI.cardPad, vertical: 10.h),
+              child: Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(s['stuname']?.toString() ?? '', style: AppUI.label.copyWith(color: sel ? AppColors.primary : AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    SizedBox(height: 2.h),
+                    Text('${s['stuadmno'] ?? ''}${cls.isEmpty ? '' : '  ·  $cls'}', style: AppUI.muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ]),
+                ),
+                SizedBox(width: 10.w),
+                amt > 0
+                    ? Text(_inr(amt), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: sel ? AppColors.primary : AppColors.textPrimary))
+                    : Text('No concession', style: AppUI.muted.copyWith(fontSize: 12.sp)),
+              ]),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -746,7 +918,12 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Text(((r['totalconcession'] as num?)?.toDouble() ?? 0).toStringAsFixed(2), textAlign: TextAlign.right, style: AppUI.money.copyWith(color: sel ? AppColors.primary : AppColors.textPrimary)),
               SizedBox(height: 6.h),
-              ConstrainedBox(constraints: BoxConstraints(maxWidth: 130.w), child: _typeBadge(r['contype']?.toString() ?? '')),
+              // Wide enough for a full category name ("PANDEMIC CONCESSION"
+              // was cut off at 130); the tooltip covers anything longer.
+              Tooltip(
+                message: r['contype']?.toString() ?? '',
+                child: ConstrainedBox(constraints: BoxConstraints(maxWidth: 210.w), child: _typeBadge(r['contype']?.toString() ?? '')),
+              ),
             ]),
           ]),
         ),
@@ -799,10 +976,10 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         AppUI.sectionLabel('Overview'),
         _kpiGrid([
-          _kpiCard(icon: 'discount-shape', tint: AppColors.primary, value: '${filtered.length}', label: 'Total Concessions', sub: 'This Year'),
+          _kpiCard(icon: 'discount-shape', tint: AppColors.primary, value: '${filtered.length}', label: _arrear ? 'Total Write-offs' : 'Total Concessions', sub: 'This Year'),
           _kpiCard(icon: 'wallet-money', tint: AppColors.success, value: _inr(totalAmt), label: 'Total Amount', sub: 'This Year'),
           _kpiCard(icon: 'people', tint: AppColors.demand, value: '$students', label: 'Total Students', sub: 'This Year'),
-          _kpiCard(icon: 'chart-1', tint: AppColors.warning, value: _inr(avg), label: 'Average Concession', sub: 'Per Student'),
+          _kpiCard(icon: 'chart-1', tint: AppColors.warning, value: _inr(avg), label: _arrear ? 'Average Write-off' : 'Average Concession', sub: 'Per Student'),
         ]),
         SizedBox(height: 40.h),
         AppUI.empty(
@@ -821,18 +998,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     final totalPaid = rows.fold(0.0, (s, r) => s + r.paidAmount);
     final totalCon = rows.fold(0.0, (s, r) => s + r.concession);
     // Net Payable = Fee − Paid − Concession (the sum of the Balance column), so
-    // the four cards tally: Fee − Paid − Concession = Net Payable.
+    // the footer tallies: Fee − Paid − Concession = Net Payable.
     final netPayable = rows.fold(0.0, (s, r) => s + r.balance);
-
-    // Regular / arrear split for the card sub-lines. Only shown when the
-    // student actually has both — otherwise the headline figure IS the split.
-    final reg = rows.where((r) => r.seqType != 'ARREAR').toList();
-    final arr = rows.where((r) => r.seqType == 'ARREAR').toList();
-    final mixed = reg.isNotEmpty && arr.isNotEmpty;
-    String? split(double Function(_ConRow) f) => !mixed
-        ? null
-        : 'Regular ${reg.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}'
-            '  •  Arrear ${arr.fold(0.0, (s, r) => s + f(r)).toStringAsFixed(0)}';
     // Keyed by student so switching students straight from the list starts a
     // fresh detail (as opening it from the old list view did).
     return KeyedSubtree(
@@ -840,13 +1007,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(child: SingleChildScrollView(padding: EdgeInsets.fromLTRB(AppUI.cardPad, AppUI.cardPad, AppUI.cardPad, 12.h), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _detailFilterCard(),
-          SizedBox(height: AppUI.gap),
-          _kpiGrid([
-            _kpiCard(icon: 'receipt-1', tint: AppColors.primary, value: _inr(totalFee), label: 'Total Fee Amount', sub: split((r) => r.feeAmount)),
-            _kpiCard(icon: 'money-recive', tint: AppColors.today, value: _inr(totalPaid), label: 'Total Paid', sub: split((r) => r.paidAmount)),
-            _kpiCard(icon: 'discount-shape', tint: AppColors.success, value: _inr(totalCon), label: 'Total Concession', sub: split((r) => r.concession)),
-            _kpiCard(icon: 'wallet-money', tint: AppColors.warning, value: _inr(netPayable), label: 'Net Payable', sub: split((r) => r.balance)),
-          ]),
+          // (The four total cards were removed -- user, 2026-11-14; the
+          // footer bar carries the same totals.)
           SizedBox(height: AppUI.gap),
           Row(children: [
             _stepBadge(3, schoolTerm('Fee Demands by Semester')),
@@ -864,18 +1026,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
   Widget _detailFilterCard() {
     final s = _student!;
     final name = s['stuname']?.toString() ?? '';
-    final termDrop = _filterCol((isSchool ? 'Term' : 'Semester / Term'), DropdownButtonFormField<String>(
-      initialValue: _dSem, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('All Terms'),
-      items: [const DropdownMenuItem<String>(value: null, child: Text('All Terms')), ..._terms.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
-      onChanged: (v) => setState(() => _dSem = v),
-    ));
-    final feeTypeDrop = _filterCol('Fee Type', DropdownButtonFormField<String>(
-      initialValue: _dFeeType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('All Fee Types'),
-      items: [const DropdownMenuItem<String>(value: null, child: Text('All Fee Types')), ..._feeTypes.map((s) => DropdownMenuItem(value: s, child: Text(s, overflow: TextOverflow.ellipsis)))],
-      onChanged: (v) => setState(() => _dFeeType = v),
-    ));
     // Required: Save refuses without it ("Concession Category Required").
-    final conTypeDrop = _filterCol('Concession Category', DropdownButtonFormField<String>(
+    final conTypeDrop = _filterCol('Concession Category', AppDropdownField<String>(
       initialValue: _dConType, isExpanded: true, dropdownColor: Colors.white, borderRadius: BorderRadius.circular(12), elevation: 6, style: _fieldTextStyle(), decoration: _fieldDec('Select concession category'),
       items: _conTypes.map((t) => DropdownMenuItem(value: t['con_id'].toString(), child: Text(t['condesc']?.toString() ?? '', overflow: TextOverflow.ellipsis))).toList(),
       onChanged: (v) => setState(() => _dConType = v),
@@ -927,35 +1079,15 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
           ]),
         ),
         SizedBox(height: 18.h),
-        // Step 2: filters + apply category (one row when wide, 2x2 when narrow)
-        Align(alignment: Alignment.centerLeft, child: _stepBadge(2, 'Filter Concession')),
+        // Step 2: the category applied + an optional % for every line. (The
+        // Term / Fee Type filters were removed -- user, 2026-11-14.)
+        Align(alignment: Alignment.centerLeft, child: _stepBadge(2, 'Concession Details')),
         SizedBox(height: 10.h),
-        LayoutBuilder(builder: (context, c) {
-          if (c.maxWidth >= 760) {
-            return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(child: termDrop),
-              SizedBox(width: 10.w),
-              Expanded(child: feeTypeDrop),
-              SizedBox(width: 10.w),
-              Expanded(child: conTypeDrop),
-              SizedBox(width: 10.w),
-              SizedBox(width: 190.w, child: pctBox),
-            ]);
-          }
-          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(child: termDrop),
-              SizedBox(width: 10.w),
-              Expanded(child: feeTypeDrop),
-            ]),
-            SizedBox(height: 12.h),
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Expanded(child: conTypeDrop),
-              SizedBox(width: 10.w),
-              SizedBox(width: 190.w, child: pctBox),
-            ]),
-          ]);
-        }),
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Expanded(child: conTypeDrop),
+          SizedBox(width: 10.w),
+          SizedBox(width: 260.w, child: pctBox),
+        ]),
       ]),
     );
   }
@@ -965,7 +1097,13 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
     if (_demandLoading) return SizedBox(height: 240.h, child: const AppLoading(label: 'Loading fee demands…'));
     if (rows.isEmpty) {
       return Container(constraints: BoxConstraints(minHeight: 220.h), alignment: Alignment.center, padding: EdgeInsets.symmetric(vertical: 24.h),
-          child: EmptyState(icon: 'receipt-discount', title: 'No fee demands', subtitle: _error ?? 'This student has no active fee demands to apply a concession on'));
+          child: EmptyState(
+              icon: 'receipt-discount',
+              title: _dSeqType == 'ARREAR' ? 'No arrear fee demands' : 'No fee demands',
+              subtitle: _error ??
+                  (_dSeqType == 'ARREAR'
+                      ? 'This student has no arrear (previous year) dues. Choose Regular Concession for this year\'s fees.'
+                      : 'This student has no active fee demands to apply a concession on')));
     }
     // Regular and arrear are different money and are collected on separate
     // receipts, so they get their own blocks rather than being mixed by term.
@@ -1081,6 +1219,23 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
                         setState(() {});
                       },
                     )
+                  : r.pendingAmount != null
+                      ? Tooltip(
+                          message: 'Concession of ${r.pendingAmount!.toStringAsFixed(2)} waiting in Fees → Concession Approval',
+                          // Shrinks to the cell rather than overflowing it.
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                Icon(Icons.hourglass_top_rounded, size: 12.sp, color: AppColors.warning),
+                                SizedBox(width: 5.w),
+                                Text('${r.pendingAmount!.toStringAsFixed(2)} pending',
+                                    style: AppUI.money.copyWith(color: AppColors.warning)),
+                              ]),
+                            ),
+                          ),
+                        )
                   : r.isApplied
                       ? Row(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
                           Icon(Icons.lock, size: 12.sp, color: AppColors.textLight),
@@ -1125,7 +1280,8 @@ class _FeeConcessionScreenState extends State<FeeConcessionScreen> {
         ElevatedButton.icon(
           onPressed: _detailSaving ? null : _saveConcession,
           icon: _detailSaving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check, size: 16, color: Colors.white),
-          label: const Text('Save Concession'),
+          // School: every concession waits in Concession Approval.
+          label: Text(isSchool ? 'Send for Approval' : (_arrear ? 'Save Write-off' : 'Save Concession')),
         ),
       ]),
     );

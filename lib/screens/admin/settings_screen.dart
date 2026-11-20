@@ -11,6 +11,9 @@ import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/pill_tab.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/formatters.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../widgets/sequence_ui.dart';
+import '../../widgets/sequence_type_field.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -264,7 +267,7 @@ class _StaffDesignationTabState extends State<_StaffDesignationTab> with Automat
                       validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
                     ),
                     SizedBox(height: 16.h),
-                    DropdownButtonFormField<int?>(
+                    AppDropdownField<int?>(
                       value: _selectedReportTo,
                       icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                       dropdownColor: Colors.white,
@@ -682,7 +685,13 @@ class _CustomRolesTabState extends State<_CustomRolesTab> with AutomaticKeepAliv
 // ==================== Tab 3: Payment Sequence ====================
 
 class PaymentSequenceTab extends StatefulWidget {
-  const PaymentSequenceTab({super.key});
+  /// null = the regular fee receipt series. ADVFEENO = Advance Receipt No.,
+  /// ARRFEENO = Arrear Receipt No., MISCFEENO = Miscellaneous Receipt No.:
+  /// their own series, one per fee group
+  /// (division 'FG:<fg_id>'). fg_id stays empty on those rows: that column
+  /// marks a REGULAR fee receipt series.
+  final String? series;
+  const PaymentSequenceTab({super.key, this.series});
 
   @override
   State<PaymentSequenceTab> createState() => PaymentSequenceTabState();
@@ -696,6 +705,88 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
   final _widthController = TextEditingController(text: '5');
   final _prefixController = TextEditingController();
   String? _selectedFgId; // fee group being configured in the create form
+  Map<String, dynamic>? _editing; // the receipt sequence being edited
+
+  bool get _adv => widget.series != null;
+
+  /// What this tab's series are called.
+  String get _kind => switch (widget.series) {
+        'ADVFEENO' => 'Advance Receipt',
+        'ARRFEENO' => 'Arrear Receipt',
+        'MISCFEENO' => 'Miscellaneous Receipt',
+        _ => 'Receipt',
+      };
+
+  /// This series is listed on this tab.
+  bool _inTab(Map<String, dynamic> s) => _adv ? s['actname'] == widget.series : s['fg_id'] != null;
+
+  /// The fee group a series belongs to.
+  int? _fgOf(Map<String, dynamic> s) => _adv
+      ? int.tryParse('${s['division'] ?? ''}'.replaceFirst('FG:', ''))
+      : (s['fg_id'] as num?)?.toInt();
+
+  /// Two series with one prefix would issue the same receipt number.
+  bool _prefixTaken(String prefix) =>
+      _adv &&
+      _sequences.any((s) =>
+          '${s['seqprefix'] ?? ''}'.toUpperCase() == prefix.toUpperCase() && s['seq_id'] != _editing?['seq_id']);
+
+  void _edit(Map<String, dynamic> s) {
+    setState(() {
+      _editing = s;
+      _selectedFgId = _fgOf(s)?.toString();
+      _prefixController.text = s['seqprefix']?.toString() ?? '';
+      _widthController.text = '${(s['seqwidth'] as num?)?.toInt() ?? 4}';
+    });
+  }
+
+  void _cancelEdit() => setState(() {
+        _editing = null;
+        _selectedFgId = null;
+        _prefixController.clear();
+        _widthController.text = '5';
+      });
+
+  Future<void> _updateEditing() async {
+    final e = _editing;
+    if (e == null) return;
+    final prefix = _prefixController.text.trim().toUpperCase();
+    if (prefix.isEmpty) { _snack('Enter a prefix.', AppColors.warning); return; }
+    if (_prefixTaken(prefix)) { _snack('$prefix is already used by another series. Enter a different prefix.', AppColors.warning); return; }
+    final width = (int.tryParse(_widthController.text.trim()) ?? 4).clamp(1, 9);
+    setState(() => _isSaving = true);
+    try {
+      await SupabaseService.saveSchemaRow('sequence', {
+        'seqprefix': prefix,
+        'seqname': prefix,
+        'seqwidth': width,
+        'sequid': '$prefix${'1'.padLeft(width, '0')}',
+      }, pkCol: 'seq_id', pkVal: (e['seq_id'] as num).toInt());
+      _cancelEdit();
+      _snack('Receipt sequence updated.', AppColors.success);
+      await _fetchData();
+    } catch (err) {
+      _snack('Could not save the sequence. ${friendlyError(err)}', AppColors.error);
+    }
+    if (mounted) setState(() => _isSaving = false);
+  }
+
+  Future<void> _delete(Map<String, dynamic> s, String name) async {
+    if (!await SequenceUI.confirmDelete(context,
+        name: name,
+        current: (s['seqcurno'] as num?)?.toInt() ?? 0,
+        start: (s['seqstart'] as num?)?.toInt() ?? 1)) {
+      return;
+    }
+    try {
+      await SupabaseService.deleteSchemaRow('sequence', 'seq_id', (s['seq_id'] as num).toInt());
+      if (_editing?['seq_id'] == s['seq_id']) _cancelEdit();
+      _snack('Receipt sequence deleted.', AppColors.success);
+      await _fetchData();
+    } catch (err) {
+      _snack('Could not delete the sequence. ${friendlyError(err)}', AppColors.error);
+    }
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -731,6 +822,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
       final seqResult = await SupabaseService.fromSchema('sequence')
           .select()
           .eq('ins_id', insId)
+          .eq('activestatus', 1) // deleted ones are switched off
           .neq('actname', 'REGNO'); // exclude register-number sequences
       if (mounted) {
         setState(() {
@@ -750,7 +842,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
 
   Map<String, dynamic>? _getSequenceForFg(int fgId) {
     try {
-      return _sequences.firstWhere((s) => s['fg_id'] == fgId);
+      return _sequences.firstWhere((s) => _inTab(s) && _fgOf(s) == fgId);
     } catch (_) {
       return null;
     }
@@ -782,7 +874,7 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
         'mod_id': 0,
         'yr_id': yrId,
         'yrlabel': yrLabel,
-        'actname': fgDesc,
+        'actname': widget.series ?? fgDesc,
         'seqname': prefix.toUpperCase(),
         'isprefix': 'Y',
         'seqprefix': prefix.toUpperCase(),
@@ -790,12 +882,12 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
         'seqwidth': width,
         'sequid': sequid,
         'seqcurno': 0,
-        'fg_id': fgId,
+        if (_adv) 'division': 'FG:$fgId' else 'fg_id': fgId,
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Receipt sequence created for $fgDesc.'), backgroundColor: AppColors.success),
+          SnackBar(content: Text('$_kind sequence created for $fgDesc.'), backgroundColor: AppColors.success),
         );
         _fetchData();
       }
@@ -815,30 +907,37 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
 
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
+    // No fee groups yet: these series have to wait, but the Sequence Type
+    // dropdown stays, or Sequence Master could not reach the series that need
+    // no fee group (Admission No., Refund No. ...).
     if (_feeGroups.isEmpty) {
-      return Padding(
-        padding: EdgeInsets.all(24.w),
-        child: AppUI.empty(title: 'No fee groups found', why: 'Add fee groups first in Setup > Fee Master > Fee Group.', icon: 'receipt-1'),
+      return SequenceUI.layout(
+        form: Container(
+          padding: EdgeInsets.all(AppUI.cardPad),
+          decoration: AppUI.card(),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('$_kind No. Sequence', style: AppUI.cardTitle),
+            SizedBox(height: 20.h),
+            const SequenceTypeField(),
+            Text('This sequence is created for each fee group, so add the fee groups first.', style: AppUI.muted),
+          ]),
+        ),
+        list: Container(
+          height: double.infinity,
+          decoration: AppUI.card(),
+          child: AppUI.empty(title: 'No fee groups found', why: 'Add fee groups first in Setup → Fee Master → Fee Group.', icon: 'receipt-1'),
+        ),
       );
     }
 
-    return Padding(
-      padding: EdgeInsets.only(top: 8.h),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 340.w, child: _form()),
-          SizedBox(width: AppUI.gap),
-          Expanded(child: _list()),
-        ],
-      ),
-    );
+    return SequenceUI.layout(form: _form(), list: _list());
   }
 
   /// Fee group's initials, max 3 chars — the suggested prefix.
   String _autoPrefix(String fgDesc) {
     final initials = fgDesc.split(' ').where((w) => w.isNotEmpty).map((w) => w[0]).join().toUpperCase();
-    return initials.isEmpty ? '' : initials.substring(0, initials.length.clamp(0, 3));
+    final p = initials.isEmpty ? '' : initials.substring(0, initials.length.clamp(0, 3));
+    return _adv && p.isNotEmpty ? '${widget.series == 'ARRFEENO' ? 'R' : _kind[0]}$p' : p;
   }
 
   Widget _lbl(String t) => Text(t, style: AppUI.label);
@@ -859,38 +958,35 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
     if (fgId == null) { _snack('Select a fee group.', AppColors.warning); return; }
     final prefix = _prefixController.text.trim();
     if (prefix.isEmpty) { _snack('Enter a prefix.', AppColors.warning); return; }
+    if (_prefixTaken(prefix)) { _snack('$prefix is already used by another series. Enter a different prefix.', AppColors.warning); return; }
     final fg = _feeGroups.firstWhere((g) => g['fg_id'] == fgId, orElse: () => const {});
     await _saveSequenceForFg(fgId, fg['fgdesc']?.toString() ?? '', prefix);
     if (mounted) setState(() { _selectedFgId = null; _prefixController.clear(); });
   }
 
-  /// Left panel — create form (Fee Group + Prefix + Width), mirroring the
-  /// Admission Number Sequencing panel.
+  /// The form card every sequence screen shares (SequenceUI).
   Widget _form() {
     // Only fee groups without a sequence yet can be configured.
-    final available = _feeGroups.where((fg) => _getSequenceForFg(fg['fg_id'] as int) == null).toList();
+    final editFg = _editing == null ? null : _fgOf(_editing!);
+    final available = _feeGroups
+        .where((fg) => fg['fg_id'] == editFg || _getSequenceForFg(fg['fg_id'] as int) == null)
+        .toList();
     final width = int.tryParse(_widthController.text.trim()) ?? 4;
     final preview = '${_prefixController.text.trim()}${'1'.padLeft(width, '0')}';
     final safeFg = available.any((fg) => fg['fg_id'].toString() == _selectedFgId) ? _selectedFgId : null;
-    return Container(
-      padding: EdgeInsets.all(AppUI.cardPad),
-      decoration: AppUI.card(),
-      child: FocusTraversalGroup(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children: [
-              Icon(Icons.receipt_long_rounded, color: AppColors.accent, size: 20.sp),
-              SizedBox(width: 8.w),
-              Expanded(child: Text('Receipt Sequence', style: AppUI.cardTitle)),
-            ]),
-            SizedBox(height: 4.h),
-            Text('Set up the receipt number sequence for a fee group', style: AppUI.muted),
-            SizedBox(height: 20.h),
+    return SequenceUI.formCard(
+      title: '$_kind No. Sequence',
+      subtitle: 'One ${_kind.toLowerCase()} sequence for each fee group',
+      preview: _prefixController.text.trim().isEmpty ? null : preview,
+      button: SequenceUI.saveButton(
+          saving: _isSaving,
+          editing: _editing != null,
+          onPressed: _editing != null ? _updateEditing : (available.isEmpty ? null : _createFromForm)),
+      onCancel: _editing == null ? null : _cancelEdit,
+      fields: [
             _lbl('Fee Group *'),
             SizedBox(height: 6.h),
-            DropdownButtonFormField<String>(
+            AppDropdownField<String>(
               initialValue: safeFg,
               isExpanded: true,
               dropdownColor: Colors.white,
@@ -899,7 +995,8 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               style: AppUI.fieldText(context),
               decoration: _dec(available.isEmpty ? 'All fee groups configured' : 'Select fee group', filled: safeFg != null),
               items: available.map((fg) => DropdownMenuItem(value: fg['fg_id'].toString(), child: Text(fg['fgdesc']?.toString() ?? '', style: AppUI.fieldText(context), overflow: TextOverflow.ellipsis))).toList(),
-              onChanged: available.isEmpty ? null : (v) => setState(() {
+              // The fee group of a sequence being edited can't change.
+              onChanged: available.isEmpty || _editing != null ? null : (v) => setState(() {
                 _selectedFgId = v;
                 final fg = available.firstWhere((g) => g['fg_id'].toString() == v, orElse: () => const {});
                 _prefixController.text = _autoPrefix(fg['fgdesc']?.toString() ?? '');
@@ -925,100 +1022,34 @@ class PaymentSequenceTabState extends State<PaymentSequenceTab> with AutomaticKe
               style: AppUI.fieldText(context, filled: _widthController.text.trim().isNotEmpty),
               decoration: _dec('e.g. 5', filled: _widthController.text.trim().isNotEmpty),
             ),
-            SizedBox(height: 12.h),
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-              decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(AppUI.controlRadius)),
-              child: Row(children: [
-                Text('Preview:  ', style: AppUI.muted),
-                Expanded(child: Text(_prefixController.text.trim().isEmpty ? 'Enter a prefix to see the preview' : preview, style: AppUI.money.copyWith(color: AppColors.primary), overflow: TextOverflow.ellipsis)),
-              ]),
-            ),
-            SizedBox(height: 18.h),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: (_isSaving || available.isEmpty) ? null : _createFromForm,
-                icon: _isSaving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.add, size: 16),
-                label: const Text(AppText.save),
-              ),
-            ),
-            SizedBox(height: 10.h),
-            AppUI.requiredNote(),
-          ],
-        ),
-      ),
+      ],
     );
   }
 
-  /// Right panel — configured payment sequences.
+  /// The list every sequence screen shares (SequenceUI).
   Widget _list() {
-    final rows = _sequences.where((s) => s['fg_id'] != null).toList();
-    final fgName = { for (final g in _feeGroups) g['fg_id']: g['fgdesc']?.toString() ?? '' };
-    TextStyle h() => AppUI.tableHead;
-    TextStyle c() => AppUI.cell;
-    return Container(
-      padding: EdgeInsets.all(AppUI.cardPad),
-      decoration: AppUI.card(),
-      child: Column(
-        children: [
-          Padding(
-            padding: EdgeInsets.only(left: 4.w, right: 4.w, bottom: 10.h),
-            child: Row(children: [
-              Icon(Icons.receipt_long_rounded, color: AppColors.accent, size: 18.sp),
-              SizedBox(width: 8.w),
-              Text('Receipt Sequences', style: AppUI.cardTitle),
-              SizedBox(width: 10.w),
-              AppUI.chip('${rows.length} sequences', AppStatus.info),
-              const Spacer(),
-            ]),
-          ),
-          Expanded(
-            child: Container(
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(AppUI.controlRadius), border: Border.all(color: AppColors.cardBorder)),
-              child: Column(
-                children: [
-                  Container(
-                    color: AppColors.tableHeadBg,
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                    child: Row(children: [
-                      Expanded(flex: 3, child: Text('FEE GROUP', style: h())),
-                      SizedBox(width: 90.w, child: Text('PREFIX', style: h())),
-                      SizedBox(width: 120.w, child: Text('PREVIEW', style: h())),
-                      SizedBox(width: 100.w, child: Text('LAST ISSUED', textAlign: TextAlign.right, style: h())),
-                    ]),
-                  ),
-                  Expanded(
-                    child: rows.isEmpty
-                        ? AppUI.empty(title: 'No receipt sequences yet', why: 'Create one with the form on the left.', icon: 'receipt-1')
-                        : ListView.separated(
-                            itemCount: rows.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1, color: AppColors.divider),
-                            itemBuilder: (_, i) {
-                              final s = rows[i];
-                              final prefix = s['seqprefix']?.toString() ?? '';
-                              final width = (s['seqwidth'] as num?)?.toInt() ?? 4;
-                              final preview = '$prefix${'1'.padLeft(width, '0')}';
-                              return Container(
-                                color: i.isEven ? Colors.white : AppColors.surface,
-                                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
-                                child: Row(children: [
-                                  Expanded(flex: 3, child: Text(fgName[s['fg_id']] ?? s['actname']?.toString() ?? '', style: c(), overflow: TextOverflow.ellipsis)),
-                                  SizedBox(width: 90.w, child: Text(prefix, style: AppUI.cell.copyWith(fontWeight: FontWeight.w700, color: AppColors.primary))),
-                                  SizedBox(width: 120.w, child: Text(preview, style: AppUI.cell.copyWith(color: AppColors.primary))),
-                                  SizedBox(width: 100.w, child: Text('${s['seqcurno'] ?? 0}', textAlign: TextAlign.right, style: c())),
-                                ]),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    final rows = _sequences.where(_inTab).toList();
+    final fgName = {for (final g in _feeGroups) g['fg_id']: g['fgdesc']?.toString() ?? ''};
+    return SequenceUI.listCard(
+      title: '$_kind No. Sequences',
+      loading: false,
+      emptyTitle: 'No ${_kind.toLowerCase()} sequences yet',
+      emptyWhy: 'Create one with the form on the left.',
+      rows: rows.map((s) {
+        final prefix = s['seqprefix']?.toString() ?? '';
+        final width = (s['seqwidth'] as num?)?.toInt() ?? 4;
+        final start = (s['seqstart'] as num?)?.toInt() ?? 1;
+        final cur = (s['seqcurno'] as num?)?.toInt() ?? 0;
+        return SeqRow(
+          name: fgName[_fgOf(s)] ?? (_adv ? 'Any fee group' : s['actname']?.toString() ?? ''),
+          prefix: prefix,
+          next: SequenceUI.nextNumber(affix: prefix, current: cur, start: start, width: width),
+          lastIssued: SequenceUI.lastIssued(current: cur, start: start),
+          selected: _editing?['seq_id'] == s['seq_id'],
+          onEdit: () => _edit(s),
+          onDelete: () => _delete(s, fgName[_fgOf(s)] ?? prefix),
+        );
+      }).toList(),
     );
   }
 
@@ -1269,7 +1300,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                   SizedBox(height: 14.h),
                   _fieldLabel('Fee Type', required: true),
                   SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
+                  AppDropdownField<String>(
                     value: _feeType,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                     isExpanded: true,
@@ -1314,7 +1345,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                               keyboardType: TextInputType.number,
                               style: _fieldTextStyle(filled: _toDaysCtrl.text.trim().isNotEmpty),
                               onChanged: (_) => setState(() {}),
-                              decoration: _fieldDecoration(hint: 'Leave blank for no upper limit', filled: _toDaysCtrl.text.trim().isNotEmpty),
+                              decoration: _fieldDecoration(hint: 'Blank = no limit', filled: _toDaysCtrl.text.trim().isNotEmpty),
                             ),
                           ],
                         ),
@@ -1324,7 +1355,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                   SizedBox(height: 14.h),
                   _fieldLabel('Fine Type', required: true),
                   SizedBox(height: 6.h),
-                  DropdownButtonFormField<String>(
+                  AppDropdownField<String>(
                     value: _fineType,
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                     isExpanded: true,
@@ -1409,7 +1440,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                         SizedBox(width: 8.w),
                         Text('Fine Rules', style: AppUI.cardTitle),
                         const Spacer(),
-                        Text('${_rules.length} rules', style: AppUI.muted),
+                        Text('${_rules.length} rule${_rules.length == 1 ? '' : 's'}', style: AppUI.muted),
                         SizedBox(width: AppBtn.gap(context)),
                         SizedBox(
                           height: AppBtn.height(context),
@@ -1438,7 +1469,7 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
                               borderRadius: BorderRadius.circular(10.r),
                             ),
                             child: Builder(builder: (ctx) {
-                              const flexes = <int>[3, 2, 2, 2, 2, 2, 2];
+                              const flexes = <int>[3, 3, 2, 2, 3, 2, 2];
                               const headers = <String>[
                                 'RULE NAME', 'FEE TYPE', 'FROM DAY', 'TO DAY',
                                 'FINE TYPE', 'VALUE', 'ACTION',
@@ -1638,7 +1669,8 @@ class FineRulesTabState extends State<FineRulesTab> with AutomaticKeepAliveClien
             : color == AppColors.error
                 ? AppStatus.danger
                 : AppStatus.info;
-    return AppUI.chip(label, status);
+    // Shrink rather than cut the chip when the column is narrow.
+    return FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: AppUI.chip(label, status));
   }
 
   // Plain icon button - matches the other Fee Master tabs (MasterCrudPanel):

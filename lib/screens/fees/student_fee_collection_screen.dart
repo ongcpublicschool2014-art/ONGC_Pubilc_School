@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -15,10 +16,15 @@ import '../../utils/friendly_error.dart';
 import '../../utils/formatters.dart';
 import '../../utils/receipt_pdf.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
+import '../../widgets/missing_sequence_dialog.dart';
 import '../../services/supabase_service.dart';
 import '../../services/paytm_service.dart';
 import '../../widgets/paytm_checkout_dialog.dart';
+import '../../services/online_payment_service.dart';
+import '../../widgets/gateway_checkout_dialog.dart';
+import '../../utils/payment_gateways.dart';
 import '../../widgets/receipt_widget.dart';
+import '../../widgets/receipt_preview.dart';
 import 'student_fee_definition_dialog.dart';
 import 'advance_adjust_dialog.dart';
 
@@ -28,6 +34,8 @@ import '../../widgets/student_avatar.dart';
 import '../../widgets/focusable_tap.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/school_terms.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 // Class ordering (course, then year) lives in utils/class_sort.dart -> classCompare.
 
 const _termOrder = [
@@ -235,6 +243,13 @@ class _StudentFeeCollectionScreenState
   // the inline chips in the bottom bar before the action button is enabled.
   String? _paymentMode;
 
+  /// The school's gateway from Setup > Payment Gateways, or null when none is
+  /// set up. When there is one, 'Online' replaces the old Paytm mode.
+  OnlineGateway? _onlineGateway;
+
+  /// Paytm and the Setup gateways both open a gateway window.
+  bool get _isGatewayMode => _paymentMode == 'Paytm' || _paymentMode == 'Online';
+
   // Fee-group lookup for the demand table's group headers (see
   // _loadFeeGroupMap): fee type name -> fg_id, fg_id -> fee group name.
   final Map<String, int> _fgOfFeeType = {};
@@ -245,6 +260,18 @@ class _StudentFeeCollectionScreenState
   // groups included. The card says so up front instead.
   final Set<int> _fgWithoutBank = {};
   final Set<int> _fgWithoutSeq = {};
+  // School: arrear fees are receipted from their own series, one per group.
+  final Set<int> _fgWithoutArrearSeq = {};
+
+  /// The fee group cannot be receipted for the kind of fee on screen.
+  bool _seqMissing(int fg) =>
+      isSchool && _seqType == 'ARREAR' ? _fgWithoutArrearSeq.contains(fg) : _fgWithoutSeq.contains(fg);
+
+  /// Fee groups that have an arrear receipt series (division 'FG:<fg_id>').
+  static Set<int> _arrearSeriesGroups(List rows) => {
+        for (final q in rows)
+          if (q['actname'] == 'ARRFEENO') int.tryParse('${q['division'] ?? ''}'.replaceFirst('FG:', '')) ?? -1,
+      };
   // fg_id -> the bank account the group is mapped to. Also names the Paytm
   // merchant an online payment of that group settles into (bank.paytm_mid).
   final Map<int, int> _fgBankId = {};
@@ -273,7 +300,7 @@ class _StudentFeeCollectionScreenState
   final Map<String, Timer> _conFlipTimers = {};
   // Debounces the student search so we don't fire 2 DB round-trips per keystroke.
   Timer? _searchDebounce;
-  final Set<String> _selected = {};
+  final _HeldAwareSet _selected = _HeldAwareSet();
   List<Map<String, dynamic>> _fineRules = [];
 
   /// Session token for gating the payment write RPCs. Null before the security
@@ -304,6 +331,7 @@ class _StudentFeeCollectionScreenState
     _fetchClasses();
     _loadFineRules();
     _sweepOrphanedPayments();
+    _loadOnlineGateway();
     _loadUtilSettings();
     _loadFeeGroupMap();
   }
@@ -325,8 +353,9 @@ class _StudentFeeCollectionScreenState
           .select('fg_id, fgdesc, ban_id')
           .eq('ins_id', insId);
       final seqs = await SupabaseService.fromSchema('sequence')
-          .select('fg_id')
+          .select('fg_id, actname, division')
           .eq('ins_id', insId)
+          .eq('activestatus', 1) // a deleted series does not count
           .neq('actname', 'REGNO');
       final types = await SupabaseService.fromSchema('feetype')
           .select('feedesc, fg_id')
@@ -365,6 +394,13 @@ class _StudentFeeCollectionScreenState
             for (final g in (groups as List))
               if (g['fg_id'] is int && !seqFgIds.contains(g['fg_id']))
                 g['fg_id'] as int,
+          ]);
+        final arrearFgs = _arrearSeriesGroups(seqs);
+        _fgWithoutArrearSeq
+          ..clear()
+          ..addAll([
+            for (final g in groups)
+              if (g['fg_id'] is int && !arrearFgs.contains(g['fg_id'])) g['fg_id'] as int,
           ]);
         _fgOfFeeType
           ..clear()
@@ -486,19 +522,22 @@ class _StudentFeeCollectionScreenState
                           borderRadius: BorderRadius.circular(7.r)),
                     ),
                   ),
-                // A group that cannot be banked stops the whole collection --
-                // the cashier has to be told here, not by a snackbar after
-                // they have picked a mode and pressed the button.
+                // Told here, not by a snackbar after a mode is picked: no
+                // receipt sequence stops the collection; no bank account
+                // leaves Cash only.
                 if (_fgWithoutBank.contains(b.fgId) ||
-                    _fgWithoutSeq.contains(b.fgId)) ...[
+                    _seqMissing(b.fgId)) ...[
                   SizedBox(width: 10.w),
                   Tooltip(
                     message: _fgWithoutBank.contains(b.fgId)
-                        ? 'No bank account is mapped to ${b.label}. '
-                            'Map one in Setup → Bank Accounts → Fee Group '
-                            'Assignments before collecting this group\'s fees.'
-                        : 'No receipt sequence for ${b.label}. Create one in '
-                            'Setup → Sequence Master → Receipt Sequence.',
+                        ? 'No bank account is mapped to ${b.label}, so only Cash can be collected. '
+                            'Map one in Setup → Fee Master → Fee Group '
+                            'for UPI, Online, Cheque or DD.'
+                        : isSchool && _seqType == 'ARREAR'
+                            ? 'No arrear receipt sequence for ${b.label}. Create one in '
+                                'Setup → Sequence Master → Arrear Receipt No.'
+                            : 'No receipt sequence for ${b.label}. Create one in '
+                                'Setup → Sequence Master → Receipt No.',
                     child: Container(
                       padding:
                           EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
@@ -514,8 +553,8 @@ class _StudentFeeCollectionScreenState
                         SizedBox(width: 4.w),
                         Text(
                             _fgWithoutBank.contains(b.fgId)
-                                ? 'No Bank Account'
-                                : 'No Receipt Sequence',
+                                ? 'No Bank Account · Cash Only'
+                                : '${isSchool && _seqType == 'ARREAR' ? 'No Arrear Receipt Sequence' : 'No Receipt Sequence'} · Create in Sequence Master',
                             style: TextStyle(
                                 fontSize: 10.sp,
                                 fontWeight: FontWeight.w800,
@@ -782,6 +821,19 @@ class _StudentFeeCollectionScreenState
     });
   }
 
+  Future<void> _loadOnlineGateway() async {
+    OnlineGateway? g;
+    try {
+      g = await OnlinePaymentService.gatewayFor();
+    } catch (e) {
+      // Could not tell (network, session). Offer the server's online mode
+      // anyway -- it decides at payment time -- and never the older Paytm path.
+      debugPrint('gateway lookup failed: $e');
+      g = const OnlineGateway(0, '', 'Online', '');
+    }
+    if (mounted) setState(() => _onlineGateway = g);
+  }
+
   Future<void> _sweepOrphanedPayments() async {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
@@ -809,6 +861,9 @@ class _StudentFeeCollectionScreenState
           .eq('ins_id', insId)
           .inFilter('paystatus', ['I', 'F'])
           .isFilter('paynumber', null)
+          // Orders of the Setup gateways are settled on the server
+          // (pay-status / pay-webhook / pay-sweep), never here.
+          .isFilter('pg_id', null)
           .lt('createdat', cutoff)
           .gte('createdat', failedFrom);
       for (final p in (orphans as List)) {
@@ -1473,6 +1528,22 @@ class _StudentFeeCollectionScreenState
           .eq('activestatus', 1)
           .gt('balanceamount', 0)
           .order('adv_id', ascending: true);
+      // Fee lines with a concession waiting in Concession Approval are held:
+      // they cannot be ticked or collected until it is approved or rejected
+      // (user, 2026-11-14; school_concession_approval.sql).
+      final held = <String>{};
+      try {
+        final pend = await SupabaseService.client.rpc('concession_pending_lines',
+            params: {'p_token': SupabaseService.sessionToken, 'p_stu_id': stuId});
+        for (final x in (pend as List? ?? const [])) {
+          final id = (x as Map)['dem_id'];
+          if (id != null) held.add('$id');
+        }
+      } catch (_) {
+        // college / older database: no approval step
+      }
+      _selected.held = held;
+      _selected.removeAll(held);
       final demandsFuture = SupabaseService.fromSchema('feedemand')
           .select(
               'dem_id, demno, demseqtype, yr_id, demfeeyear, demfeetype, demfeeterm, feeamount, conamount, balancedue, paidamount, fineamount, duedate, paidstatus, stuclass, collectible')
@@ -1558,11 +1629,51 @@ class _StudentFeeCollectionScreenState
       // and pre-fill only its rows. Pre-filling every group would stage a
       // tender that cannot be taken as one payment.
       _payFgId = _firstPayableFg();
+      // Fine already COLLECTED on each demand (receipt lines keep their own
+      // fine since 2026-11-05). Without this, a part payment that took the
+      // fine offered the same fine again on the next visit.
+      final fineCollected = <int, double>{};
+      try {
+        final ids = demandList.map((d) => d['dem_id']).whereType<int>().toList();
+        if (ids.isNotEmpty) {
+          final rows = await SupabaseService.fetchAll(() => SupabaseService.fromSchema('paymentdetails')
+              .select('dem_id, fineamount')
+              .inFilter('dem_id', ids)
+              .eq('activestatus', 1)
+              .gt('fineamount', 0));
+          for (final r in rows) {
+            final id = (r['dem_id'] as num?)?.toInt();
+            if (id == null) continue;
+            fineCollected[id] = (fineCollected[id] ?? 0) + ((r['fineamount'] as num?)?.toDouble() ?? 0);
+          }
+        }
+      } catch (e) {
+        debugPrint('collected fines unavailable: $e');
+      }
+      // The fine still due on each fee, from the server (fee_fine_quote:
+      // Fine Rules, the fee type's Fine Applicable switch, a fine set by the
+      // office, less fines already collected) -- the same figure the parent
+      // app charges. Worked out here only if the server cannot be reached.
+      Map<String, dynamic>? fineQuote;
+      try {
+        final q = await SupabaseService.client.rpc('fee_fine_quote',
+            params: {'p_token': SupabaseService.sessionToken, 'p_stu_id': stuId});
+        if (q is Map) fineQuote = Map<String, dynamic>.from(q);
+      } catch (e) {
+        debugPrint('fine quote unavailable, using local rules: $e');
+      }
       for (final d in demandList) {
         final key = d['dem_id']?.toString() ?? '';
         if (key.isNotEmpty) {
-          final serverFine = (d['fineamount'] as num?)?.toDouble() ?? 0;
-          final fine = serverFine > 0 ? serverFine : _calculateFine(d);
+          final double fine;
+          if (fineQuote != null) {
+            fine = (fineQuote[key] as num?)?.toDouble() ?? 0;
+          } else {
+            final serverFine = (d['fineamount'] as num?)?.toDouble() ?? 0;
+            final fineDue = serverFine > 0 ? serverFine : _calculateFine(d);
+            final paidFine = fineCollected[(d['dem_id'] as num?)?.toInt() ?? -1] ?? 0;
+            fine = fineDue - paidFine > 0.004 ? fineDue - paidFine : 0.0;
+          }
           final bal = (d['balancedue'] as num?)?.toDouble() ?? 0;
           final active = _matchesSeqType(d) && _inPayGroup(d);
           _fineCtrl[key] = TextEditingController(text: fine > 0 ? fine.toStringAsFixed(0) : '');
@@ -2001,7 +2112,7 @@ class _StudentFeeCollectionScreenState
               const Spacer(),
               SizedBox(
                 width: _compactCtx ? 150.w : 180.w,
-                child: DropdownButtonFormField<String>(
+                child: AppDropdownField<String>(
                   value: _selectedCourse,
                   isExpanded: true,
                   dropdownColor: Colors.white,
@@ -2010,10 +2121,10 @@ class _StudentFeeCollectionScreenState
                   icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                   decoration: _inputDec(schoolTerm('Select course'), filled: _selectedCourse != null),
                   style: _ddTextStyle(),
-                  hint: Text(schoolTerm('Select course'),
-                      style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
+                  hint: _fitLine(schoolTerm('Select course'),
+                      AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                   items: _courseList.map((c) => DropdownMenuItem(value: c, child: Text(c, style: _ddItemStyle()))).toList(),
-                  selectedItemBuilder: (context) => _courseList.map((c) => Align(alignment: Alignment.centerLeft, child: Text(c, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
+                  selectedItemBuilder: (context) => _courseList.map((c) => _fitLine(c, AppUI.fieldText(context, filled: true))).toList(),
                   onChanged: (val) {
                     setState(() {
                       _selectedCourse = val;
@@ -2042,7 +2153,7 @@ class _StudentFeeCollectionScreenState
                     items.add(DropdownMenuItem(value: c, child: Text(c, style: _ddItemStyle())));
                   }
                   final value = seen.contains(_selectedClass) ? _selectedClass : null;
-                  return DropdownButtonFormField<String>(
+                  return AppDropdownField<String>(
                     key: ValueKey(_selectedCourse),
                     value: value,
                     isExpanded: true,
@@ -2052,10 +2163,10 @@ class _StudentFeeCollectionScreenState
                     icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
                     decoration: _inputDec(schoolTerm('Select class'), filled: value != null),
                     style: _ddTextStyle(),
-                    hint: Text(schoolTerm('Select class'),
-                        style: AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
+                    hint: _fitLine(schoolTerm('Select class'),
+                        AppUI.fieldText(context).copyWith(color: AppColors.textLight, fontWeight: FontWeight.w500)),
                     items: items,
-                    selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text((m.child as Text).data ?? '', overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
+                    selectedItemBuilder: (context) => items.map((m) => _fitLine((m.child as Text).data ?? '', AppUI.fieldText(context, filled: true))).toList(),
                     onChanged: (val) {
                       setState(() {
                         _selectedClass = val;
@@ -2182,6 +2293,7 @@ class _StudentFeeCollectionScreenState
         stuAdmno: s['stuadmno']?.toString() ?? '',
         stuName: s['stuname']?.toString() ?? '',
         admName: s['admname']?.toString() ?? '',
+        readOnly: _studentHasTc,
       ),
     );
     if (saved == true) {
@@ -2532,7 +2644,7 @@ class _StudentFeeCollectionScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AppUI.fieldLabel('Filter by Term'),
-          DropdownButtonFormField<String?>(
+          AppDropdownField<String?>(
             value: _selectedTerm,
             isExpanded: true,
             dropdownColor: Colors.white,
@@ -2603,7 +2715,7 @@ class _StudentFeeCollectionScreenState
                   SizedBox(width: 8.w),
                   SizedBox(
                     width: 150.w,
-                    child: DropdownButtonFormField<String?>(
+                    child: AppDropdownField<String?>(
                       value: _selectedArrearYear,
                       isExpanded: true,
                       dropdownColor: Colors.white,
@@ -2630,7 +2742,7 @@ class _StudentFeeCollectionScreenState
                   SizedBox(width: 8.w),
                   SizedBox(
                     width: 200.w,
-                    child: DropdownButtonFormField<String?>(
+                    child: AppDropdownField<String?>(
                       value: _selectedTerm,
                       isExpanded: true,
                       dropdownColor: Colors.white,
@@ -2865,7 +2977,7 @@ class _StudentFeeCollectionScreenState
                 Text(
                   '${nos.isEmpty ? '' : '$nos · '}Reduces the fee rather than '
                   'paying it, so it cannot be adjusted here. Apply it in '
-                  'Fees → Advance Adjustment.',
+                  'Fees → Advance Reconcile.',
                   style: TextStyle(fontSize: 11.5.sp, color: AppColors.sidebarText),
                 ),
               ]),
@@ -3276,7 +3388,13 @@ class _StudentFeeCollectionScreenState
                                 'amount. To reverse it, cancel its receipt in '
                                 'Fee Cancel Receipt.',
                         ].join('\n\n'),
-                        child: Checkbox(
+                        child: _selected.held.contains(key)
+                            ? Tooltip(
+                                message: 'A concession on this fee is waiting in Fees → Concession Approval. '
+                                    'It can be collected once that is approved or rejected.',
+                                child: Icon(Icons.hourglass_top_rounded, size: 18.sp, color: AppColors.warning),
+                              )
+                            : Checkbox(
                         value: isSelected,
                         // LOCKED while an advance is earmarked against this row.
                         // The plan is made in one place — the Adjust Advance
@@ -3556,16 +3674,29 @@ class _StudentFeeCollectionScreenState
               // a settled student off a screen that is only showing one group.
               if (_otherGroupsOutstanding.isNotEmpty) ...[
                 SizedBox(width: 10.w),
+                // Most of the free space (the Spacer after it keeps only a
+                // little), up to two lines, and the whole text on hover --
+                // a half-hidden "Still due" defeats its purpose.
                 Flexible(
-                  child: Text(
-                    '· Still due: ${_otherGroupsOutstanding.entries.map((e) => '${e.key} ₹${formatIndianNumber(e.value)}').join(', ')} '
-                    '(collected on a separate receipt)',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 11.5.sp,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.warning),
-                  ),
+                  flex: 6,
+                  child: Builder(builder: (context) {
+                    final dues = _otherGroupsOutstanding.entries
+                        .map((e) => '${e.key} ₹${formatIndianNumber(e.value)}')
+                        .join(', ');
+                    final text = 'Still due: $dues. Collect it separately (own receipt).';
+                    return Tooltip(
+                      message: text,
+                      child: Text(
+                        text,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11.5.sp,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.warning),
+                      ),
+                    );
+                  }),
                 ),
               ],
               const Spacer(),
@@ -3626,6 +3757,12 @@ class _StudentFeeCollectionScreenState
                 ]),
                 builder: (_, __) {
                   final modeEnabled = _totalNetSelected > 0 && !_studentHasTc;
+                  // The group being collected has no bank account: Cash only.
+                  final cashOnly = _payFgId != null && _fgWithoutBank.contains(_payFgId);
+                  if (cashOnly && _paymentMode != null && _paymentMode != 'Cash') _paymentMode = null;
+                  Widget modeText(String t) => Text(cashOnly ? '$t - needs a bank account' : t,
+                      overflow: TextOverflow.ellipsis,
+                      style: cashOnly ? TextStyle(color: AppColors.textLight, fontWeight: FontWeight.w500, fontSize: 12.sp) : null);
                   final field = Container(
                     width: 160.w,
                     height: AppUI.controlHeight(context),
@@ -3653,12 +3790,21 @@ class _StudentFeeCollectionScreenState
                         borderRadius: BorderRadius.circular(12),
                         elevation: 6,
                         style: AppUI.fieldText(context, filled: true).copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.3),
-                        items: const [
-                          DropdownMenuItem(value: 'Cash', child: Text('Cash')),
-                          DropdownMenuItem(value: 'QR/UPI', child: Text('QR / UPI')),
-                          DropdownMenuItem(value: 'Paytm', child: Text('Paytm')),
-                          DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
-                          DropdownMenuItem(value: 'DD', child: Text('DD')),
+                        items: [
+                          const DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                          DropdownMenuItem(value: 'QR/UPI', enabled: !cashOnly, child: modeText('QR / UPI')),
+                          if (_onlineGateway != null)
+                            DropdownMenuItem(
+                                value: 'Online',
+                                enabled: !cashOnly,
+                                child: modeText(_onlineGateway!.provider.isEmpty
+                                    ? 'Online'
+                                    : 'Online (${pgProvider(_onlineGateway!.provider)?.name ?? _onlineGateway!.name})')),
+                          // No gateway in Setup > Payment Gateways: no online mode. (The
+                          // old Paytm mode recorded payments from this PC through
+                          // database functions now closed to the app.)
+                          DropdownMenuItem(value: 'Cheque', enabled: !cashOnly, child: modeText('Cheque')),
+                          DropdownMenuItem(value: 'DD', enabled: !cashOnly, child: modeText('DD')),
                         ],
                         onChanged: modeEnabled
                             ? (v) => setState(() => _paymentMode = v)
@@ -3700,7 +3846,7 @@ class _StudentFeeCollectionScreenState
                   icon: Icon(
                       _totalNetSelected <= 0 && _pendingAdjust.isNotEmpty
                           ? Icons.check
-                          : (_paymentMode == 'Paytm' ? Icons.open_in_new : Icons.send),
+                          : (_isGatewayMode ? Icons.open_in_new : Icons.send),
                       size: AppBtn.iconSize(context)),
                   label: Text(_totalNetSelected <= 0 && _pendingAdjust.isNotEmpty
                       ? 'Save Adjustment'
@@ -3723,7 +3869,7 @@ class _StudentFeeCollectionScreenState
   /// dialog asking for the tender amount; the refund (change) is computed
   /// live as the cashier types. Both values are stored on the payment row.
   Future<void> _saveCashPayment() async {
-    final ok = await _ensureSequencesExist();
+    final ok = await _ensureSequencesExist(needBank: false);
     if (!ok) return;
     _paymentMode = 'Cash';
     final total = _totalNetSelected;
@@ -3830,19 +3976,23 @@ class _StudentFeeCollectionScreenState
 
   /// Shared pre-check: every fee group in the selected demands must have
   ///   (a) a payment sequence configured AND
-  ///   (b) a bank account mapped (feegroup.ban_id).
+  ///   (b) a bank account mapped (feegroup.ban_id) -- [needBank]: only for a
+  ///       mode other than Cash (user, 2026-11-14: "other than cash required
+  ///       bank"); cash is taken at the counter.
   /// Returns false (with a snackbar) on the first missing requirement so the
   /// caller can abort the collection.
-  Future<bool> _ensureSequencesExist() async {
+  Future<bool> _ensureSequencesExist({bool needBank = true}) async {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
     if (insId == null) return true;
     try {
       final sequences = await SupabaseService.fromSchema('sequence')
-          .select('fg_id')
+          .select('fg_id, actname, division')
           .eq('ins_id', insId)
+          .eq('activestatus', 1) // a deleted series does not count
           .neq('actname', 'REGNO'); // exclude register-number sequences
       final seqFgIds = (sequences as List).map((s) => s['fg_id']).toSet();
+      final arrearFgs = _arrearSeriesGroups(sequences);
       final feeGroups = await SupabaseService.fromSchema('feegroup')
           .select('fg_id, fgdesc, ban_id')
           .eq('ins_id', insId);
@@ -3864,23 +4014,17 @@ class _StudentFeeCollectionScreenState
         if (fgId == null) continue;
         final fgRow = fgInfo[fgId];
         final fgName = fgRow?['fgdesc']?.toString() ?? 'this fee group';
-        if (!seqFgIds.contains(fgId)) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('No receipt sequence for "$fgName". Create one in Setup → Sequence Master → Receipt Sequence, then collect.'),
-                backgroundColor: AppColors.error,
-                duration: const Duration(seconds: 5),
-              ),
-            );
-          }
+        // An arrear fee is numbered from the group's arrear receipt series.
+        final arrear = isSchool && _isArrear(d);
+        if (!(arrear ? arrearFgs.contains(fgId) : seqFgIds.contains(fgId))) {
+          if (mounted) await showMissingSequenceDialog(context, group: fgName, arrear: arrear);
           return false;
         }
-        if (fgRow?['ban_id'] == null) {
+        if (needBank && fgRow?['ban_id'] == null) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('No bank account mapped to "$fgName". Assign one in Bank Accounts → Fee Group Assignments before collecting.'),
+                content: Text('No bank account mapped to "$fgName", so only Cash can be collected. Assign one in Setup → Fee Master → Fee Group for UPI, Online, Cheque or DD.'),
                 backgroundColor: AppColors.error,
                 duration: const Duration(seconds: 5),
               ),
@@ -4100,7 +4244,7 @@ class _StudentFeeCollectionScreenState
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        if (_paymentMode != 'Paytm') AppUI.requiredNote(),
+                        if (!_isGatewayMode) AppUI.requiredNote(),
                         const Spacer(),
                         OutlinedButton(
                           onPressed: () async {
@@ -4150,7 +4294,7 @@ class _StudentFeeCollectionScreenState
                             _processPayment();
                           },
                           child: Text(
-                            _paymentMode == 'Paytm' ? 'Confirm Payment' : 'Save',
+                            _isGatewayMode ? 'Confirm Payment' : 'Save',
                           ),
                         ),
                       ],
@@ -4181,6 +4325,8 @@ class _StudentFeeCollectionScreenState
     if (_processing || _student == null) return;
     if (_paymentMode == 'Paytm') {
       await _processPaytmPayment();
+    } else if (_paymentMode == 'Online') {
+      await _processGatewayPayment();
     } else {
       await _processDirectPayment();
     }
@@ -4311,7 +4457,7 @@ class _StudentFeeCollectionScreenState
                           final pdf = await buildReceiptPdf(receiptData);
                           final bytes = await pdf.save();
                           final defaultName = 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}.pdf';
-                          final result = await FilePicker.platform.saveFile(
+                          final result = await pickSavePath(
                             dialogTitle: 'Save Receipt PDF',
                             fileName: defaultName,
                             type: FileType.custom,
@@ -4346,7 +4492,7 @@ class _StudentFeeCollectionScreenState
                             // Rebuild at the paper the printer actually reports
                             // so the receipt lands centred and unclipped; A5 is
                             // only the starting suggestion.
-                            format: a5PageFormat,
+                            format: await receiptPaper(),
                             onLayout: (PdfPageFormat format) async =>
                                 (await buildReceiptPdf(receiptData, pageFormat: format)).save(),
                             name: 'Receipt_${receiptData.receiptNo.replaceAll('/', '_')}',
@@ -4381,7 +4527,7 @@ class _StudentFeeCollectionScreenState
                           BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 2)),
                         ],
                       ),
-                      child: ReceiptWidget(data: receiptData),
+                      child: ReceiptPreview(data: receiptData),
                     ),
                   ),
                 ),
@@ -4609,6 +4755,11 @@ class _StudentFeeCollectionScreenState
 
     // Declared outside try so the catch block can reset fineamount on failure.
     final items = <Map<String, dynamic>>[];
+    // Receipts already SAVED by the server, and the fees they paid. Outside the
+    // try: when a later step fails, the cashier must be told what WAS saved --
+    // "Payment failed" on a saved receipt is how a fee gets collected twice.
+    final receipts = <dynamic>[];
+    final savedDemIds = <int>{};
 
     try {
       // Only rows that will actually be CHARGED are checked for staleness. A
@@ -4619,6 +4770,35 @@ class _StudentFeeCollectionScreenState
           .where((d) => _selected.contains(_demKey(d)) && _netAmt(d) > 0)
           .map((d) => d['dem_id'] as int)
           .toList();
+      // A fee held by an online payment that is not settled must not be
+      // collected again in cash: the online money may still arrive.
+      if (selectedDemIds.isNotEmpty) {
+        List<Map<String, dynamic>> held = const [];
+        try {
+          held = await OnlinePaymentService.feesHeld(stuId, selectedDemIds);
+        } catch (e) {
+          debugPrint('online hold check skipped: $e'); // database without it yet
+        }
+        if (held.isNotEmpty) {
+          if (mounted) {
+            setState(() => _processing = false);
+            final h = held.first;
+            final paid = h['status'] == 'X';
+            final fee = _allDemands.firstWhere((d) => d['dem_id'] == h['dem_id'], orElse: () => const {})['demfeetype'] ?? 'A fee';
+            final msg = paid
+                ? '$fee was already paid online (${h['order_id']}), but its receipt is pending with the office '
+                    '(Setup > Payment Gateways). Do not collect it again.'
+                : '$fee has an online payment still being confirmed (${h['order_id']}). '
+                    'It may still go through, so it cannot be collected another way yet.';
+            if (paid) {
+              _showPaytmRoutingError(msg);
+            } else {
+              await _offerCheckPending(msg, '${h['order_id']}');
+            }
+          }
+          return;
+        }
+      }
       if (selectedDemIds.isNotEmpty) {
         final fresh = await SupabaseService.fromSchema('feedemand')
             .select('dem_id, balancedue, paidstatus')
@@ -4740,8 +4920,10 @@ class _StudentFeeCollectionScreenState
         byYear.putIfAbsent(label, () => []).add(it);
       }
 
-      final receipts = <dynamic>[];
-      for (final entry in byYear.entries) {
+      // Older years (arrears) first: with "arrear first" on, the current
+      // year's fees are accepted only once the arrears are paid.
+      final yearOrder = byYear.keys.toList()..sort();
+      for (final entry in [for (final k in yearOrder) MapEntry(k, byYear[k]!)]) {
         final groupItems = entry.value;
         final groupYrId = (groupItems.first['yr_id'] as int?) ?? yrId;
         final groupTotal = groupItems.fold<double>(
@@ -4757,6 +4939,10 @@ class _StudentFeeCollectionScreenState
         } else if (result != null) {
           receipts.add(result);
         }
+        for (final it in groupItems) {
+          final id = it['dem_id'];
+          if (id is int) savedDemIds.add(id);
+        }
       }
 
       final receiptStr = receipts.map((r) => r is Map ? r['paynumber'] ?? r.toString() : r.toString()).join(', ');
@@ -4769,6 +4955,10 @@ class _StudentFeeCollectionScreenState
         }
       }
 
+      // The receipts are saved. The steps below only add details to them, so a
+      // failure there is a warning, never "Payment failed".
+      String? followUpProblem;
+      try {
       // Update cheque/DD details if applicable (DD reuses the same columns)
       if ((_paymentMode == 'Cheque' || _paymentMode == 'DD') && receipts.isNotEmpty) {
         for (final r in receipts) {
@@ -4785,18 +4975,33 @@ class _StudentFeeCollectionScreenState
         }
       }
 
-      // Record tender/refund on every Cash payment row so the cashbook
-      // shows what was actually handed over and what change went back.
+      // Record what was handed over and the change given back, so the cashbook
+      // ties. The change goes in change_amount -- refund_amount is money
+      // REFUNDED (Fee Refund) and a receipt with one cannot be cancelled.
+      // One payment can make several receipts (one per year): the first
+      // carries the change, and each receipt's tender is its own amount (+ the
+      // change on the first), so the day's totals add up to what was handed
+      // over instead of counting it once per receipt.
       if (_paymentMode == 'Cash' && receipts.isNotEmpty && _cashTenderAmount != null) {
+        final change = _cashRefundAmount ?? 0;
+        var first = true;
         for (final r in receipts) {
           final payId = r is Map ? r['pay_id'] : null;
-          if (payId != null) {
-            await SupabaseService.updatePayment(payId, {
-              'tender_amount': _cashTenderAmount,
-              'refund_amount': _cashRefundAmount,
-            });
-          }
+          if (payId == null) continue;
+          final own = (r is Map ? (r['amount'] as num?)?.toDouble() : null);
+          await SupabaseService.updatePayment(payId, {
+            'tender_amount': receipts.length == 1
+                ? _cashTenderAmount
+                : (own ?? 0) + (first ? change : 0),
+            'change_amount': first ? change : 0,
+          });
+          first = false;
         }
+      }
+
+      } catch (e) {
+        debugPrint('payment follow-up failed: $e');
+        followUpProblem = friendlyError(e);
       }
 
       // fineamount is already recorded (written before the payment above, so the
@@ -4813,8 +5018,41 @@ class _StudentFeeCollectionScreenState
       await _attachPendingAdjust(_payIdForPendingAdvance(receipts, firstPayId));
 
       _showSuccessDialog(receiptStr, totalNet, payId: firstPayId);
+      if (followUpProblem != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Receipt $receiptStr is saved, but its '
+              '${_paymentMode == 'Cash' ? 'cash tendered / change' : 'cheque / DD details'} could not be stored '
+              '($followUpProblem). Add them from Receipts if needed. Do not collect again.'),
+          backgroundColor: AppColors.warning,
+          duration: const Duration(seconds: 10),
+        ));
+      }
     } catch (e) {
       debugPrint('PAYMENT SAVE FAILED (raw): $e');
+      // Part of it was saved (fees of one year went through, another year's
+      // did not): say exactly that, keep the paid fines, and reload.
+      if (receipts.isNotEmpty) {
+        final saved = receipts.map((r) => r is Map ? r['paynumber'] ?? '' : '').where((x) => '$x'.isNotEmpty).join(', ');
+        for (final item in items) {
+          final demId = item['dem_id'];
+          if (demId is! int) continue;
+          if (savedDemIds.contains(demId)) {
+            _paidFineDemIds.add(demId);
+          } else {
+            try {
+              await SupabaseService.setDemandFine(token: _sessionToken, demId: demId, fineamount: 0);
+            } catch (_) {}
+          }
+        }
+        if (mounted) {
+          _showPaytmRoutingError(
+              'Receipt $saved IS SAVED -- do not collect those fees again. '
+              'The remaining fees could not be saved (${friendlyError(e)}). '
+              'The list is refreshed: collect only what still shows as due.');
+          await _search();
+        }
+        return;
+      }
       String errorMsg = e.toString();
       if (errorMsg.contains('already fully paid')) {
         errorMsg = 'One or more fees have already been paid. Please refresh and try again.';
@@ -4844,6 +5082,164 @@ class _StudentFeeCollectionScreenState
       }
     } finally {
       if (mounted) setState(() => _processing = false);
+    }
+  }
+
+  // ── Online payment (Setup > Payment Gateways) ──
+  // Any gateway the school set up. The server (pay-create) checks the amounts
+  // and picks the gateway; the window opens the gateway's page; the server
+  // (pay-status) asks the gateway and raises the receipt. Nothing here writes
+  // a payment row.
+  Future<void> _processGatewayPayment() async {
+    setState(() => _processing = true);
+    final auth = context.read<AuthProvider>();
+    final stuId = _student!['stu_id'] as int;
+    final totalNet = _totalNetSelected;
+
+    final items = <Map<String, dynamic>>[];
+    final fgIds = <int>{};
+    for (final key in _selected) {
+      final d = _allDemands.firstWhere((x) => _demKey(x) == key, orElse: () => {});
+      if (d.isEmpty) continue;
+      final fine = _fine(key);
+      // Same rule as _netAmt / the NET AMOUNT column.
+      final net = _con(key) + fine;
+      if (net <= 0) continue;
+      items.add({'dem_id': d['dem_id'] as int, 'amount': net, 'fine': fine});
+      final fg = _fgIdOf(d);
+      if (fg != null) fgIds.add(fg);
+    }
+    if (items.isEmpty) {
+      setState(() => _processing = false);
+      return;
+    }
+
+    // Fees that settle into different accounts cannot share one order.
+    final problem = await OnlinePaymentService.gatewayProblem(fgIds.toList());
+    if (problem != null) {
+      if (mounted) {
+        setState(() => _processing = false);
+        _showPaytmRoutingError(problem);
+      }
+      return;
+    }
+
+    OnlineOrder order;
+    try {
+      order = await OnlinePaymentService.start(stuId: stuId, items: items);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _processing = false);
+        // A payment for this student / fee is still being confirmed: offer to
+        // ask the gateway now instead of leaving the cashier stuck.
+        if (e is OnlinePaymentException && e.code == 'P0002' && e.orderId != null) {
+          await _offerCheckPending(e.message, e.orderId!);
+        } else {
+          _showPaytmRoutingError(e is OnlinePaymentException ? e.message : friendlyError(e));
+        }
+      }
+      return;
+    }
+    if (!mounted) return;
+
+    final gatewayName = pgProvider(order.provider)?.name ?? order.provider;
+    final result = await showGatewayCheckout(
+      context,
+      order: order,
+      gatewayName: gatewayName,
+      payerName: _student!['stuname']?.toString() ?? '',
+      payerMobile: (_parent?['payinchargemob'] ?? _student!['stumobile'] ?? '').toString(),
+      merchantName: auth.insName ?? '',
+    );
+    if (!mounted) return;
+    setState(() => _processing = false);
+
+    switch (result?.status) {
+      case 'C':
+        // The server already stored any fine on the demand; keep the
+        // reset-on-exit away from it.
+        for (final it in items) {
+          _paidFineDemIds.add(it['dem_id'] as int);
+        }
+        await _attachPendingAdjust(_payIdForPendingAdvance(result!.receipts, result.firstPayId));
+        _showSuccessDialog(
+            result.receiptNumbers.isEmpty ? order.orderId : result.receiptNumbers,
+            totalNet, payId: result.firstPayId);
+      case 'X':
+        _showPaytmRoutingError(
+            '$gatewayName took this payment, but the receipt could not be raised '
+            '(${result!.note.isEmpty ? 'unknown reason' : result.note}). '
+            'Do not collect it again. It is listed under Setup > Payment Gateways for the office. '
+            'Reference: ${order.orderId}.');
+        await _search();
+      case 'F' when result!.moneyMayBeMoving:
+        _showPaytmRoutingError(
+            '$gatewayName is still processing this payment. Do not collect it again yet: if the payer\'s bank '
+            'completes it, the receipt is raised automatically. Reference: ${order.orderId}.');
+      case 'F':
+        // "Not paid so far", not "nothing will ever be paid": a payer who
+        // approves on the phone after the window closed is still receipted
+        // automatically, and the office sees it if it cannot be.
+        _showPaytmRoutingError(
+            'Not paid so far: $gatewayName has not received this payment, and the dues are unchanged. '
+            'If the payer says they approved it on their phone, wait a few minutes (it is receipted '
+            'automatically) before taking it by another mode. Reference: ${order.orderId}.');
+      case 'T':
+        _showPaytmRoutingError(
+            'Test payment went through. The gateway is in Test mode, so no receipt was raised and the '
+            'fees are not credited. Switch it to Live in Setup > Payment Gateways to collect real fees.');
+      case 'H':
+        _showPaytmRoutingError('This payment was closed by the office. Reference: ${order.orderId}.');
+      case null:
+        break; // the window could not open; already told
+      default:
+        _showPaytmRoutingError(
+            'The bank has not confirmed this payment yet. Do not collect it again. '
+            'If the money went through, the receipt is raised automatically within a few '
+            'minutes. Reference: ${order.orderId}.');
+    }
+  }
+
+  /// A fee is held by an online payment that is not settled yet. Ask the
+  /// gateway now (the server raises the receipt if it was paid).
+  Future<void> _offerCheckPending(String message, String orderId) async {
+    final check = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Online Payment Not Settled'),
+        content: Text('$message\n\nAsk the gateway now whether it was paid?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Close')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Check Now')),
+        ],
+      ),
+    );
+    if (check != true || !mounted) return;
+    try {
+      final r = await OnlinePaymentService.status(orderId);
+      if (!mounted) return;
+      switch (r.status) {
+        case 'C':
+          _showPaytmRoutingError('It was paid: receipt ${r.receiptNumbers}. The dues are updated.');
+          await _search();
+        case 'F' when r.moneyMayBeMoving:
+          _showPaytmRoutingError('The gateway is still processing this payment (it was closed early, but the payer\'s bank '
+              'may still complete it). Wait a few minutes before collecting the fee another way. Reference: $orderId.');
+        case 'F':
+          _showPaytmRoutingError('The gateway says it was not paid. You can collect the fee now.');
+        case 'T':
+          _showPaytmRoutingError('That was a test payment (gateway in Test mode): nothing was collected.');
+        case 'H':
+          _showPaytmRoutingError('The office has closed this payment. You can collect the fee now.');
+        case 'X':
+          _showPaytmRoutingError('It was paid, but the receipt is pending with the office (Setup > Payment Gateways). '
+              'Do not collect it again.');
+        default:
+          _showPaytmRoutingError('The gateway has not confirmed it yet. Try again in a few minutes, or ask the '
+              'office to check it in Setup > Payment Gateways. Reference: $orderId.');
+      }
+    } catch (e) {
+      if (mounted) _showPaytmRoutingError(e is OnlinePaymentException ? e.message : friendlyError(e));
     }
   }
 
@@ -5340,6 +5736,13 @@ class _StudentFeeCollectionScreenState
   InputDecoration _inputDec(String hint, {bool filled = false}) =>
       AppUI.field(context, hint, filled: filled);
 
+  /// One line of dropdown text that shrinks to fit instead of wrapping onto
+  /// a clipped second line.
+  Widget _fitLine(String text, TextStyle style) => Align(
+        alignment: Alignment.centerLeft,
+        child: AppFitText(text, style: style),
+      );
+
   Widget _detailRow(String icon, String label, String value) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -5514,4 +5917,27 @@ class _PlannedAdvance {
   final Map<String, double> lines;
 
   double get total => lines.values.fold(0, (a, b) => a + b);
+}
+
+
+/// The ticked fee lines -- a plain set, except that a line HELD for a pending
+/// concession (Concession Approval) is never added, whichever path ticks it
+/// (row tick, tick-all, auto-tick on load).
+class _HeldAwareSet extends SetBase<String> {
+  final Set<String> _inner = <String>{};
+  Set<String> held = <String>{};
+  @override
+  bool add(String value) => held.contains(value) ? false : _inner.add(value);
+  @override
+  bool contains(Object? element) => _inner.contains(element);
+  @override
+  String? lookup(Object? element) => _inner.lookup(element);
+  @override
+  bool remove(Object? value) => _inner.remove(value);
+  @override
+  Iterator<String> get iterator => _inner.iterator;
+  @override
+  int get length => _inner.length;
+  @override
+  Set<String> toSet() => _inner.toSet();
 }

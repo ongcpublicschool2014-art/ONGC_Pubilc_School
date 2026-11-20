@@ -30,6 +30,13 @@ String friendlyError(Object e) {
     return 'You do not have permission to do this. Ask your administrator for access.';
   }
   if (lower.contains('duplicate key') || lower.contains('23505')) {
+    // the master-name rules (school_master_unique.sql): uq_<table>_name
+    if (lower.contains('uq_') && lower.contains('_name')) {
+      return 'An entry with this name already exists. Use the existing one or choose another name.';
+    }
+    if (lower.contains('uq_bank_accno')) {
+      return 'This bank account number is already added.';
+    }
     return 'That record already exists. Refresh and try again.';
   }
   if (lower.contains('foreign key') || lower.contains('23503')) {

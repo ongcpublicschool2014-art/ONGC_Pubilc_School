@@ -63,3 +63,16 @@ String formatCurrency(num value, {bool withSymbol = true}) {
   final n = formatIndianNumber(value);
   return withSymbol ? '₹$n' : n;
 }
+
+/// A time the server stored (payment.paydate and friends are kept in UTC with
+/// no zone mark) as local time. A plain date ("2026-11-05") is already a
+/// local date and comes back as is. Without this a receipt taken between
+/// midnight and 05:30 India time reads as the previous day.
+DateTime? serverTimeToLocal(dynamic v) {
+  final s = (v?.toString() ?? '').trim();
+  if (s.isEmpty) return null;
+  final hasTime = s.contains('T') || s.contains(' ');
+  if (!hasTime) return DateTime.tryParse(s);
+  final zoned = RegExp(r'(Z|[+-]\d\d:?\d\d)$').hasMatch(s);
+  return DateTime.tryParse(zoned ? s : '${s.replaceFirst(' ', 'T')}Z')?.toLocal();
+}

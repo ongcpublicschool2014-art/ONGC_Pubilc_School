@@ -8,6 +8,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/supabase_service.dart';
+import '../../utils/import_errors_export.dart';
 import '../../utils/app_text.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/school_terms.dart';
@@ -18,6 +19,8 @@ import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/form_section_panel.dart';
 import '../../widgets/validation_dialog.dart';
+import '../../widgets/app_dropdown_field.dart';
+import '../../utils/save_path.dart';
 
 /// Bulk entry of the government EMIS / UMIS numbers, class by class.
 ///
@@ -349,7 +352,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
 
       final bytes = excel.encode();
       if (bytes == null) return;
-      final path = await FilePicker.platform.saveFile(
+      final path = await pickSavePath(
         dialogTitle: schoolTerm('Export students for EMIS / UMIS'),
         fileName: '${isSchool ? 'EMIS' : 'EMIS_UMIS'}_${_class ?? _course ?? 'All'}.xlsx',
         type: FileType.custom,
@@ -815,7 +818,6 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
     var done = 0;
     final failures = <String>[];
     try {
-      final insId = _insId;
       for (final s in rows) {
         final k = (s['stuadmno'] ?? '').toString();
         final e = _emis[k]?.text.trim() ?? '';
@@ -833,20 +835,17 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           // Also stamp the admission row. It is upstream of students —
           // save_admission pushes an allocated admission's columns down — so
           // leaving it blank here would let a later admission edit wipe the
-          // number back out. Deliberately a narrow direct update rather than
-          // the save_admission RPC: that RPC re-pushes the WHOLE admission row
-          // onto students, which would revert any field edited on the student
-          // since allocation.
-          try {
-            await SupabaseService.client
-                .from('admission')
-                .update(patch)
-                .eq('ins_id', insId)
-                .eq('admno', k);
-          } catch (_) {
-            // No admission row (student came in through import) — the students
-            // row is the one that matters, so this is not a failure.
-          }
+          // number back out. A one-column server call (set_admission_emis)
+          // rather than save_admission: that RPC re-pushes the WHOLE admission
+          // row onto students, which would revert any field edited on the
+          // student since allocation. (Direct writes to admission are closed.)
+          // No admission row (student came in through import) updates nothing
+          // and is not an error; a real refusal (EMIS already used) is shown.
+          await SupabaseService.client.rpc('set_admission_emis', params: {
+            'p_token': SupabaseService.sessionToken,
+            'p_admno': k,
+            'p_emisno': patch['emisno'],
+          });
           // Reflect it locally so the row stops counting as changed.
           s['emisno'] = patch['emisno'];
           if (!isSchool) s['umisno'] = patch['umisno'];
@@ -865,8 +864,19 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                 : '$done student(s) updated.',
             left > 0 ? AppColors.warning : AppColors.success);
       } else {
-        _snack('$done ${done == 1 ? 'student' : 'students'} updated. ${failures.length} could not be updated: ${failures.first}',
-            AppColors.error);
+        // every failure, not just the first, can be saved and fixed
+        ScaffoldMessenger.of(context)
+          ..removeCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text('$done ${done == 1 ? 'student' : 'students'} updated. ${failures.length} could not be updated: ${failures.first}'),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 12),
+            action: SnackBarAction(
+              label: 'Export Errors',
+              textColor: Colors.white,
+              onPressed: () => exportImportErrors(isSchool ? 'EMIS Update' : 'EMIS UMIS Update', failures),
+            ),
+          ));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -935,7 +945,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
                     label: schoolTerm('Class'), icon: 'book', child: _classDrop())),
             SizedBox(width: 12.w),
             Expanded(
-                flex: 3,
+                flex: 4,
                 child: FormFieldLabel(
                     label: 'Sort By', icon: 'sort', child: _orderDrop())),
             SizedBox(width: 12.w),
@@ -1195,7 +1205,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
     );
   }
 
-  Widget _courseDrop() => DropdownButtonFormField<String>(
+  Widget _courseDrop() => AppDropdownField<String>(
         key: ValueKey('emcourse-${_course ?? ''}'),
         initialValue: _course,
         isExpanded: true,
@@ -1213,7 +1223,7 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
         }),
       );
 
-  Widget _orderDrop() => DropdownButtonFormField<String>(
+  Widget _orderDrop() => AppDropdownField<String>(
         initialValue: _order,
         isExpanded: true,
         style: AppUI.fieldText(context),
@@ -1222,10 +1232,14 @@ class _EmisUmisScreenState extends State<EmisUmisScreen> {
           DropdownMenuItem(value: 'regno', child: Text(schoolTerm('Register No.'))),
           const DropdownMenuItem(value: 'name', child: Text('Name')),
         ],
+        // The shown choice stays on one line and shrinks to fit.
+        selectedItemBuilder: (_) => [schoolTerm('Register No.'), 'Name']
+            .map((t) => AppFitText(t))
+            .toList(),
         onChanged: (v) => setState(() => _order = v ?? 'regno'),
       );
 
-  Widget _classDrop() => DropdownButtonFormField<String>(
+  Widget _classDrop() => AppDropdownField<String>(
         key: ValueKey('emclass-${_class ?? ''}-${_course ?? ''}'),
         initialValue: _class,
         isExpanded: true,
