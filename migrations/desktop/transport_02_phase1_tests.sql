@@ -749,6 +749,8 @@ BEGIN
       sz := public.tr_save(tk_a, 'schedule', jsonb_build_object('schedule_code', 'zt-enr-p', 'schedule_name', 'Enrollment Pickup', 'route_id', r1,
                'direction', 'PICKUP', 'vehicle_id', vz, 'planned_start', '06:30', 'planned_end', '06:55', 'run_days', '[1,2,3,4,5,6]'::jsonb,
                'effective_from', '2026-06-01', 'stops', jsonb_build_array(jsonb_build_object('stop_id', s3, 'planned_time', '06:40'))));
+      -- R5 also has section 16's pickup: with two vehicles a student rides the one allotted (Vehicle Allotment)
+      UPDATE transport20262027.tr_student_enrollment SET pickup_schedule_id = sz WHERE route_id = r1 AND student_id = yb AND status = 'ACTIVE';
       PERFORM transport_core.fn_generate_trips(1, '2026-11-17');
       IF (SELECT string_agg(ts.student_id || '@' || ts.stop_id || ':' || ts.status, ',')
             FROM transport20262027.tr_trip t JOIN transport20262027.tr_trip_student ts ON ts.trip_id = t.trip_id
@@ -759,6 +761,132 @@ BEGIN
       bad := bad || ('enrollment trip check failed: ' || SQLERRM);
     END;
     n := n + 1;
+  END;
+
+  -- 17b. staff enrollment (tr_staff_enrollment, transport_23): the staff on a
+  --      route, saved as the Staff Enrollment tab's batch. Only staff of the
+  --      year (staffmast) who are active and whose transport is BUS are
+  --      offered, added, or made Active again. Its own two routes, so the
+  --      students of section 17 do not count.
+  DECLARE ids numeric[]; fa numeric; fb numeric; fc numeric; who text; rs bigint; rt bigint; ga bigint; gb bigint; gt bigint;
+    pa bigint; pb bigint; pt bigint; ea bigint; eb bigint; up timestamptz; q text := $q$SELECT public.tr_save(%L,'staff_enrollment',%L)$q$;
+  BEGIN
+    IF NOT transport_core._staff_ready(app_sch, 'transport20262027') THEN
+      RAISE EXCEPTION 'TESTS_FAILED: section 17b needs %.staffmast with transportreq, and transport20262027.tr_staff_enrollment (transport_23)', app_sch;
+    END IF;
+    -- three staff of the year: fa and fb may travel (active, BUS), fc may not (OWN); none on a route
+    EXECUTE format('SELECT array_agg(staf_id ORDER BY staf_id) FROM (SELECT m.staf_id FROM %I.staffmast m
+                      JOIN public.schstaff s ON s.staf_id = m.staf_id WHERE s.ins_id = 1 ORDER BY m.staf_id LIMIT 3) x', app_sch) INTO ids;
+    IF cardinality(ids) IS DISTINCT FROM 3 THEN RAISE EXCEPTION 'TESTS_FAILED: section 17b needs 3 staff of school 1 in %.staffmast', app_sch; END IF;
+    fa := ids[1]; fb := ids[2]; fc := ids[3];
+    EXECUTE format('UPDATE %I.staffmast SET is_active = true, transportreq = CASE WHEN staf_id = $3 THEN ''OWN'' ELSE ''BUS'' END
+                     WHERE staf_id IN ($1, $2, $3)', app_sch) USING fa, fb, fc;
+    UPDATE transport20262027.tr_staff_enrollment SET status = 'CANCELLED' WHERE staf_id IN (fa, fb, fc) AND status = 'ACTIVE';
+    EXECUTE format('SELECT emp_code FROM %I.staffmast WHERE staf_id = $1', app_sch) INTO who USING fb;
+    -- a route of two stages (its far stop in stage 2), and a second route
+    rs := public.tr_save(tk_a, 'route', '{"route_code":"zt-senr1","route_name":"Staff Line"}');
+    ga := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rs, 'stage_no', 1, 'stage_name', 'Near'));
+    gb := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rs, 'stage_no', 2, 'stage_name', 'Far'));
+    pa := public.tr_save(tk_a, 'stop', jsonb_build_object('route_id', rs, 'stage_id', ga, 'stop_seq', 1, 'stop_name', 'Staff Gate', 'latitude', 13.01, 'longitude', 80.21));
+    pb := public.tr_save(tk_a, 'stop', jsonb_build_object('route_id', rs, 'stage_id', gb, 'stop_seq', 2, 'stop_name', 'Staff Far End', 'latitude', 13.02, 'longitude', 80.22));
+    rt := public.tr_save(tk_a, 'route', '{"route_code":"zt-senr2","route_name":"Staff Line Two"}');
+    gt := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rt, 'stage_no', 1, 'stage_name', 'Near'));
+    pt := public.tr_save(tk_a, 'stop', jsonb_build_object('route_id', rt, 'stage_id', gt, 'stop_seq', 1, 'stop_name', 'Staff Corner', 'latitude', 13.03, 'longitude', 80.23));
+
+    -- only the staff who may travel are offered
+    j := public.tr_enrollment_staff(tk_a);
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'staff') x WHERE (x->>'staf_id')::numeric = fa)
+       OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'staff') x WHERE (x->>'staf_id')::numeric = fb)
+       OR EXISTS (SELECT 1 FROM jsonb_array_elements(j->'staff') x WHERE (x->>'staf_id')::numeric = fc)
+       OR j->>'year_from' IS DISTINCT FROM (SELECT iyrstadate::text FROM public.institutionyear WHERE iyr_id = iyr_now) THEN
+      bad := bad || ('the staff list offers the wrong staff, or not the year')::text;
+    END IF;
+    -- two staff: Both (up in stage 1, down in stage 2) and Pickup only (its drop stop is cleared)
+    IF public.tr_save(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+         jsonb_build_object('staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', pa, 'drop_stop_id', pb, 'start_date', '2026-06-01'),
+         jsonb_build_object('staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', pa, 'drop_stop_id', pb, 'start_date', '2026-06-01')))) <> 2 THEN
+      bad := bad || ('staff enrollment save did not count its rows')::text;
+    END IF;
+    SELECT enrollment_id INTO ea FROM transport20262027.tr_staff_enrollment WHERE staf_id = fa AND status = 'ACTIVE';
+    SELECT enrollment_id INTO eb FROM transport20262027.tr_staff_enrollment WHERE staf_id = fb AND status = 'ACTIVE';
+    IF (SELECT format('%s:%s:%s:%s:%s:%s', route_id, fee_stage_id, acad_year_id, status, created_by, inst_id)
+          FROM transport20262027.tr_staff_enrollment WHERE enrollment_id = ea)
+       IS DISTINCT FROM format('%s:%s:%s:ACTIVE:%s:1', rs, gb, iyr_now, u) THEN
+      bad := bad || ('staff enrollment not saved with the farther stop''s stage and the session year')::text;
+    END IF;
+    IF (SELECT drop_stop_id IS NULL AND fee_stage_id = ga FROM transport20262027.tr_staff_enrollment WHERE enrollment_id = eb) IS NOT TRUE THEN
+      bad := bad || ('a pickup-only staff enrollment kept its drop stop, or got the wrong stage')::text;
+    END IF;
+    j := public.tr_list(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs));
+    IF jsonb_array_length(j) <> 2 OR j->0->>'emp_code' IS NULL OR j->0->>'stafname' IS NULL OR (j->0->>'staff_active')::boolean IS NOT TRUE THEN
+      bad := bad || ('the staff enrollment list lacks the staff details')::text;
+    END IF;
+    j := public.tr_enrollment_staff(tk_a);
+    IF (SELECT count(*) FROM jsonb_array_elements(j->'staff') x WHERE (x->>'staf_id')::numeric = fa AND x->>'route_code' = 'ZT-SENR1') <> 1 THEN
+      bad := bad || ('the staff list does not show the route')::text;
+    END IF;
+    n := n + 6;
+
+    -- readable errors, each naming the staff member
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rt, 'rows', jsonb_build_array(
+             jsonb_build_object('staf_id', fc, 'service_type', 'PICKUP', 'pickup_stop_id', pt, 'start_date', '2026-06-01')))), 'whose transport is bus');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rt, 'rows', jsonb_build_array(
+             jsonb_build_object('staf_id', fb, 'service_type', 'BOTH', 'pickup_stop_id', pt, 'start_date', '2026-06-01')))), 'choose the drop stop of ' || who);
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('enrollment_id', ea, 'staf_id', fa, 'service_type', 'PICKUP', 'pickup_stop_id', pt, 'start_date', '2026-06-01')))),
+             'is not on route zt-senr1');
+    -- one active enrollment a year: fa is on ZT-SENR1, so not on ZT-SENR2 too
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rt, 'rows', jsonb_build_array(
+             jsonb_build_object('staf_id', fa, 'service_type', 'PICKUP', 'pickup_stop_id', pt, 'start_date', '2026-06-01')))), 'already enrolled on route zt-senr1');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('enrollment_id', ea, 'staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', pa, 'drop_stop_id', pb, 'start_date', '2026-06-01'),
+             jsonb_build_object('staf_id', fa, 'service_type', 'PICKUP', 'pickup_stop_id', pa, 'start_date', '2026-06-01')))), 'listed twice');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('staf_id', -1, 'service_type', 'PICKUP', 'pickup_stop_id', pa, 'start_date', '2026-06-01')))), 'staff member was not found');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('enrollment_id', ea, 'staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', pa, 'drop_stop_id', pb,
+                                'start_date', '2025-06-01')))), 'within the academic year');
+    -- never deleted: a staff member who stops is Cancelled
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_delete(%L,'staff_enrollment',%s)$q$, tk_a, ea), 'set the status to cancelled');
+    -- a route, stage or stop the staff still use is not switched off
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_delete(%L,'route',%s)$q$, tk_a, rs), 'staff still use this route');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_delete(%L,'stage',%s)$q$, tk_a, gb), 'staff still use this stage');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_delete(%L,'stop',%s)$q$, tk_a, pb), 'staff or schedule(s) still use this stop');
+    -- the Student Enrollment menu is needed
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_list(%L,'staff_enrollment')$q$, tk_ac), 'no access');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_enrollment_staff(%L)$q$, tk_ac), 'no access');
+    bad := bad || pg_temp.fails(format(q, tk_ac, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', pa, 'start_date', '2026-06-01')))), 'no access');
+    n := n + 15;
+
+    -- an edit someone else made first is refused; fb is Cancelled, and once
+    -- fb no longer comes by bus (OWN) cannot be made Active again
+    SELECT updated_at INTO up FROM transport20262027.tr_staff_enrollment WHERE enrollment_id = eb;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('enrollment_id', eb, 'staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', pa,
+                                'start_date', '2026-06-01', 'status', 'CANCELLED', 'updated_at', up - interval '1 second')))), 'changed by someone else');
+    PERFORM public.tr_save(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('enrollment_id', eb, 'staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', pa,
+                                 'start_date', '2026-06-01', 'end_date', '2026-10-31', 'status', 'CANCELLED', 'updated_at', up))));
+    EXECUTE format('UPDATE %I.staffmast SET transportreq = ''OWN'' WHERE staf_id = $1', app_sch) USING fb;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+             jsonb_build_object('enrollment_id', eb, 'staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', pa,
+                                'start_date', '2026-06-01', 'status', 'ACTIVE')))), 'cannot be made active again');
+    -- the saved row of one who has left can still be changed: fa now gets on and off at the far stop
+    EXECUTE format('UPDATE %I.staffmast SET is_active = false WHERE staf_id = $1', app_sch) USING fa;
+    PERFORM public.tr_save(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('enrollment_id', ea, 'staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', pb, 'drop_stop_id', pb,
+                                 'start_date', '2026-06-01'))));
+    IF (SELECT string_agg(staf_id || ':' || status || ':' || pickup_stop_id, ',' ORDER BY staf_id)
+          FROM transport20262027.tr_staff_enrollment WHERE staf_id IN (fa, fb) AND route_id = rs)
+       IS DISTINCT FROM format('%s:ACTIVE:%s,%s:CANCELLED:%s', fa, pb, fb, pa) THEN
+      bad := bad || ('the staff enrollments were not changed as saved')::text;
+    END IF;
+    j := public.tr_list(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs));
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j) x WHERE (x->>'staf_id')::numeric = fa AND (x->>'staff_active')::boolean = false) THEN
+      bad := bad || ('the staff enrollment list does not say the staff member left')::text;
+    END IF;
+    n := n + 4;
   END;
 
   -- 18. vehicle allotment: the vehicle (schedule) each student of a route
@@ -895,6 +1023,78 @@ BEGIN
       bad := bad || ('allotment trip check failed: ' || SQLERRM);
     END;
     n := n + 1;
+  END;
+
+  -- 18b. staff in Vehicle Allotment: a route's staff are listed for the
+  --      screen (staff_allotment) and take seats in the same vehicles as its
+  --      students, saved in the same batch (staff_rows); the capacity counts
+  --      both. Its own route and a 2-seat van.
+  DECLARE ids numeric[]; fa numeric; fb numeric; st bigint; rs bigint; gs bigint; ps bigint; vs bigint; ss bigint;
+    es bigint; efa bigint; efb bigint; q text := $q$SELECT public.tr_save(%L,'allotment',%L)$q$;
+  BEGIN
+    IF NOT transport_core._staff_ready(app_sch, 'transport20262027') THEN
+      RAISE EXCEPTION 'TESTS_FAILED: section 18b needs %.staffmast with transportreq, and transport20262027.tr_staff_enrollment (transport_23)', app_sch;
+    END IF;
+    EXECUTE format('SELECT array_agg(staf_id ORDER BY staf_id) FROM (SELECT m.staf_id FROM %I.staffmast m
+                      JOIN public.schstaff s ON s.staf_id = m.staf_id WHERE s.ins_id = 1 ORDER BY m.staf_id LIMIT 2) x', app_sch) INTO ids;
+    IF cardinality(ids) IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'TESTS_FAILED: section 18b needs 2 staff of school 1 in %.staffmast', app_sch; END IF;
+    fa := ids[1]; fb := ids[2];
+    EXECUTE format('UPDATE %I.staffmast SET is_active = true, transportreq = ''BUS'' WHERE staf_id IN ($1, $2)', app_sch) USING fa, fb;
+    UPDATE transport20262027.tr_staff_enrollment SET status = 'CANCELLED' WHERE staf_id IN (fa, fb) AND status = 'ACTIVE';
+    EXECUTE format('SELECT s.stu_id FROM %I.students s WHERE s.ins_id = 1 AND s.activestatus = 1
+                      AND NOT EXISTS (SELECT 1 FROM transport20262027.tr_student_enrollment e WHERE e.student_id = s.stu_id AND e.status = ''ACTIVE'')
+                     ORDER BY s.stu_id LIMIT 1', app_sch) INTO st;
+    IF st IS NULL THEN RAISE EXCEPTION 'TESTS_FAILED: section 18b needs an active student with no transport in %.students', app_sch; END IF;
+    -- a route with one stop, a 2-seat van picking up there, one student and two staff on it
+    rs := public.tr_save(tk_a, 'route', '{"route_code":"zt-sal","route_name":"Staff Van Line"}');
+    gs := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rs, 'stage_no', 1, 'stage_name', 'Near'));
+    ps := public.tr_save(tk_a, 'stop', jsonb_build_object('route_id', rs, 'stage_id', gs, 'stop_seq', 1, 'stop_name', 'Van Corner', 'latitude', 13.04, 'longitude', 80.24));
+    vs := public.tr_save(tk_a, 'vehicle', jsonb_build_object('fuel_type', 'DIESEL', 'vehicle_code', 'zt-sal-van', 'registration_no', 'zt01sa0002', 'vehicle_type', 'VAN',
+                                                             'seating_capacity', 2, 'ownership_type', 'OWNED'));
+    ss := public.tr_save(tk_a, 'schedule', jsonb_build_object('schedule_code', 'zt-sal-p', 'schedule_name', 'Staff Van Pickup', 'route_id', rs, 'direction', 'PICKUP',
+            'vehicle_id', vs, 'planned_start', '06:00', 'planned_end', '06:30', 'run_days', '[1,2,3,4,5,6]'::jsonb, 'effective_from', '2026-06-01',
+            'stops', jsonb_build_array(jsonb_build_object('stop_id', ps, 'planned_time', '06:10'))));
+    PERFORM public.tr_save(tk_a, 'enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('student_id', st, 'service_type', 'BOTH', 'pickup_stop_id', ps, 'drop_stop_id', ps, 'start_date', '2026-06-01'))));
+    PERFORM public.tr_save(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', ps, 'drop_stop_id', ps, 'start_date', '2026-06-01'),
+              jsonb_build_object('staf_id', fb, 'service_type', 'PICKUP', 'pickup_stop_id', ps, 'start_date', '2026-06-01'))));
+    SELECT enrollment_id INTO es FROM transport20262027.tr_student_enrollment WHERE student_id = st AND status = 'ACTIVE';
+    SELECT enrollment_id INTO efa FROM transport20262027.tr_staff_enrollment WHERE staf_id = fa AND status = 'ACTIVE';
+    SELECT enrollment_id INTO efb FROM transport20262027.tr_staff_enrollment WHERE staf_id = fb AND status = 'ACTIVE';
+
+    -- listed for the screen, with the staff details
+    j := public.tr_list(tk_a, 'staff_allotment', jsonb_build_object('route_id', rs));
+    IF jsonb_array_length(j) <> 2 OR j->0->>'emp_code' IS NULL OR j->0->>'stafname' IS NULL THEN
+      bad := bad || ('the staff are not listed for Vehicle Allotment')::text;
+    END IF;
+    -- a student and a staff member go into the van together, in one batch
+    IF public.tr_save(tk_a, 'allotment', jsonb_build_object('route_id', rs, 'direction', 'PICKUP',
+         'rows', jsonb_build_array(jsonb_build_object('enrollment_id', es, 'schedule_id', ss)),
+         'staff_rows', jsonb_build_array(jsonb_build_object('enrollment_id', efa, 'schedule_id', ss)))) <> 2 THEN
+      bad := bad || ('the allotment did not count the student and the staff member')::text;
+    END IF;
+    IF (SELECT pickup_schedule_id FROM transport20262027.tr_staff_enrollment WHERE enrollment_id = efa) IS DISTINCT FROM ss
+       OR (SELECT pickup_schedule_id FROM transport20262027.tr_student_enrollment WHERE enrollment_id = es) IS DISTINCT FROM ss THEN
+      bad := bad || ('the student and the staff member were not put in the van')::text;
+    END IF;
+    -- 2 seats: a second staff member is one too many
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('route_id', rs, 'direction', 'PICKUP',
+             'staff_rows', jsonb_build_array(jsonb_build_object('enrollment_id', efb, 'schedule_id', ss)))), 'would have 1 student and 2 staff for 2 seats');
+    -- the student comes out and the second staff member goes in, staff rows only for them
+    PERFORM public.tr_save(tk_a, 'allotment', jsonb_build_object('route_id', rs, 'direction', 'PICKUP',
+              'rows', jsonb_build_array(jsonb_build_object('enrollment_id', es, 'schedule_id', null)),
+              'staff_rows', jsonb_build_array(jsonb_build_object('enrollment_id', efb, 'schedule_id', ss))));
+    IF (SELECT count(*) FROM transport20262027.tr_staff_enrollment WHERE pickup_schedule_id = ss AND status = 'ACTIVE') <> 2
+       OR (SELECT pickup_schedule_id FROM transport20262027.tr_student_enrollment WHERE enrollment_id = es) IS NOT NULL THEN
+      bad := bad || ('the van does not hold the two staff only')::text;
+    END IF;
+    -- the trip the staff ride is not switched off
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_delete(%L,'schedule',%s)$q$, tk_a, ss), 'staff still use this schedule');
+    -- saved only with the students; the Vehicle Allotment menu is needed
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_save(%L,'staff_allotment',%L)$q$, tk_a, '{}'), 'saved with the students');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_list(%L,'staff_allotment')$q$, tk_ac), 'no access');
+    n := n + 8;
   END;
 
   -- 19. Stage Fees (the screen's batch, _stage_fee_save): the fees of a
@@ -1432,6 +1632,317 @@ BEGIN
       bad := bad || ('parent bus: shown while Transport is switched off')::text;
     END IF;
     n := n + 3;
+  END;
+
+  -- 25. Daily Trips (transport_24-26): a day's trips are made from the
+  --     schedules with their students, staff riders and crew; a trip's
+  --     vehicle and crew change for that day only. Its own route, two
+  --     pickup trips at the same time, a 1-seat car, a van and a bus.
+  DECLARE d date; rs bigint; gs bigint; ps bigint; v1 bigint; v2 bigint; v40 bigint; dr1 bigint; dr2 bigint; at1 bigint;
+    sa bigint; sb bigint; st bigint; fa numeric; ta bigint; tb bigint; up timestamptz; k integer; nt bigint; tc bigint; es bigint; ef bigint;
+    qb text := $q$SELECT public.tr_trip_board_save(%L,%L)$q$;
+    q text := $q$SELECT public.tr_trip_save(%L,%L)$q$;
+    qr text := $q$SELECT public.tr_trip_replace(%L,%L)$q$;
+  BEGIN
+    IF NOT transport_core._staff_ready(app_sch, 'transport20262027') OR to_regclass('transport20262027.tr_trip_staff_rider') IS NULL THEN
+      RAISE EXCEPTION 'TESTS_FAILED: section 25 needs staff transport (transport_23, transport_24)';
+    END IF;
+    -- a school day (Monday to Saturday) after today, in the session year
+    SELECT g::date INTO d FROM generate_series(transport_core._today() + 1, transport_core._today() + 8, interval '1 day') g
+     WHERE extract(isodow FROM g) BETWEEN 1 AND 6 ORDER BY g LIMIT 1;
+    IF NOT EXISTS (SELECT 1 FROM public.institutionyear WHERE iyr_id = iyr_now AND d BETWEEN iyrstadate AND iyrenddate) THEN
+      RAISE EXCEPTION 'TESTS_FAILED: section 25 needs % in the session year', d;
+    END IF;
+    rs := public.tr_save(tk_a, 'route', '{"route_code":"zt-dt","route_name":"Daily Line"}');
+    gs := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rs, 'stage_no', 1, 'stage_name', 'Near'));
+    ps := public.tr_save(tk_a, 'stop', jsonb_build_object('route_id', rs, 'stage_id', gs, 'stop_seq', 1, 'stop_name', 'Daily Corner', 'latitude', 13.05, 'longitude', 80.25));
+    v1 := public.tr_save(tk_a, 'vehicle', jsonb_build_object('fuel_type', 'PETROL', 'vehicle_code', 'zt-dt-car', 'registration_no', 'zt01dt0001',
+                                                             'vehicle_type', 'VAN', 'seating_capacity', 1, 'ownership_type', 'OWNED'));
+    v2 := public.tr_save(tk_a, 'vehicle', jsonb_build_object('fuel_type', 'DIESEL', 'vehicle_code', 'zt-dt-van', 'registration_no', 'zt01dt0002',
+                                                             'vehicle_type', 'VAN', 'seating_capacity', 2, 'ownership_type', 'OWNED'));
+    v40 := public.tr_save(tk_a, 'vehicle', jsonb_build_object('fuel_type', 'DIESEL', 'vehicle_code', 'zt-dt-bus', 'registration_no', 'zt01dt0040',
+                                                              'vehicle_type', 'BUS', 'seating_capacity', 40, 'ownership_type', 'OWNED'));
+    dr1 := public.tr_save(tk_a, 'staff', '{"staff_code":"zt-dt-d1","staff_type":"DRIVER","full_name":"Day Driver One","mobile":"9876511101"}');
+    dr2 := public.tr_save(tk_a, 'staff', '{"staff_code":"zt-dt-d2","staff_type":"DRIVER","full_name":"Day Driver Two","mobile":"9876511102"}');
+    at1 := public.tr_save(tk_a, 'staff', '{"staff_code":"zt-dt-a1","staff_type":"ATTENDER","full_name":"Day Attender","mobile":"9876511103"}');
+    sa := public.tr_save(tk_a, 'schedule', jsonb_build_object('schedule_code', 'zt-dt-a', 'schedule_name', 'Day Van', 'route_id', rs, 'direction', 'PICKUP',
+            'vehicle_id', v2, 'planned_start', '07:00', 'planned_end', '07:30', 'run_days', '[1,2,3,4,5,6]'::jsonb, 'effective_from', '2026-06-01',
+            'stops', jsonb_build_array(jsonb_build_object('stop_id', ps, 'planned_time', '07:10'))));
+    sb := public.tr_save(tk_a, 'schedule', jsonb_build_object('schedule_code', 'zt-dt-b', 'schedule_name', 'Day Bus', 'route_id', rs, 'direction', 'PICKUP',
+            'vehicle_id', v40, 'planned_start', '07:00', 'planned_end', '07:30', 'run_days', '[1,2,3,4,5,6]'::jsonb, 'effective_from', '2026-06-01',
+            'stops', jsonb_build_array(jsonb_build_object('stop_id', ps, 'planned_time', '07:10'))));
+    PERFORM public.tr_save(tk_a, 'duty', jsonb_build_object('schedule_id', sa, 'staff_id', dr1, 'duty_role', 'DRIVER', 'effective_from', '2026-06-01'));
+    PERFORM public.tr_save(tk_a, 'duty', jsonb_build_object('schedule_id', sa, 'staff_id', at1, 'duty_role', 'ATTENDER', 'effective_from', '2026-06-01'));
+    PERFORM public.tr_save(tk_a, 'duty', jsonb_build_object('schedule_id', sb, 'staff_id', dr2, 'duty_role', 'DRIVER', 'effective_from', '2026-06-01'));
+    -- a student and a staff member on the route: the student allotted to A's van, the staff member to no vehicle yet
+    EXECUTE format('SELECT s.stu_id FROM %I.students s WHERE s.ins_id = 1 AND s.activestatus = 1
+                      AND NOT EXISTS (SELECT 1 FROM transport20262027.tr_student_enrollment e WHERE e.student_id = s.stu_id AND e.status = ''ACTIVE'')
+                     ORDER BY s.stu_id LIMIT 1', app_sch) INTO st;
+    EXECUTE format('SELECT m.staf_id FROM %I.staffmast m JOIN public.schstaff s ON s.staf_id = m.staf_id WHERE s.ins_id = 1 ORDER BY m.staf_id LIMIT 1', app_sch) INTO fa;
+    IF st IS NULL OR fa IS NULL THEN RAISE EXCEPTION 'TESTS_FAILED: section 25 needs a student with no transport and a staff member in %', app_sch; END IF;
+    EXECUTE format('UPDATE %I.staffmast SET is_active = true, transportreq = ''BUS'' WHERE staf_id = $1', app_sch) USING fa;
+    UPDATE transport20262027.tr_staff_enrollment SET status = 'CANCELLED' WHERE staf_id = fa AND status = 'ACTIVE';
+    PERFORM public.tr_save(tk_a, 'enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('student_id', st, 'service_type', 'BOTH', 'pickup_stop_id', ps, 'drop_stop_id', ps, 'start_date', '2026-06-01'))));
+    PERFORM public.tr_save(tk_a, 'staff_enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(
+              jsonb_build_object('staf_id', fa, 'service_type', 'BOTH', 'pickup_stop_id', ps, 'drop_stop_id', ps, 'start_date', '2026-06-01'))));
+    PERFORM public.tr_save(tk_a, 'allotment', jsonb_build_object('route_id', rs, 'direction', 'PICKUP', 'rows', jsonb_build_array(
+              jsonb_build_object('enrollment_id', (SELECT enrollment_id FROM transport20262027.tr_student_enrollment
+                                                    WHERE route_id = rs AND student_id = st AND status = 'ACTIVE'), 'schedule_id', sa))));
+
+    -- Make Trips: the day's trips with their riders and crew; a second time makes none
+    IF public.tr_trips_make(tk_a, d) < 2 THEN bad := bad || ('Make Trips did not make the day''s trips')::text; END IF;
+    SELECT trip_id INTO ta FROM transport20262027.tr_trip WHERE schedule_id = sa AND trip_date = d;
+    SELECT trip_id INTO tb FROM transport20262027.tr_trip WHERE schedule_id = sb AND trip_date = d;
+    -- two pickups on the route: the staff member, allotted to neither, rides neither; B (no one allotted) expects nobody
+    IF EXISTS (SELECT 1 FROM transport20262027.tr_trip_staff_rider WHERE trip_id IN (ta, tb))
+       OR EXISTS (SELECT 1 FROM transport20262027.tr_trip_student WHERE trip_id = tb) THEN
+      bad := bad || ('a rider is on a trip of a vehicle not allotted to them')::text;
+    END IF;
+    -- allotted after the trips were made: the trips follow (the staff member onto B, then onto A)
+    PERFORM public.tr_save(tk_a, 'allotment', jsonb_build_object('route_id', rs, 'direction', 'PICKUP', 'staff_rows', jsonb_build_array(
+              jsonb_build_object('enrollment_id', (SELECT enrollment_id FROM transport20262027.tr_staff_enrollment
+                                                    WHERE route_id = rs AND staf_id = fa AND status = 'ACTIVE'), 'schedule_id', sb))));
+    IF (SELECT count(*) FROM transport20262027.tr_trip_staff_rider WHERE trip_id = tb AND staf_id = fa) <> 1
+       OR EXISTS (SELECT 1 FROM transport20262027.tr_trip_staff_rider WHERE trip_id = ta) THEN
+      bad := bad || ('the trips did not follow an allotment made after them')::text;
+    END IF;
+    PERFORM public.tr_save(tk_a, 'allotment', jsonb_build_object('route_id', rs, 'direction', 'PICKUP', 'staff_rows', jsonb_build_array(
+              jsonb_build_object('enrollment_id', (SELECT enrollment_id FROM transport20262027.tr_staff_enrollment
+                                                    WHERE route_id = rs AND staf_id = fa AND status = 'ACTIVE'), 'schedule_id', sa))));
+    IF EXISTS (SELECT 1 FROM transport20262027.tr_trip_staff_rider WHERE trip_id = tb) THEN
+      bad := bad || ('a rider moved to another vehicle stayed on the old trip')::text;
+    END IF;
+    IF (SELECT count(*) FROM transport20262027.tr_trip_student WHERE trip_id = ta AND student_id = st AND status = 'EXPECTED') <> 1
+       OR (SELECT count(*) FROM transport20262027.tr_trip_staff_rider WHERE trip_id = ta AND staf_id = fa AND status = 'EXPECTED') <> 1
+       OR (SELECT string_agg(duty_role || ':' || staff_id, ',' ORDER BY duty_role) FROM transport20262027.tr_trip_staff WHERE trip_id = ta)
+          IS DISTINCT FROM format('ATTENDER:%s,DRIVER:%s', at1, dr1) THEN
+      bad := bad || ('the day''s trip lacks its student, its staff rider or its crew')::text;
+    END IF;
+    IF public.tr_trips_make(tk_a, d) <> 0 THEN bad := bad || ('Make Trips made a day''s trips twice')::text; END IF;
+    j := public.tr_daily_trips(tk_a, d);
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'trips') x
+                    WHERE (x->>'trip_id')::bigint = ta AND (x->>'students')::int = 1 AND (x->>'staff')::int = 1
+                      AND (x->>'editable')::boolean AND (x->>'vehicle_id')::bigint = v2 AND jsonb_array_length(x->'crew') = 2) THEN
+      bad := bad || ('Daily Trips does not list the trip with its riders, vehicle and crew')::text;
+    END IF;
+
+    -- the vehicle: seats for the riders, and not on another trip at the same time; a swap is one save
+    SELECT updated_at INTO up FROM transport20262027.tr_trip WHERE trip_id = ta;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'updated_at', up, 'vehicle_id', v1)))), 'expects 2 riders');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'vehicle_id', v40)))), 'at the same time');
+    k := public.tr_trip_save(tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+           jsonb_build_object('trip_id', ta, 'updated_at', up, 'vehicle_id', v40), jsonb_build_object('trip_id', tb, 'vehicle_id', v2))));
+    IF k <> 2 OR (SELECT vehicle_id FROM transport20262027.tr_trip WHERE trip_id = ta) IS DISTINCT FROM v40
+       OR (SELECT vehicle_id FROM transport20262027.tr_trip WHERE trip_id = tb) IS DISTINCT FROM v2 THEN
+      bad := bad || format('the two trips did not swap their vehicles: saved %s, A has %s, B has %s (van %s, bus %s)', k,
+               (SELECT vehicle_id FROM transport20262027.tr_trip WHERE trip_id = ta),
+               (SELECT vehicle_id FROM transport20262027.tr_trip WHERE trip_id = tb), v2, v40);
+    END IF;
+    -- the crew: a driver drives, and one trip at a time; drivers swap in one save, as substitutes
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'driver_id', at1)))), 'is not a driver');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'driver_id', dr2)))), 'at the same time');
+    k := public.tr_trip_save(tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+           jsonb_build_object('trip_id', ta, 'driver_id', dr2, 'attender_id', null), jsonb_build_object('trip_id', tb, 'driver_id', dr1))));
+    IF (SELECT string_agg(duty_role || ':' || staff_id || ':' || is_substitute, ',') FROM transport20262027.tr_trip_staff WHERE trip_id = ta)
+          IS DISTINCT FROM format('DRIVER:%s:true', dr2)
+       OR (SELECT string_agg(duty_role || ':' || staff_id || ':' || is_substitute, ',') FROM transport20262027.tr_trip_staff WHERE trip_id = tb)
+          IS DISTINCT FROM format('DRIVER:%s:true', dr1) THEN
+      bad := bad || ('the drivers were not swapped as substitutes, or the attender stayed')::text;
+    END IF;
+    -- an old copy (one transaction: now() does not move, so the copy is a second older), a cancelled trip, a past day, and the menu
+    SELECT updated_at INTO up FROM transport20262027.tr_trip WHERE trip_id = ta;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'updated_at', up - interval '1 second', 'vehicle_id', v2)))), 'changed by someone else');
+    UPDATE transport20262027.tr_trip SET status = 'CANCELLED' WHERE trip_id = tb;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tb, 'vehicle_id', v40)))), 'is cancelled');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trips_make(%L,%L)$q$, tk_a, transport_core._today() - 1), 'past day');
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_daily_trips(%L,%L)$q$, tk_ac, d), 'no access');
+    bad := bad || pg_temp.fails(format(q, tk_ac, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'vehicle_id', v2)))), 'no access');
+    -- cancel needs its reason; a cancelled trip changes only by being restored
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'status', 'CANCELLED')))), 'give the reason');
+    k := public.tr_trip_save(tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+           jsonb_build_object('trip_id', ta, 'status', 'CANCELLED', 'cancel_reason', ' Road closed '))));
+    IF k <> 1 OR (SELECT status || ':' || cancel_reason FROM transport20262027.tr_trip WHERE trip_id = ta) IS DISTINCT FROM 'CANCELLED:Road closed' THEN
+      bad := bad || ('the trip was not cancelled with its reason')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_board_save(%L,%L)$q$, tk_a,
+             jsonb_build_object('trip_date', d, 'trip_id', ta, 'students', '[]'::jsonb)), 'is cancelled');
+    PERFORM public.tr_trip_save(tk_a, jsonb_build_object('trip_date', d, 'trips', jsonb_build_array(
+              jsonb_build_object('trip_id', ta, 'status', 'SCHEDULED'))));
+    IF (SELECT status || ':' || COALESCE(cancel_reason, '-') FROM transport20262027.tr_trip WHERE trip_id = ta) IS DISTINCT FROM 'SCHEDULED:-' THEN
+      bad := bad || ('the cancelled trip was not restored')::text;
+    END IF;
+    -- boarding: from the trip's day on
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_board_save(%L,%L)$q$, tk_a,
+             jsonb_build_object('trip_date', d, 'trip_id', ta, 'students', '[]'::jsonb)), 'can be entered from its day');
+    UPDATE transport20262027.tr_trip SET trip_date = transport_core._today() WHERE trip_id = ta;
+    j := public.tr_trip_riders(tk_a, transport_core._today(), ta);
+    IF (j->>'can_mark')::boolean IS NOT TRUE OR jsonb_array_length(j->'students') <> 1 OR jsonb_array_length(j->'staff') <> 1
+       OR j->'students'->0->>'stuname' IS NULL OR j->'staff'->0->>'stafname' IS NULL OR j->'students'->0->>'stop_name' IS NULL
+       OR j->>'direction' IS DISTINCT FROM 'PICKUP' THEN
+      bad := bad || ('the trip''s students and staff are not listed for boarding')::text;
+    END IF;
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+              'students', jsonb_build_array(jsonb_build_object('enrollment_id', (j->'students'->0->>'enrollment_id')::bigint, 'status', 'PARENT_PICKUP')),
+              'staff', jsonb_build_array(jsonb_build_object('enrollment_id', (j->'staff'->0->>'enrollment_id')::bigint, 'status', 'PRESENT'))));
+    IF (SELECT status FROM transport20262027.tr_trip_student WHERE trip_id = ta AND student_id = st) IS DISTINCT FROM 'PARENT_PICKUP'
+       OR (SELECT status || ':' || (boarded_at IS NOT NULL) || ':' || mark_method FROM transport20262027.tr_trip_staff_rider WHERE trip_id = ta AND staf_id = fa)
+          IS DISTINCT FROM 'BOARDED:true:MANUAL' THEN
+      bad := bad || ('the boarding entry was not saved')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_board_save(%L,%L)$q$, tk_a,
+             jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta, 'staff', jsonb_build_array(
+               jsonb_build_object('enrollment_id', (j->'staff'->0->>'enrollment_id')::bigint, 'status', 'PARENT_PICKUP')))), 'choose present, absent');
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+              'students', jsonb_build_array(jsonb_build_object('enrollment_id', (j->'students'->0->>'enrollment_id')::bigint, 'status', 'BOARDED'))));
+    IF (SELECT boarded_students FROM transport20262027.tr_trip WHERE trip_id = ta) IS DISTINCT FROM 1::smallint THEN
+      bad := bad || ('the picked student is not counted on the trip')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_board_save(%L,%L)$q$, tk_a,
+             jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta, 'students', jsonb_build_array(
+               jsonb_build_object('enrollment_id', (j->'students'->0->>'enrollment_id')::bigint, 'status', 'NO_SHOW')))), 'choose present, absent');
+    -- on a drop, present is alighted (got off at the stop; when it boarded is kept); absent stays absent
+    UPDATE transport20262027.tr_trip SET direction = 'DROP' WHERE trip_id = ta;
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+              'students', jsonb_build_array(jsonb_build_object('enrollment_id', (j->'students'->0->>'enrollment_id')::bigint, 'status', 'PRESENT')),
+              'staff', jsonb_build_array(jsonb_build_object('enrollment_id', (j->'staff'->0->>'enrollment_id')::bigint, 'status', 'ABSENT'))));
+    IF (SELECT status || ':' || (alighted_at IS NOT NULL) || ':' || (boarded_at IS NOT NULL) FROM transport20262027.tr_trip_student WHERE trip_id = ta AND student_id = st)
+          IS DISTINCT FROM 'ALIGHTED:true:true'
+       OR (SELECT status || ':' || (boarded_at IS NULL) FROM transport20262027.tr_trip_staff_rider WHERE trip_id = ta AND staf_id = fa) IS DISTINCT FROM 'ABSENT:true'
+       OR (SELECT boarded_students FROM transport20262027.tr_trip WHERE trip_id = ta) IS DISTINCT FROM 1::smallint THEN
+      bad := bad || ('a drop''s present was not saved as alighted')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_riders(%L,%L,%s)$q$, tk_ac, transport_core._today(), ta), 'no access');
+    -- Replace Trip: A (today, the bus, driver 2, its riders marked) cancelled and run by the van, with its
+    -- riders as marked, once; only a cancelled trip, another vehicle, a driver, and the menu
+    bad := bad || pg_temp.fails(format(qr, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+             'vehicle_id', v2, 'driver_id', dr1)), 'Only a cancelled trip');
+    PERFORM public.tr_trip_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+              jsonb_build_object('trip_id', ta, 'status', 'CANCELLED', 'cancel_reason', 'Bus breakdown'))));
+    bad := bad || pg_temp.fails(format(qr, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+             'vehicle_id', v40, 'driver_id', dr1)), 'own vehicle');
+    bad := bad || pg_temp.fails(format(qr, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+             'vehicle_id', v2)), 'Choose the driver');
+    bad := bad || pg_temp.fails(format(qr, tk_ac, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+             'vehicle_id', v2, 'driver_id', dr1)), 'no access');
+    nt := public.tr_trip_replace(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+            'vehicle_id', v2, 'driver_id', dr1, 'attender_id', at1));
+    IF (SELECT format('%s:%s:%s:%s:%s', replaces_trip_id, status, vehicle_id, schedule_id, trip_date) FROM transport20262027.tr_trip WHERE trip_id = nt)
+          IS DISTINCT FROM format('%s:SCHEDULED:%s:%s:%s', ta, v2, sa, transport_core._today())
+       OR (SELECT status FROM transport20262027.tr_trip_student WHERE trip_id = nt AND student_id = st) IS DISTINCT FROM 'ALIGHTED'
+       OR (SELECT status FROM transport20262027.tr_trip_staff_rider WHERE trip_id = nt AND staf_id = fa) IS DISTINCT FROM 'ABSENT'
+       OR (SELECT count(*) FROM transport20262027.tr_trip_stop WHERE trip_id = nt) <> (SELECT count(*) FROM transport20262027.tr_trip_stop WHERE trip_id = ta)
+       OR (SELECT string_agg(duty_role || ':' || staff_id || ':' || is_substitute, ',' ORDER BY duty_role) FROM transport20262027.tr_trip_staff WHERE trip_id = nt)
+          IS DISTINCT FROM format('ATTENDER:%s:false,DRIVER:%s:false', at1, dr1) THEN
+      bad := bad || ('the replacement trip was not made like the cancelled one, with the vehicle and crew chosen')::text;
+    END IF;
+    j := public.tr_daily_trips(tk_a, transport_core._today());
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'trips') x WHERE (x->>'trip_id')::bigint = ta
+                      AND (x->>'replaced_by_trip_id')::bigint = nt
+                      AND x->>'replaced_by_vehicle_code' = (SELECT vehicle_code FROM public.tr_vehicle WHERE vehicle_id = v2))
+       OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'trips') x WHERE (x->>'trip_id')::bigint = nt
+                      AND (x->>'replaces_trip_id')::bigint = ta AND (x->>'editable')::boolean
+                      AND x->>'replaces_vehicle_code' = (SELECT vehicle_code FROM public.tr_vehicle WHERE vehicle_id = v40)) THEN
+      bad := bad || format('Daily Trips does not show the trip and its replacement: %s',
+               (SELECT jsonb_agg(x) FROM jsonb_array_elements(j->'trips') x WHERE (x->>'trip_id')::bigint IN (ta, nt)));
+    END IF;
+    bad := bad || pg_temp.fails(format(qr, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', ta,
+             'vehicle_id', v1, 'driver_id', dr2)), 'already replaced');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', ta, 'status', 'SCHEDULED')))), 'cannot be restored');
+    PERFORM public.tr_trips_make(tk_a, transport_core._today());
+    IF (SELECT count(*) FROM transport20262027.tr_trip WHERE schedule_id = sa AND trip_date = transport_core._today()) <> 2 THEN
+      bad := bad || ('Make Trips made a replaced trip again')::text;
+    END IF;
+
+    -- Add Student / Add Staff: a rider of the route on another vehicle's trip that way (here A's replacement,
+    -- turned back into A's pickup) rides B's trip of today instead; one already present elsewhere is refused
+    UPDATE transport20262027.tr_trip SET direction = 'PICKUP' WHERE trip_id = nt;
+    SELECT trip_id INTO tc FROM transport20262027.tr_trip WHERE schedule_id = sb AND trip_date = transport_core._today();
+    SELECT enrollment_id INTO es FROM transport20262027.tr_student_enrollment WHERE route_id = rs AND student_id = st AND status = 'ACTIVE';
+    SELECT enrollment_id INTO ef FROM transport20262027.tr_staff_enrollment WHERE route_id = rs AND staf_id = fa AND status = 'ACTIVE';
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', nt,
+              'staff', jsonb_build_array(jsonb_build_object('enrollment_id', ef, 'status', 'EXPECTED'))));
+    j := public.tr_trip_rider_options(tk_a, transport_core._today(), tc);
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'students') x
+                    WHERE (x->>'enrollment_id')::bigint = es AND (x->>'present')::boolean AND (x->>'on_trip_id')::bigint = nt)
+       OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'staff') x
+                       WHERE (x->>'enrollment_id')::bigint = ef AND NOT (x->>'present')::boolean AND (x->>'on_trip_id')::bigint = nt
+                         AND x->>'on_status' = 'EXPECTED') THEN
+      bad := bad || format('Add Student / Add Staff does not offer the route''s riders of other trips: %s', j);
+    END IF;
+    bad := bad || pg_temp.fails(format(qb, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', tc,
+             'students', jsonb_build_array(jsonb_build_object('enrollment_id', es, 'status', 'PRESENT', 'add', true)))), 'already present on trip');
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', tc,
+              'staff', jsonb_build_array(jsonb_build_object('enrollment_id', ef, 'status', 'PRESENT', 'add', true))));
+    IF (SELECT status || ':' || is_extra || ':' || mark_method FROM transport20262027.tr_trip_staff_rider WHERE trip_id = tc AND staf_id = fa)
+          IS DISTINCT FROM 'BOARDED:true:MANUAL'
+       OR (SELECT status FROM transport20262027.tr_trip_staff_rider WHERE trip_id = nt AND staf_id = fa) IS DISTINCT FROM 'ABSENT' THEN
+      bad := bad || ('the added staff member is not present on the trip, or still expected on their own')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format(qb, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', tc,
+             'staff', jsonb_build_array(jsonb_build_object('enrollment_id', ef, 'status', 'PRESENT', 'add', true)))), 'is already on trip');
+    bad := bad || pg_temp.fails(format(qb, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', nt,
+             'staff', jsonb_build_array(jsonb_build_object('enrollment_id', ef, 'status', 'PRESENT')))), 'already present on trip');
+    -- the trips follow the allotment, but keep a rider added
+    PERFORM transport_core.fn_sync_trip_riders('transport20262027', tc);
+    j := public.tr_trip_riders(tk_a, transport_core._today(), tc);
+    IF jsonb_array_length(j->'staff') <> 1 OR (j->'staff'->0->>'is_extra')::boolean IS NOT TRUE THEN
+      bad := bad || ('an added rider was not kept on the trip, or not shown as added')::text;
+    END IF;
+    -- taken off again; only an added rider can be, and the menu
+    bad := bad || pg_temp.fails(format(qb, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', nt,
+             'students', jsonb_build_array(jsonb_build_object('enrollment_id', es, 'status', 'REMOVE')))), 'Only a student added');
+    PERFORM public.tr_trip_board_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trip_id', tc,
+              'staff', jsonb_build_array(jsonb_build_object('enrollment_id', ef, 'status', 'REMOVE'))));
+    IF EXISTS (SELECT 1 FROM transport20262027.tr_trip_staff_rider WHERE trip_id = tc AND staf_id = fa) THEN
+      bad := bad || ('the added rider was not taken off')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format($q$SELECT public.tr_trip_rider_options(%L,%L,%s)$q$, tk_ac, transport_core._today(), tc), 'no access');
+
+    -- Completed: on the trip's day or after (a past day's only its status), ended when marked; then
+    -- fixed until set back to Scheduled (today), and its boarding can still be entered
+    PERFORM public.tr_trip_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+              jsonb_build_object('trip_id', tc, 'status', 'COMPLETED'))));
+    IF (SELECT status || ':' || (actual_end_at IS NOT NULL) || ':' || end_source FROM transport20262027.tr_trip WHERE trip_id = tc)
+         IS DISTINCT FROM 'COMPLETED:true:ADMIN'
+       OR (public.tr_trip_riders(tk_a, transport_core._today(), tc)->>'can_mark')::boolean IS NOT TRUE THEN
+      bad := bad || ('the trip was not completed, or its boarding cannot be entered any more')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tc, 'vehicle_id', v1)))), 'is completed');
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tc, 'status', 'CANCELLED', 'cancel_reason', 'x')))), 'is completed');
+    PERFORM public.tr_trip_save(tk_a, jsonb_build_object('trip_date', transport_core._today(), 'trips', jsonb_build_array(
+              jsonb_build_object('trip_id', tc, 'status', 'SCHEDULED'))));
+    IF (SELECT status || ':' || (actual_end_at IS NULL) || ':' || COALESCE(end_source, '-') FROM transport20262027.tr_trip WHERE trip_id = tc)
+         IS DISTINCT FROM 'SCHEDULED:true:-' THEN
+      bad := bad || ('the completed trip was not set back to Scheduled')::text;
+    END IF;
+    UPDATE transport20262027.tr_trip SET trip_date = d + 1 WHERE trip_id = tc;  -- (B's own trip is on d)
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', d + 1, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tc, 'status', 'COMPLETED')))), 'can be completed on that day or after');
+    UPDATE transport20262027.tr_trip SET trip_date = transport_core._today() - 1 WHERE trip_id = tc;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', transport_core._today() - 1, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tc, 'status', 'COMPLETED', 'vehicle_id', v1)))), 'past day');
+    PERFORM public.tr_trip_save(tk_a, jsonb_build_object('trip_date', transport_core._today() - 1, 'trips', jsonb_build_array(
+              jsonb_build_object('trip_id', tc, 'status', 'COMPLETED'))));
+    IF (SELECT status FROM transport20262027.tr_trip WHERE trip_id = tc) IS DISTINCT FROM 'COMPLETED' THEN
+      bad := bad || ('a past day''s trip could not be completed')::text;
+    END IF;
+    bad := bad || pg_temp.fails(format(q, tk_a, jsonb_build_object('trip_date', transport_core._today() - 1, 'trips', jsonb_build_array(
+             jsonb_build_object('trip_id', tc, 'status', 'SCHEDULED')))), 'past day');
+    -- the nightly run makes tomorrow's trips without failing
+    PERFORM transport_core.generate_next_day_trips();
+    n := n + 25;
   END;
 
   bad := array_remove(bad, NULL);

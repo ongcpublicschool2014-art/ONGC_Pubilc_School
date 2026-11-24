@@ -80,6 +80,21 @@ class SupabaseConfig {
   /// Load an optional config.json to override [url] / [anonKey] at runtime.
   /// Never throws; silently keeps the compiled defaults on any problem.
   static Future<void> load() async {
+    // Build-time override, mainly for the WEB build (which cannot read a
+    // config.json from disk):
+    //   flutter run -d edge --dart-define=SUPABASE_URL=https://xxxx.supabase.co
+    //                       --dart-define=SUPABASE_ANON_KEY=sb_publishable_...
+    // Both must be given. The test-only config.json switches are deliberately
+    // NOT settable this way, so they stay off.
+    const envUrl = String.fromEnvironment('SUPABASE_URL');
+    const envKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+    if (envUrl.isNotEmpty && envKey.isNotEmpty) {
+      url = envUrl;
+      anonKey = envKey;
+      source = 'dart-define';
+      debugPrint('SupabaseConfig: using --dart-define override ($envUrl)');
+      return;
+    }
     if (kIsWeb) return; // dart:io not available on web
     for (final path in _candidatePaths()) {
       try {

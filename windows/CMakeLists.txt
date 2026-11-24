@@ -32,6 +32,12 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# webview_windows 0.4.0 still includes <experimental/coroutine>, which Visual
+# Studio 2026 (MSVC 14.51+) refuses with "error STL1011" unless this is
+# defined. Applies to the plugins too (added below). Remove once
+# webview_windows uses the C++20 <coroutine> header.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

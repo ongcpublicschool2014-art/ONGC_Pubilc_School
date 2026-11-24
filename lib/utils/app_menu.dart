@@ -174,12 +174,17 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem('timer-1', 'Trip Schedules', section: 'TRANSPORT', adminOnly: true),
   // Who drives and attends each schedule; each day's trip takes its crew from it.
   AppNavItem('user-tick', 'Duty Roster', section: 'TRANSPORT', adminOnly: true),
-  // Which students travel on each route, and their pickup and drop stops.
-  AppNavItem('people', 'Student Enrollment', section: 'TRANSPORT', adminOnly: true),
+  // Which students and staff travel on each route, and their pickup and drop
+  // stops. Shown as Student/Staff Enrollment; the key stays 'Student
+  // Enrollment' (saved role permissions and the server's menu checks use it).
+  AppNavItem('people', 'Student Enrollment', title: 'Student/Staff Enrollment', section: 'TRANSPORT', adminOnly: true),
   // Which vehicle each enrolled student travels in, within its seats.
   AppNavItem('element-4', 'Vehicle Allotment', section: 'TRANSPORT', adminOnly: true),
   // What each stage of a route costs, term by term (transport fee types only).
   AppNavItem('moneys', 'Stage Fees', section: 'TRANSPORT', adminOnly: true),
+  // Each day's trips (made at 9 PM the evening before): change a trip's vehicle
+  // or crew, cancel it, and enter who boarded.
+  AppNavItem('calendar-tick', 'Daily Trips', section: 'TRANSPORT', adminOnly: true),
 
   // Sidebar order (user, 2026-11-13, "daily work first"): Dashboard,
   // Admission, Student Details, Fees, Transfer Certificate, Reports,

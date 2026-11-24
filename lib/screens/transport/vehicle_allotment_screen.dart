@@ -29,12 +29,51 @@ import 'transport_master_panel.dart';
 /// drop_schedule_id; each day's trip then expects only its own students
 /// (transport_core.fn_generate_trips). A student with no vehicle yet is
 /// expected on every trip of the route that way.
+///
+/// The route's staff (tr_staff_enrollment) take seats with its students: they
+/// are listed and moved the same way, marked "Staff · designation", and saved
+/// in the same batch (see allotmentRiders and allotmentPayload).
 class VehicleAllotmentScreen extends StatefulWidget {
   const VehicleAllotmentScreen({super.key});
 
   @override
   State<VehicleAllotmentScreen> createState() => _VehicleAllotmentScreenState();
 }
+
+/// The board's riders for one route: the students as tr_list 'allotment'
+/// gives them, then the staff ('staff_allotment'). Staff enrollments are
+/// numbered apart from the students', so a staff row gets a negative id (its
+/// own stays in staff_enrollment_id) and shows its employee code, name and
+/// "Staff · designation" where a student's admission number, name and class go.
+List<Map<String, dynamic>> allotmentRiders(List<Map<String, dynamic>> students, List<Map<String, dynamic>> staff) => [
+      ...students,
+      for (final s in staff)
+        if (trId(s['enrollment_id']) != null)
+          {
+            ...s,
+            'enrollment_id': -trId(s['enrollment_id'])!,
+            'staff_enrollment_id': trId(s['enrollment_id']),
+            'is_staff': true,
+            'stuadmno': s['emp_code'],
+            'stuname': s['stafname'],
+            'stuclass': trText(s['designation']).isEmpty ? 'Staff' : 'Staff · ${trText(s['designation'])}',
+          },
+    ];
+
+/// The board's changed rows as tr_save 'allotment' takes them: the students'
+/// as "rows", the staff's (negative ids) as "staff_rows" under their own ids.
+Map<String, dynamic> allotmentPayload(int routeId, String direction, List<Map<String, dynamic>> rows) => {
+      'route_id': routeId,
+      'direction': direction,
+      'rows': [
+        for (final r in rows)
+          if ((trId(r['enrollment_id']) ?? 0) > 0) r,
+      ],
+      'staff_rows': [
+        for (final r in rows)
+          if ((trId(r['enrollment_id']) ?? 0) < 0) {...r, 'enrollment_id': -trId(r['enrollment_id'])!},
+      ],
+    };
 
 class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
   List<Map<String, dynamic>> _routes = const [];
@@ -77,7 +116,7 @@ class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
         final inUse = routes.where((x) => x['is_active'] != false);
         routeId = trId((inUse.isNotEmpty ? inUse.first : (routes.isEmpty ? null : routes.first))?['route_id']);
       }
-      final rows = routeId == null ? <Map<String, dynamic>>[] : await TransportService.list('allotment', filter: {'route_id': routeId});
+      final rows = routeId == null ? <Map<String, dynamic>>[] : await _routeRiders(routeId);
       if (!mounted) return;
       setState(() {
         _routes = routes;
@@ -98,6 +137,15 @@ class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
         _error = friendlyError(e);
       });
     }
+  }
+
+  /// The route's students and staff, for the board.
+  static Future<List<Map<String, dynamic>>> _routeRiders(int id) async {
+    final r = await Future.wait([
+      TransportService.list('allotment', filter: {'route_id': id}),
+      TransportService.list('staff_allotment', filter: {'route_id': id}),
+    ]);
+    return allotmentRiders(r[0], r[1]);
   }
 
   Future<void> _reload() async {
@@ -132,7 +180,7 @@ class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
     final id = _routeId;
     if (id == null) return;
     try {
-      final rows = await TransportService.list('allotment', filter: {'route_id': id});
+      final rows = await _routeRiders(id);
       if (!mounted || id != _routeId) return;
       setState(() {
         _enrollments = rows;
@@ -160,8 +208,8 @@ class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
   /// Saves the board's changes, then shows what the server has now.
   Future<void> _save(List<Map<String, dynamic>> rows) async {
     final id = _routeId!;
-    await TransportService.save('allotment', {'route_id': id, 'direction': _dir, 'rows': rows});
-    final fresh = await TransportService.list('allotment', filter: {'route_id': id});
+    await TransportService.save('allotment', allotmentPayload(id, _dir, rows));
+    final fresh = await _routeRiders(id);
     if (!mounted) return;
     setState(() {
       _enrollments = fresh;
@@ -337,7 +385,7 @@ class _VehicleAllotmentScreenState extends State<VehicleAllotmentScreen> {
         AppUI.cardHeader(
           icon: 'bus',
           title: 'Vehicle Allotment',
-          subtitle: 'Which vehicle each student travels in, within its seats.',
+          subtitle: 'Which vehicle each student and staff member travels in, within its seats.',
           trailing: [_controls()],
         ),
         SizedBox(height: 14.h),
@@ -509,14 +557,45 @@ class _AllotmentBoardState extends State<AllotmentBoard> {
     ]..sort(_byStop);
   }
 
+  bool _isStaff(int id) => _riders[id]?['is_staff'] == true;
+
+  /// Who the Not Allotted list shows: ALL, STUDENTS or STAFF.
+  String _who = 'ALL';
+
+  bool _whoShows(int id) => _who == 'ALL' || (_who == 'STAFF') == _isStaff(id);
+
   List<int> get _waitingShown {
     final q = _query.trim().toLowerCase();
     return [
       for (final id in _waiting)
-        if (q.isEmpty ||
-            '${_riders[id]?['stuadmno']} ${_riders[id]?['stuname']} ${_riders[id]?['stuclass']} ${_stopName(id)}'.toLowerCase().contains(q))
+        if (_whoShows(id) &&
+            (q.isEmpty ||
+                '${_riders[id]?['stuadmno']} ${_riders[id]?['stuname']} ${_riders[id]?['stuclass']} ${_stopName(id)}'.toLowerCase().contains(q)))
           id,
     ];
+  }
+
+  /// All / Students / Staff, with how many of each have no vehicle. Ticks
+  /// stay only on the rows still shown, so a drag never moves hidden ones.
+  Widget _whoPicker(List<int> waiting) {
+    final staff = waiting.where(_isStaff).length;
+    Widget chip(String value, String label, int n) => ChoiceChip(
+          key: ValueKey('al-who-$value'),
+          label: Text('$label · $n'),
+          selected: _who == value,
+          onSelected: _saving
+              ? null
+              : (_) => setState(() {
+                    _who = value;
+                    final shown = _waitingShown.toSet();
+                    _ticked.retainWhere(shown.contains);
+                  }),
+        );
+    return Wrap(spacing: 6.w, runSpacing: 6.h, children: [
+      chip('ALL', 'All', waiting.length),
+      chip('STUDENTS', 'Students', waiting.length - staff),
+      chip('STAFF', 'Staff', staff),
+    ]);
   }
 
   int get _changeCount => _now.entries.where((e) => e.value != _saved[e.key]).length;
@@ -950,8 +1029,13 @@ class _AllotmentBoardState extends State<AllotmentBoard> {
                 'Students join the route in Student Enrollment.',
             below: [
               if (waiting.isNotEmpty) ...[
+                // students and staff: pick which the list shows
+                if (_staffCount > 0) ...[SizedBox(height: 10.h), _whoPicker(waiting)],
                 SizedBox(height: 10.h),
-                TrSearchField(hint: 'Adm no, name, class or stop', onChanged: (v) => setState(() => _query = v)),
+                TrSearchField(
+                  hint: _staffCount > 0 ? 'Adm no, emp code, name or stop' : 'Adm no, name, class or stop',
+                  onChanged: (v) => setState(() => _query = v),
+                ),
               ],
             ],
           ),
@@ -981,10 +1065,15 @@ class _AllotmentBoardState extends State<AllotmentBoard> {
             child: shown.isNotEmpty
                 ? ListView.builder(itemCount: shown.length, itemBuilder: (_, i) => _waitingRow(shown[i], i))
                 : _riders.isEmpty
-                    ? _emptyNote('people', 'No students', 'Add students to this route in Student Enrollment.')
+                    ? _emptyNote('people', 'No students', 'Add students or staff to this route in Student/Staff Enrollment.')
                     : waiting.isEmpty
                         ? _emptyNote('tick-circle', 'All allotted', 'Every student has a vehicle for the $_way.')
-                        : _emptyNote('search-normal', 'No student matches', 'Try another adm no, name, class or stop.', color: AppColors.ink3),
+                        : _emptyNote(
+                            'search-normal',
+                            _who == 'STAFF' ? 'No staff member matches' : (_who == 'STUDENTS' ? 'No student matches' : 'Nobody matches'),
+                            _who == 'ALL' ? 'Try another search.' : 'Try another search, or All.',
+                            color: AppColors.ink3,
+                          ),
           ),
         ]),
       ),
@@ -1440,12 +1529,16 @@ class _AllotmentBoardState extends State<AllotmentBoard> {
         ]),
       );
 
+  /// The staff among the riders (see allotmentRiders).
+  int get _staffCount => _riders.values.where((e) => e['is_staff'] == true).length;
+
   Widget _toolbar(int changes) {
     final waiting = _waiting.length;
     return Row(children: [
       Expanded(
         child: Wrap(spacing: 8.w, runSpacing: 6.h, children: [
-          _stat(_riders.length, _riders.length == 1 ? 'student' : 'students', AppColors.ink3),
+          _stat(_riders.length - _staffCount, _riders.length - _staffCount == 1 ? 'student' : 'students', AppColors.ink3),
+          if (_staffCount > 0) _stat(_staffCount, 'staff', AppColors.ink3),
           _stat(_riders.length - waiting, 'allotted', AppColors.primary),
           _stat(waiting, 'not allotted', waiting > 0 ? AppColors.gold : AppColors.ink3),
           if (changes > 0) _stat(changes, changes == 1 ? 'change not saved' : 'changes not saved', AppColors.goldDark, warn: true),
