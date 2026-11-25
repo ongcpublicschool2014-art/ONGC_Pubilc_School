@@ -10,6 +10,7 @@ import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/mobile_rules.dart';
+import '../../utils/medium_options.dart';
 import '../../utils/reg_sequence.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
@@ -41,9 +42,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   final _mobileController = TextEditingController();
   final _emailController = TextEditingController();
   final _parentEmailController = TextEditingController();
-  final _mediumController = TextEditingController();
-  /// RawAutocomplete needs a focus node alongside the controller it is given.
-  final _mediumFocus = FocusNode();
   final _aadharController = TextEditingController();
   final _emisController = TextEditingController();
   final _umisController = TextEditingController();
@@ -78,7 +76,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   String? _bloodGroup;
   DateTime? _dob;
   DateTime? _admDate = DateTime.now(); // defaults to today; editable, overwritten when editing
-  String? _source;
+  // A new admission starts as Walk-in (user, 2026-11-24), as Fast Admission saves.
+  String? _source = _defaultSource;
 
   /// Seat booked now, studies from NEXT year.
   ///
@@ -145,6 +144,9 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   List<Map<String, dynamic>> _quotas = [];
   List<Map<String, dynamic>> _concessions = [];
   List<String> _communities = [];
+  /// Setup -> Master Data -> Medium; the student's Medium is picked from it.
+  List<String> _mediums = [];
+  String? _selectedMedium;
   List<String> _divisions = [];
   Map<int, String> _divisionById = {};
   List<Map<String, dynamic>> _regSeqs = []; // register-number sequences
@@ -249,6 +251,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
   static const _sources = ['WALK-IN', 'ONLINE', 'REFERRAL', 'AGENT'];
   // The stored source codes above, as the dropdown shows them. Display only.
   static const _sourceLabels = {'WALK-IN': 'Walk-in', 'ONLINE': 'Online', 'REFERRAL': 'Referral', 'AGENT': 'Agent'};
+  static const _defaultSource = 'WALK-IN';
 
   @override
   void initState() {
@@ -329,7 +332,6 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
 
   @override
   void dispose() {
-    _mediumFocus.dispose();
     for (final f in _suggestFocus.values) {
       f.dispose();
     }
@@ -345,7 +347,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _fatherOccController, _motherOccController, _guardianOccController,
       _payNameController, _payMobileController, _idMark1Controller, _idMark2Controller,
       _casteController, _religionController, _nationalityController,
-      _parentEmailController, _mediumController,
+      _parentEmailController,
       _remarksController,
     ]) {
       c.dispose();
@@ -385,6 +387,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               };
               return rows.map((r) => '${r['stuadmno'] ?? ''}'.trim().toUpperCase()).toSet();
             }, onError: (_) => null),
+        loadMediums(insId),
       ]);
       if (!mounted) return;
       setState(() {
@@ -403,6 +406,11 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         _concessions = results[6] as List<Map<String, dynamic>>;
         // the form already open for a new admission gets GENERAL too
         if (_selected == null && _selectedConId == null) _selectedConId = _generalConId;
+        _mediums = results[11] as List<String>;
+        // likewise English for a new student, and an open record in the list's spelling
+        _selectedMedium = _selected == null
+            ? (_selectedMedium ?? defaultMedium(_mediums))
+            : matchMedium(_mediums, _selectedMedium);
         _communities = (results[7] as List)
             .map((e) => e['comname']?.toString().trim() ?? '')
             .where((s) => s.isNotEmpty).toSet().toList()..sort();
@@ -522,13 +530,14 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _dob = null;
       _gender = null;
       _bloodGroup = null;
-      _source = null;
+      _source = _defaultSource;
       _preAdmission = false;
       _selectedCourse = null;
       _selectedClass = null;
       _selectedAdmName = null;
       _selectedQuoName = null;
       _selectedConId = _generalConId;
+      _selectedMedium = defaultMedium(_mediums);
       _transportMode = null;
       _hostel = null;
       _scholarship = null;
@@ -558,7 +567,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
         _fatherOccController, _motherOccController, _guardianOccController,
         _payNameController, _payMobileController, _idMark1Controller, _idMark2Controller,
         _casteController, _religionController, _nationalityController,
-        _parentEmailController, _mediumController,
+        _parentEmailController,
         _remarksController,
       ]) {
         c.clear();
@@ -599,7 +608,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       _nameController.text = a.stuname;
       _mobileController.text = a.stumobile ?? '';
       _emailController.text = a.stuemail ?? '';
-      _mediumController.text = a.medium ?? '';
+      _selectedMedium = matchMedium(_mediums, a.medium);
       _parentEmailController.text = a.paremail ?? '';
       _aadharController.text = a.aadharno ?? '';
       _emisController.text = a.emisno ?? '';
@@ -876,7 +885,7 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
       if (!isSchool) 'quo_id': _idFor(_quotas, 'quoname', _selectedQuoName, 'quo_id'),
       // Admitted year defaults to the current academic year.
       'admittyear': _years.isNotEmpty ? _years.first['yrlabel']?.toString() : null,
-      'medium': t(_mediumController),
+      'medium': _selectedMedium,
       'con_id': _selectedConId != null ? int.tryParse(_selectedConId!) : null,
       'stucondesc': _selectedConId != null
           ? _concessions.firstWhere((c) => c['con_id'].toString() == _selectedConId,
@@ -2055,8 +2064,8 @@ class _AdmissionScreenState extends State<AdmissionScreen> {
               _dropdown(schoolTerm('Class'), _selectedClass, _classNamesFor(_selectedCourse),
                   (v) => setState(() => _selectedClass = v), hint: schoolTerm('Select class'),
                   locked: _coreLocked, required: !isSchool),
-              _suggestText('Medium', _mediumController, _mediumFocus,
-                  _optionsOf((a) => a.medium), hint: 'Type or select a medium'),
+              _dropdown('Medium', _selectedMedium, mediumItems(_mediums, _selectedMedium),
+                  (v) => setState(() => _selectedMedium = v)),
             ]),
             _row([
               if (!isSchool) ...[

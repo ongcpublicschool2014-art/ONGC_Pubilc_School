@@ -1759,6 +1759,31 @@ CREATE OR REPLACE FUNCTION public.tr_parent_bus(p_token text, p_stu_id bigint)
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path TO 'pg_catalog', 'public'
 AS $$ SELECT transport_core.parent_bus(p_token, p_stu_id) $$;
 
+-- GPS positions from the receiving Edge Function (gps-ingest, service role
+-- only -- never the app): one position or an array of them (format at
+-- transport_core.gps_ingest). Returns {"received", "stored", "live",
+-- "skipped": [{"imei", "reason"}, ...]}.
+CREATE OR REPLACE FUNCTION public.tr_gps_ingest(p_positions jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'pg_catalog', 'public' AS $$
+DECLARE r jsonb; x jsonb; n int := 0; v_ok int := 0; v_live int := 0; v_skip jsonb := '[]'::jsonb;
+BEGIN
+  FOR x IN SELECT e FROM jsonb_array_elements(CASE jsonb_typeof(p_positions) WHEN 'array' THEN p_positions
+                                                 ELSE jsonb_build_array(p_positions) END) e LOOP
+    n := n + 1;
+    EXIT WHEN n > 500;  -- one call carries at most 500 positions
+    r := transport_core.gps_ingest(x);
+    IF (r->>'ok')::boolean THEN
+      v_ok := v_ok + 1;
+      IF (r->>'live')::boolean THEN v_live := v_live + 1; END IF;
+    ELSE
+      v_skip := v_skip || jsonb_build_object('imei', r->>'imei', 'reason', r->>'reason');
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('received', LEAST(n, 500), 'stored', v_ok, 'live', v_live, 'skipped', v_skip);
+END $$;
+REVOKE ALL ON FUNCTION public.tr_gps_ingest(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.tr_gps_ingest(jsonb) TO service_role;
+
 REVOKE ALL ON FUNCTION public.tr_list(text, text, jsonb), public.tr_save(text, text, jsonb), public.tr_delete(text, text, bigint),
                        public.tr_settings_get(text), public.tr_settings_save(text, jsonb), public.tr_lookups(text),
                        public.tr_students(text), public.tr_stage_fee_routes(text, jsonb), public.tr_stage_fee_process(text, jsonb),

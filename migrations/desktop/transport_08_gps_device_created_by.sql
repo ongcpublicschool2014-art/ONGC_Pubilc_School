@@ -15,7 +15,7 @@ DO $$
 DECLARE s text;
 BEGIN
   FOR s IN SELECT n.nspname FROM pg_namespace n
-            WHERE n.nspname ~ '^transport[0-9]{4}$'
+            WHERE n.nspname ~ '^transport[0-9]{8}$'
               AND to_regclass(format('%I.tr_gps_device', n.nspname)) IS NOT NULL LOOP
     EXECUTE format('ALTER TABLE %I.tr_gps_device ADD COLUMN IF NOT EXISTS created_by BIGINT NULL', s);
   END LOOP;

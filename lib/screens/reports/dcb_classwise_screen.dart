@@ -17,6 +17,7 @@ import '../../utils/report_pdf_export.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_multi_pick.dart';
 import '../../utils/save_path.dart';
 
 /// DCB -- CLASSWISE STATEMENT: demand, collection and balance per standard,
@@ -465,46 +466,17 @@ class _DcbClasswiseScreenState extends State<DcbClasswiseScreen> {
   }
 
   // ── filters ──────────────────────────────────────────────────────────────
+  /// The filter field just tapped: the pick panel opens under it.
+  BuildContext? _anchor;
+
   Future<void> _pickFees() async {
-    final draft = Set<String>.from(_fees);
-    final picked = await showDialog<Set<String>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Row(children: [
-            Expanded(child: Text('Select Fee Types', style: AppUI.cardTitle)),
-            TextButton(
-                onPressed: () => setLocal(() => draft.addAll(_feeTypes.map((f) => f.$1))),
-                child: const Text('Select All')),
-            TextButton(onPressed: () => setLocal(draft.clear), child: const Text(AppText.clear)),
-          ]),
-          content: SizedBox(
-            width: 420.w,
-            height: 420.h,
-            child: _feeTypes.isEmpty
-                ? AppUI.empty(title: 'Nothing to choose from', why: 'No fee types are set up yet.')
-                : ListView(children: [
-                    for (final f in _feeTypes)
-                      CheckboxListTile(
-                        value: draft.contains(f.$1),
-                        onChanged: (v) => setLocal(() => v == true ? draft.add(f.$1) : draft.remove(f.$1)),
-                        dense: true,
-                        activeColor: AppColors.primary,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text(f.$1, style: AppUI.body),
-                      ),
-                  ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text(AppText.cancel)),
-            ElevatedButton(
-              style: AppUI.primary(ctx),
-              onPressed: () => Navigator.of(ctx).pop(draft),
-              child: Text('Apply${draft.isEmpty ? '' : ' (${draft.length})'}'),
-            ),
-          ],
-        ),
-      ),
+    final picked = await showAppMultiPick<String>(
+      context,
+      anchor: _anchor,
+      title: 'Select Fee Types',
+      searchHint: 'Search fee type',
+      groups: [('', [for (final f in _feeTypes) (f.$1, f.$1)])],
+      selected: _fees,
     );
     if (picked == null || !mounted) return;
     setState(() => _fees
@@ -651,9 +623,14 @@ class _DcbClasswiseScreenState extends State<DcbClasswiseScreen> {
             flex: 3,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               AppUI.fieldLabel('Fee Type'),
-              InkWell(
+              Builder(builder: (field) => InkWell(
                 borderRadius: BorderRadius.circular(AppUI.controlRadius),
-                onTap: _running ? null : _pickFees,
+                onTap: _running
+                    ? null
+                    : () {
+                        _anchor = field;
+                        _pickFees();
+                      },
                 child: InputDecorator(
                   decoration: AppUI.field(context, AppText.select('fee types'),
                       filled: _fees.isNotEmpty,
@@ -664,7 +641,7 @@ class _DcbClasswiseScreenState extends State<DcbClasswiseScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: AppUI.fieldText(context, filled: _fees.isNotEmpty)),
                 ),
-              ),
+              )),
             ]),
           ),
           SizedBox(width: 12.w),

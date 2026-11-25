@@ -281,6 +281,20 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
 
   String? _drilldownCourse;
 
+  /// A demand line's paid / pending / fine as the section row above counts
+  /// them (get_fee_demand_line_figures, attached when the section loads):
+  /// a part-paid line shows what was paid, the fine is the one collected on
+  /// its receipts. Without them (an older database), the line's own figures.
+  ({double paid, double pending, double fine}) _lineFigures(Map<String, dynamic> d) {
+    final f = d['_figures'];
+    if (f is Map) {
+      return (paid: (f['paid'] as num).toDouble(), pending: (f['pending'] as num).toDouble(), fine: (f['fine'] as num).toDouble());
+    }
+    final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
+    final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
+    return (paid: pa < amt ? pa : amt, pending: (d['balancedue'] as num?)?.toDouble() ?? amt, fine: 0.0);
+  }
+
   Future<void> _loadDrilldown(String className, {String? courseName}) async {
     final auth = context.read<AuthProvider>();
     final insId = auth.insId;
@@ -304,9 +318,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
             .eq('stuclass', className)
             .eq('activestatus', 1)
             .eq('preadmission', 0)),  // next year's intake: advance screens only
+        SupabaseService.getFeeDemandLineFigures(insId, className),
       ]);
       final demands = List<Map<String, dynamic>>.from(results[0] as List);
       var students = List<Map<String, dynamic>>.from(results[1] as List);
+      // each line's paid / pending / fine as the section row above counts them
+      final figures = results[2] as Map<int, Map<String, double>>;
+      for (final d in demands) {
+        final f = figures[(d['dem_id'] as num?)?.toInt()];
+        if (f != null) d['_figures'] = f;
+      }
       // Filter by course if specified
       final filtered = (courseName != null
           ? demands.where((d) => (d['courname']?.toString() ?? d['stuname_course'] ?? '') == courseName || courseName == 'Other').toList()
@@ -1685,21 +1706,16 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
       }
       final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
       final con = (d['conamount'] as num?)?.toDouble() ?? 0;
-      final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
-      final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
-      // Use reconbalancedue (post-recon outstanding); fall back to balancedue.
-      // Paid = paidamount - fineamount when reconciled, else 0.
-      final bal = (d['reconbalancedue'] as num?)?.toDouble()
-          ?? (d['balancedue'] as num?)?.toDouble() ?? amt;
-      final isFullyReconciled = bal <= 0;
-      final paid = isFullyReconciled ? (pa - fa) : 0.0;
+      // paid / pending / fine as the section row counts them: a part-paid
+      // line shows what was paid, and the fine is the one on its receipts
+      final x = _lineFigures(d);
       g['total_demand'] = (g['total_demand'] as double) + amt;
       g['total_concession'] = (g['total_concession'] as double) + con;
-      g['total_paid'] = (g['total_paid'] as double) + paid;
-      g['total_fine'] = (g['total_fine'] as double) + (isFullyReconciled ? fa : 0);
-      g['total_pending'] = (g['total_pending'] as double) + bal;
+      g['total_paid'] = (g['total_paid'] as double) + x.paid;
+      g['total_fine'] = (g['total_fine'] as double) + x.fine;
+      g['total_pending'] = (g['total_pending'] as double) + x.pending;
       g['demand_count'] = (g['demand_count'] as int) + 1;
-      if (isFullyReconciled) {
+      if (x.pending <= 0) {
         g['paid_count'] = (g['paid_count'] as int) + 1;
       } else {
         g['unpaid_count'] = (g['unpaid_count'] as int) + 1;
@@ -2166,13 +2182,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
     for (final d in demands) {
       totalAmt += (d['feeamount'] as num?)?.toDouble() ?? 0;
       totalConcession += (d['conamount'] as num?)?.toDouble() ?? 0;
-      final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
-      final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
-      final status = d['paidstatus']?.toString() ?? 'U';
-      final isPaid = pa > 0 || status == 'P' || status == 'Paid';
-      totalPaid += pa - (isPaid ? fa : 0);
-      totalFine += isPaid ? fa : 0;
-      totalBal += (d['balancedue'] as num?)?.toDouble() ?? 0;
+      final x = _lineFigures(d);
+      totalPaid += x.paid;
+      totalFine += x.fine;
+      totalBal += x.pending;
     }
 
     return Padding(
@@ -2321,14 +2334,10 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                     final feeType = d['demfeetype']?.toString() ?? '-';
                     final amt = (d['feeamount'] as num?)?.toDouble() ?? 0;
                     final con = (d['conamount'] as num?)?.toDouble() ?? 0;
-                    final pa = (d['paidamount'] as num?)?.toDouble() ?? 0;
-                    final fa = (d['fineamount'] as num?)?.toDouble() ?? 0;
-                    final status = d['paidstatus']?.toString() ?? 'U';
-                    final isPaid =
-                        pa > 0 || status == 'P' || status == 'Paid';
-                    final paid = pa - (isPaid ? fa : 0);
-                    final fineDisplay = isPaid ? fa : 0.0;
-                    final bal = (d['balancedue'] as num?)?.toDouble() ?? 0;
+                    final x = _lineFigures(d);
+                    final paid = x.paid;
+                    final fineDisplay = x.fine;
+                    final bal = x.pending;
                     final dueDate = d['duedate']?.toString() ?? '-';
                     final formattedDueDate = _formatDueDate(dueDate);
                     return Container(
@@ -2365,8 +2374,11 @@ class _FeeDemandScreenState extends State<FeeDemandScreen> {
                         cell(8, Text(formattedDueDate, style: cStyle)),
                         cell(
                             9,
-                            AppUI.chip(isPaid ? 'Paid' : 'Pending',
-                                isPaid ? AppStatus.success : AppStatus.warning)),
+                            bal <= 0
+                                ? AppUI.chip('Paid', AppStatus.success)
+                                : paid > 0
+                                    ? AppUI.chip('Partial', AppStatus.info)
+                                    : AppUI.chip('Pending', AppStatus.warning)),
                       ]),
                     );
                   },

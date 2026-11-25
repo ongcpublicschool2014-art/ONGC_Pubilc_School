@@ -45,7 +45,7 @@ class AdmissionMasterScreen extends StatefulWidget {
   /// sub-item to a tab by LABEL, not by position, and reads this from
   /// outside the file -- see _subTab in dashboard_screen.dart.
   static const tabLabels = [
-    'Admission Type', 'Quota', 'Community', 'Concession', 'Division', 'Reg No', 'TC Sequence',
+    'Admission Type', 'Quota', 'Community', 'Concession', 'Division', 'Medium', 'Reg No', 'TC Sequence',
   ];
 
   @override
@@ -58,7 +58,7 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
   // Order matches the spec's primary trio first, then the project-specific
   // extras (Admission Type / Quota).
   static const _tabIcons = [
-    'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'tag', 'document-text',
+    'user-tick', 'ticket', 'people', 'discount-shape', 'diagram', 'language-square', 'tag', 'document-text',
   ];
 
   // What a tab shows when its label (a sidebar key -- never change it) is
@@ -134,6 +134,8 @@ class _AdmissionMasterScreenState extends State<AdmissionMasterScreen> with Sing
               const MasterCrudPanel(table: 'community', idCol: 'com_id', nameCol: 'comname', title: 'Community', icon: 'people', countLabel: 'communities', importTabIndex: 9),
               const MasterCrudPanel(table: 'concessioncategory', idCol: 'con_id', nameCol: 'condesc', title: 'Concession', icon: 'discount-shape', countLabel: 'concessions', importTabIndex: 6, includeCreatedBy: false),
               const MasterCrudPanel(table: 'division', idCol: 'div_id', nameCol: 'divname', title: 'Division', icon: 'diagram', countLabel: 'divisions', hideImport: true),
+              // public.medium (user, 2026-11-24: "add medium"), next to Division.
+              const MasterCrudPanel(table: 'medium', idCol: 'med_id', nameCol: 'medname', title: 'Medium', icon: 'language-square', countLabel: 'mediums', hideImport: true),
               const _RegNoPanel(),
               const _RegNoPanel(actname: 'TCNO', sequidDefault: 'TC', heading: 'TC'),
             ],

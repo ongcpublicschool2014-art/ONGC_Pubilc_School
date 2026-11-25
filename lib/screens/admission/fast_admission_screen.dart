@@ -8,6 +8,7 @@ import '../../utils/class_sort.dart';
 import '../../utils/auth_provider.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/mobile_rules.dart';
+import '../../utils/medium_options.dart';
 import '../../utils/reg_sequence.dart';
 import '../../utils/school_terms.dart';
 import '../../services/supabase_service.dart';
@@ -148,6 +149,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _regSeqs = [];
   Map<String, dynamic>? _generalCon; // GENERAL concession category, saved on every row
+  String _medium = kDefaultMedium; // English from the Medium list, saved on every row
   String? _selectedYrLabel;
   String? _selectedRegSeqId;
   String? _lastRegNo; // last admission reg no — shown inline next to the label
@@ -257,6 +259,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
         // (user, 2026-11-16) -- there is no concession field on this screen.
         SupabaseService.fromSchema('concessioncategory').select('con_id, condesc').eq('ins_id', insId).eq('activestatus', 1)
             .then((v) => v, onError: (_) => <dynamic>[]),
+        loadMediums(insId),
       ]));
       if (!mounted) return;
       setState(() {
@@ -269,6 +272,7 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           for (final c in (results[8] as List))
             if ('${(c as Map)['condesc'] ?? ''}'.trim().toUpperCase() == 'GENERAL') Map<String, dynamic>.from(c),
         ].firstOrNull;
+        _medium = defaultMedium(results[9] as List<String>);
         _divById = {
           for (final e in (results[6] as List))
             if ((e as Map)['div_id'] != null) (e['div_id'] as num).toInt(): '${e['divname'] ?? ''}'.trim(),
@@ -525,7 +529,9 @@ class _FastAdmissionScreenState extends State<FastAdmissionScreen> {
           'stuclass': r.cls,
           'division': r.division,
           if (!isSchool) 'admname': r.admType,
-          // Entity IDs resolved from the selected masters (quota/medium not in this form).
+          // No Medium field here: every row gets English (user, 2026-11-24).
+          'medium': _medium,
+          // Entity IDs resolved from the selected masters (quota not in this form).
           'cour_id': _idFor(_courseList, 'courname', r.course, 'cour_id'),
           'admit_cour_id': _idFor(_courseList, 'courname', r.course, 'cour_id'),
           'cla_id': _classIdFor(r.cls, _idFor(_courseList, 'courname', r.course, 'cour_id')),
