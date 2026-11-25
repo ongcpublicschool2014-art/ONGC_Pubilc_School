@@ -48,4 +48,24 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(tester.getSize(find.byType(AppFitText)).height, greaterThan(0));
   });
+
+  // The baseline is asked for by an ancestor that is not the direct parent
+  // (here the Row, through the Padding) — as a dropdown's InputDecorator does.
+  // Reading `size` there trips a debug assertion and blanks the whole screen
+  // (the "Request Code" tab of Activate This PC).
+  testWidgets('gives its baseline to an ancestor that is not its parent', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Padding(padding: EdgeInsets.all(4), child: AppFitText(_hint)),
+            Text('x'),
+          ],
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+  });
 }

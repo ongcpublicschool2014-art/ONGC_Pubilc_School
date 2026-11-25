@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:school_admin/screens/admin/staff_screen.dart';
+import 'package:school_admin/screens/transport/daily_trips_screen.dart';
 import 'package:school_admin/screens/transport/duty_roster_screen.dart';
 import 'package:school_admin/screens/transport/gps_mapping_panel.dart';
 import 'package:school_admin/screens/transport/routes_stops_screen.dart';
@@ -31,9 +33,12 @@ void main() {
     'Transport Staff': () => const TransportStaffScreen(),
     'Trip Schedules': () => const TripSchedulesScreen(),
     'Duty Roster': () => const DutyRosterScreen(),
+    'Daily Trips': () => const DailyTripsScreen(),
     'Student Enrollment': () => const StudentEnrollmentScreen(),
     'Vehicle Allotment': () => const VehicleAllotmentScreen(),
     'Stage Fees': () => const StageFeesScreen(),
+    // Staff Details uses the same panel on its own functions (staff_*).
+    'Staff Details': () => const StaffScreen(),
   };
 
   testWidgets('the search box lays out in a header row, as on every screen', (t) async {
@@ -50,6 +55,31 @@ void main() {
     await t.pump();
     expect(t.takeException(), isNull);
     expect(find.text('Search'), findsOneWidget);
+  });
+
+  // Staff Details' password: never filled in from the record, typed hidden,
+  // and sent only when typed (blank keeps the current one on the server).
+  testWidgets('a password field starts empty and hides what is typed', (t) async {
+    final key = GlobalKey<TrFormBodyState>();
+    await t.pumpWidget(ScreenUtilInit(
+      designSize: const Size(1750, 984),
+      builder: (_, __) => MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: TrFormBody(key: key, initial: const {'password': r'$2a$10$hash'}, fields: const [
+              TrField('password', 'Password', kind: TrKind.password),
+            ]),
+          ),
+        ),
+      ),
+    ));
+    await t.pump();
+    final field = t.widget<TextField>(find.byType(TextField));
+    expect(field.obscureText, isTrue);
+    expect(field.controller!.text, isEmpty);
+    expect(key.currentState!.collect(), {'password': null});
+    await t.enterText(find.byType(TextField), 'secret12');
+    expect(key.currentState!.collect(), {'password': 'secret12'});
   });
 
   // A photo field sits in the form's top-right corner, beside the first group
@@ -384,7 +414,7 @@ void main() {
                 stages: stages,
                 stops: stops,
                 enrollments: rows ?? enrollments,
-                students: students,
+                people: students,
                 yearFrom: '2026-06-01',
                 yearTo: '2027-05-31',
                 today: DateTime(2026, 11, 13),

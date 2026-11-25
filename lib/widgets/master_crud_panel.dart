@@ -163,6 +163,8 @@ class _MasterCrudPanelState extends State<MasterCrudPanel> with AutomaticKeepAli
     // Division: set on a standard (course.div_id) and copied to students by name.
     'division':          [('course',   'div_id', '',             'standard', 'Set another division (or None) on those standards first.'),
                           ('students', '',       'division',     'student',  'Change their division first.')],
+    // Medium: students carry it by name (students.medium).
+    'medium':            [('students', '',       'medium',       'student',  'Change their medium first.')],
   };
 
   /// Refused before the confirmation dialog: being asked "are you sure?" and

@@ -491,7 +491,8 @@ class _ModuleControlScreenState extends State<ModuleControlScreen> {
                   AppIcon(i.icon, size: 16, color: _off.contains(i.label) ? AppColors.textLight : AppColors.primary),
                   SizedBox(width: 10.w),
                   Expanded(
-                    child: Text(i.title ?? i.label,
+                    // the sidebar's name (e.g. "Optional Fee Import" on a school); the key stays i.label
+                    child: Text(i.navTitle,
                         style: AppUI.body.copyWith(color: _off.contains(i.label) ? AppColors.textSecondary : AppColors.textPrimary)),
                   ),
                   if (kAlwaysOnMenus.contains(i.label))

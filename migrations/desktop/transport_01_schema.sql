@@ -613,7 +613,7 @@ CREATE TABLE tr_trip_student (
   enrollment_id   BIGINT      NOT NULL REFERENCES tr_student_enrollment(enrollment_id),
   student_id      BIGINT      NOT NULL,
   stop_id         BIGINT      NOT NULL REFERENCES tr_stop(stop_id),
-  status          VARCHAR(12) NOT NULL DEFAULT 'EXPECTED'
+  status          VARCHAR(16) NOT NULL DEFAULT 'EXPECTED'
                   CHECK (status IN ('EXPECTED','BOARDED','ALIGHTED','ABSENT','NO_SHOW','PARENT_PICKUP')),
   boarded_at      TIMESTAMPTZ,
   alighted_at     TIMESTAMPTZ,

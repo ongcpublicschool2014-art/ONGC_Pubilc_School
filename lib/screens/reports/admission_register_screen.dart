@@ -20,6 +20,7 @@ import '../../widgets/pill_tab.dart';
 import 'admission_abstract_screen.dart';
 import 'class_strength_screen.dart';
 import '../../widgets/app_dropdown_field.dart';
+import '../../widgets/app_multi_pick.dart';
 import '../../utils/save_path.dart';
 
 /// ADMISSION REGISTER — the admissions taken in a date range, one row per
@@ -430,9 +431,14 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
         : (_classes.length == 1
             ? _classes.first
             : schoolTerm('${_classes.length} classes selected'));
-    return InkWell(
+    return Builder(builder: (field) => InkWell(
       borderRadius: BorderRadius.circular(AppUI.controlRadius),
-      onTap: _running ? null : _openClassPicker,
+      onTap: _running
+          ? null
+          : () {
+              _anchor = field;
+              _openClassPicker();
+            },
       child: Container(
         constraints: BoxConstraints(minHeight: AppUI.controlHeight(context)),
         padding: EdgeInsets.symmetric(horizontal: 12.w),
@@ -456,69 +462,25 @@ class _AdmissionRegisterScreenState extends State<AdmissionRegisterScreen>
           Icon(Icons.arrow_drop_down, color: AppColors.textSecondary, size: 22.sp),
         ]),
       ),
-    );
+    ));
   }
 
+  /// The filter field just tapped: the pick panel opens under it.
+  BuildContext? _anchor;
+
   Future<void> _openClassPicker() async {
-    final draft = Set<String>.from(_classes);
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Row(children: [
-            Text(schoolTerm('Select Classes'), style: AppUI.cardTitle),
-            const Spacer(),
-            TextButton(
-              onPressed: () => setLocal(() => draft
-                ..clear()
-                ..addAll(_classNames)),
-              child: const Text('Select All'),
-            ),
-            TextButton(
-              onPressed: () => setLocal(draft.clear),
-              child: const Text('Clear'),
-            ),
-          ]),
-          content: SizedBox(
-            width: 420.w,
-            height: 420.h,
-            child: _classNames.isEmpty
-                ? AppUI.empty(
-                    title: schoolTerm('No classes for this course.'),
-                    why: schoolTerm('Select another course, or add classes to it in Master Data.'))
-                : ListView.builder(
-                    itemCount: _classNames.length,
-                    itemBuilder: (_, i) {
-                      final c = _classNames[i];
-                      return CheckboxListTile(
-                        value: draft.contains(c),
-                        onChanged: (v) => setLocal(() =>
-                            v == true ? draft.add(c) : draft.remove(c)),
-                        dense: true,
-                        activeColor: AppColors.primary,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text(c, style: AppUI.body),
-                      );
-                    },
-                  ),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () {
-                setState(() => _classes
-                  ..clear()
-                  ..addAll(draft));
-                Navigator.of(ctx).pop();
-              },
-              child: Text('Apply${draft.isEmpty ? '' : ' (${draft.length})'}'),
-            ),
-          ],
-        ),
-      ),
+    final picked = await showAppMultiPick<String>(
+      context,
+      anchor: _anchor,
+      title: schoolTerm('Select Classes'),
+      searchHint: schoolTerm('Search class'),
+      groups: [('', [for (final c in _classNames) (c, c)])],
+      selected: _classes,
     );
+    if (picked == null || !mounted) return;
+    setState(() => _classes
+      ..clear()
+      ..addAll(picked));
   }
 
   /// One half of the New admissions / Active students switch.

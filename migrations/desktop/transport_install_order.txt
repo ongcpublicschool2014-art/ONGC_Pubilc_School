@@ -27,3 +27,10 @@ transport_19_vehicle_service_year.sql    always
 transport_20_vehicle_fuel_required.sql   always
 transport_21_vehicle_additional_capacity.sql always
 transport_22_audit_columns.sql           always
+transport_23_staff_enrollment.sql        always
+transport_24_trip_staff_rider.sql        always
+transport_25_daily_trips_menu.sql        once
+transport_26_nightly_trips.sql           always
+transport_27_trip_student_status_width.sql always
+transport_28_trip_replacement.sql        always
+transport_29_trip_riders_sync.sql        always

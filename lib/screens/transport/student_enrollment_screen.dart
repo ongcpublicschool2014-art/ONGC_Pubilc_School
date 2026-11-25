@@ -11,6 +11,8 @@ import '../../widgets/app_dropdown_field.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/pill_tab.dart';
+import 'opted_students_panel.dart';
 import 'transport_master_panel.dart';
 
 /// STUDENT ENROLLMENT -- which students travel on a route, and where they get
@@ -29,6 +31,12 @@ import 'transport_master_panel.dart';
 /// The fee stage is the stage of the farther stop; the server works it out.
 /// A student who stops travelling is Cancelled, never deleted. Each day's
 /// trips expect the active students (transport_core.fn_generate_trips).
+///
+/// Three tabs (the menu shows the screen as Student/Staff Enrollment): Opted
+/// Students, who chose the bus; Student Enrollment, the board above; and
+/// Staff Enrollment, the same board for the staff (tr_staff_enrollment,
+/// tr_save 'staff_enrollment'), offering only staff of the year who are
+/// active and whose transport is BUS (staffmast; tr_enrollment_staff).
 class StudentEnrollmentScreen extends StatefulWidget {
   const StudentEnrollmentScreen({super.key});
 
@@ -52,11 +60,182 @@ List<Map<String, dynamic>> _maps(dynamic v) => [
         if (x is Map) Map<String, dynamic>.from(x),
     ];
 
+/// Who a board enrolls: the year's students (tr_student_enrollment) or its
+/// staff (tr_staff_enrollment). The board, its stops and its rules are the
+/// same; the people, their fields and the words differ.
+class EnrollmentKind {
+  const EnrollmentKind._({
+    required this.entity,
+    required this.peopleKey,
+    required this.idKey,
+    required this.rowIdKey,
+    required this.codeKey,
+    required this.nameKey,
+    required this.groupKey,
+    required this.codeHead,
+    required this.groupHead,
+    required this.codeHint,
+    required this.allGroups,
+    required this.one,
+    required this.many,
+    required this.oneTitle,
+    required this.manyTitle,
+    required this.title,
+    required this.icon,
+    required this.leftTip,
+    required this.noneTitle,
+    required this.noneWhy,
+  });
+
+  /// The tr_list / tr_save entity of the enrollments.
+  final String entity;
+
+  /// Where the people are in the server's list (tr_students / tr_enrollment_staff).
+  final String peopleKey;
+
+  /// The person's id in the people list, and in an enrollment.
+  final String idKey, rowIdKey;
+
+  /// The person's code (admission number / employee code), name and group
+  /// (class / designation), the same in the people list and an enrollment.
+  final String codeKey, nameKey, groupKey;
+
+  /// The column heads of the code and the group.
+  final String codeHead, groupHead;
+
+  /// "Adm no" / "Emp code" in a search hint; "All classes" / "All designations".
+  final String codeHint, allGroups;
+
+  /// "student" / "students"; "staff member" / "staff"; and with capitals.
+  final String one, many, oneTitle, manyTitle;
+
+  /// The tab's title and icon.
+  final String title, icon;
+
+  /// Why a saved row is marked Left.
+  final String leftTip;
+
+  /// Add's window when nobody can be added.
+  final String noneTitle, noneWhy;
+
+  static const students = EnrollmentKind._(
+    entity: 'enrollment',
+    peopleKey: 'students',
+    idKey: 'stu_id',
+    rowIdKey: 'student_id',
+    codeKey: 'stuadmno',
+    nameKey: 'stuname',
+    groupKey: 'stuclass',
+    codeHead: 'ADM NO',
+    groupHead: 'CLASS',
+    codeHint: 'Adm no',
+    allGroups: 'All classes',
+    one: 'student',
+    many: 'students',
+    oneTitle: 'Student',
+    manyTitle: 'Students',
+    title: 'Student Enrollment',
+    icon: 'people',
+    leftTip: 'Not an active student any more',
+    noneTitle: 'No student has opted for the bus',
+    noneWhy: 'Add them in the Opted Students tab first.',
+  );
+
+  static const staff = EnrollmentKind._(
+    entity: 'staff_enrollment',
+    peopleKey: 'staff',
+    idKey: 'staf_id',
+    rowIdKey: 'staf_id',
+    codeKey: 'emp_code',
+    nameKey: 'stafname',
+    groupKey: 'designation',
+    codeHead: 'EMP CODE',
+    groupHead: 'DESIGNATION',
+    codeHint: 'Emp code',
+    allGroups: 'All designations',
+    one: 'staff member',
+    many: 'staff',
+    oneTitle: 'Staff Member',
+    manyTitle: 'Staff',
+    title: 'Staff Enrollment',
+    icon: 'teacher',
+    leftTip: 'Not an active staff member any more',
+    noneTitle: 'No staff member comes by bus',
+    noneWhy: 'Only staff who are active and whose Transport is BUS can be added.',
+  );
+
+  bool get isStaff => identical(this, staff);
+
+  /// "1 student", "3 students"; "1 staff member", "3 staff".
+  String count(int n) => '$n ${n == 1 ? one : many}';
+
+  /// The person of a saved enrollment is no longer active in the year.
+  bool left(Map<String, dynamic> saved) =>
+      isStaff ? saved['staff_active'] == false : saved['stu_status'] != null && trId(saved['stu_status']) != 1;
+}
+
 class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
+  int _tab = 1; // 0 Opted Students, 1 Student Enrollment, 2 Staff Enrollment
+
+  /// The students opted for the bus, from the Opted Students tab: only they
+  /// can be added to a route. Empty until that tab has loaded.
+  Set<int> _opted = const {};
+
+  /// Staff Enrollment loads the first time it is opened.
+  bool _staffOpened = false;
+
+  void _open(int tab) => setState(() {
+        _tab = tab;
+        if (tab == 2) _staffOpened = true;
+      });
+
+  /// The tabs: Opted Students on the left (who chose the bus), then the
+  /// students' enrollment, which is the one open first, then the staff's.
+  /// All stay alive, so ticks and unsaved changes survive a look at another tab.
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: AppUI.card(),
+        padding: EdgeInsets.all(AppUI.cardPad),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            PillTab(icon: 'bus', label: 'Opted Students', selected: _tab == 0, onTap: () => _open(0)),
+            SizedBox(width: PillTab.gap(context)),
+            PillTab(icon: EnrollmentKind.students.icon, label: EnrollmentKind.students.title, selected: _tab == 1, onTap: () => _open(1)),
+            SizedBox(width: PillTab.gap(context)),
+            PillTab(icon: EnrollmentKind.staff.icon, label: EnrollmentKind.staff.title, selected: _tab == 2, onTap: () => _open(2)),
+          ]),
+          SizedBox(height: 14.h),
+          Expanded(
+            child: IndexedStack(index: _tab, sizing: StackFit.expand, children: [
+              OptedStudentsPanel(onOptedChanged: (ids) => setState(() => _opted = ids)),
+              _EnrollmentTab(kind: EnrollmentKind.students, opted: _opted),
+              if (_staffOpened) const _EnrollmentTab(kind: EnrollmentKind.staff) else const SizedBox.shrink(),
+            ]),
+          ),
+        ]),
+      );
+}
+
+/// One enrollment tab: the route at the top and its board below, for the
+/// year's students or its staff ([kind]).
+class _EnrollmentTab extends StatefulWidget {
+  final EnrollmentKind kind;
+
+  /// Students: only these can be added (the Opted Students tab). Null: no limit.
+  final Set<int>? opted;
+  const _EnrollmentTab({required this.kind, this.opted});
+
+  @override
+  State<_EnrollmentTab> createState() => _EnrollmentTabState();
+}
+
+class _EnrollmentTabState extends State<_EnrollmentTab> {
   List<Map<String, dynamic>> _routes = const [];
   List<Map<String, dynamic>> _stages = const [];
   List<Map<String, dynamic>> _stops = const [];
-  List<Map<String, dynamic>> _students = const [];
+
+  /// Who can be added: the year's students, or the staff who may travel.
+  List<Map<String, dynamic>> _people = const [];
   List<Map<String, dynamic>> _enrollments = const [];
   String? _yearFrom, _yearTo;
   int? _routeId;
@@ -70,6 +249,11 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
 
   /// Bumped to put the route picker back on the open route.
   int _pickerKey = 0;
+
+  EnrollmentKind get _kind => widget.kind;
+
+  /// Who can be added, with the academic year's first and last day.
+  Future<Map<String, dynamic>> _fetchPeople() => _kind.isStaff ? TransportService.enrollmentStaff() : TransportService.students();
 
   @override
   void initState() {
@@ -85,7 +269,7 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
         TransportService.list('route'),
         TransportService.list('stage'),
         TransportService.list('stop'),
-        TransportService.students(),
+        _fetchPeople(),
       ]);
       final routes = r[0] as List<Map<String, dynamic>>;
       final st = r[3] as Map<String, dynamic>;
@@ -94,13 +278,13 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
         final inUse = routes.where((x) => x['is_active'] != false);
         routeId = trId((inUse.isNotEmpty ? inUse.first : (routes.isEmpty ? null : routes.first))?['route_id']);
       }
-      final enrollments = routeId == null ? <Map<String, dynamic>>[] : await TransportService.list('enrollment', filter: {'route_id': routeId});
+      final enrollments = routeId == null ? <Map<String, dynamic>>[] : await TransportService.list(_kind.entity, filter: {'route_id': routeId});
       if (!mounted) return;
       setState(() {
         _routes = routes;
         _stages = r[1] as List<Map<String, dynamic>>;
         _stops = r[2] as List<Map<String, dynamic>>;
-        _students = _maps(st['students']);
+        _people = _maps(st[_kind.peopleKey]);
         _yearFrom = _isoDate(st['year_from']);
         _yearTo = _isoDate(st['year_to']);
         _routeId = routeId;
@@ -151,7 +335,7 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
     final id = _routeId;
     if (id == null) return;
     try {
-      final rows = await TransportService.list('enrollment', filter: {'route_id': id});
+      final rows = await TransportService.list(_kind.entity, filter: {'route_id': id});
       if (!mounted || id != _routeId) return;
       setState(() {
         _enrollments = rows;
@@ -171,16 +355,16 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
   /// new rows' ids, and the routes the students are on).
   Future<void> _save(List<Map<String, dynamic>> rows) async {
     final id = _routeId!;
-    await TransportService.save('enrollment', {'route_id': id, 'rows': rows});
+    await TransportService.save(_kind.entity, {'route_id': id, 'rows': rows});
     final r = await Future.wait<dynamic>([
-      TransportService.list('enrollment', filter: {'route_id': id}),
-      TransportService.students(),
+      TransportService.list(_kind.entity, filter: {'route_id': id}),
+      _fetchPeople(),
     ]);
     if (!mounted) return;
     final st = r[1] as Map<String, dynamic>;
     setState(() {
       _enrollments = r[0] as List<Map<String, dynamic>>;
-      _students = _maps(st['students']);
+      _people = _maps(st[_kind.peopleKey]);
       _dirty = false;
     });
   }
@@ -230,7 +414,7 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
     if (_loadingRoute) return const AppLoading();
     if (_routeError != null) {
       return AppUI.empty(
-        title: 'Could not load the students of this route',
+        title: 'Could not load the ${_kind.many} of this route',
         why: _routeError,
         icon: 'info-circle',
         action: OutlinedButton(
@@ -250,7 +434,9 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
       stages: [for (final g in _stages) if (trId(g['route_id']) == rid) g],
       stops: [for (final p in _stops) if (trId(p['route_id']) == rid) p],
       enrollments: _enrollments,
-      students: _students,
+      kind: _kind,
+      people: _people,
+      opted: widget.opted,
       yearFrom: _yearFrom,
       yearTo: _yearTo,
       onSave: _save,
@@ -263,7 +449,7 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
     if (_loading) return const AppLoading();
     if (_error != null) {
       return AppUI.empty(
-        title: 'Could not open Student Enrollment',
+        title: 'Could not open ${_kind.title}',
         why: _error,
         icon: 'info-circle',
         action: OutlinedButton(onPressed: _reload, style: AppUI.secondary(context), child: const Text('Retry')),
@@ -273,14 +459,11 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
     for (final r in _routes) {
       if (trId(r['route_id']) == _routeId) route = r;
     }
-    return Container(
-      decoration: AppUI.card(),
-      padding: EdgeInsets.all(AppUI.cardPad),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         AppUI.cardHeader(
-          icon: 'people',
-          title: 'Student Enrollment',
-          subtitle: 'The students on each route, and where they get on and off.',
+          icon: _kind.icon,
+          title: _kind.title,
+          subtitle: 'The ${_kind.many} on each route, and where they get on and off.',
           trailing: [
             if (_routes.isNotEmpty) SizedBox(width: 340.w, child: _routePicker()),
             IconButton(
@@ -292,57 +475,66 @@ class _StudentEnrollmentScreenState extends State<StudentEnrollmentScreen> {
         ),
         SizedBox(height: 14.h),
         Expanded(child: _body(route)),
-      ]),
-    );
+      ]);
   }
 }
 
 // ── board ────────────────────────────────────────────────────────────────────
-/// A student on the board: a saved enrollment, or one added here and not
-/// saved yet, with the values the board shows now.
+/// A student or staff member on the board: a saved enrollment, or one added
+/// here and not saved yet, with the values the board shows now.
 class _Row {
   _Row({
     required this.key,
     required this.saved,
-    required this.studentId,
-    required this.admNo,
+    required this.personId,
+    required this.code,
     required this.name,
-    required this.cls,
+    required this.group,
+    required this.left,
     required this.type,
     required this.status,
     this.start,
   });
 
-  factory _Row.saved(Map<String, dynamic> e) => _Row(
+  factory _Row.saved(Map<String, dynamic> e, EnrollmentKind kind) => _Row(
         key: 'e${trId(e['enrollment_id'])}',
         saved: e,
-        studentId: trId(e['student_id'])!,
-        admNo: trText(e['stuadmno']),
-        name: trText(e['stuname']),
-        cls: trText(e['stuclass']),
+        personId: trId(e[kind.rowIdKey])!,
+        code: trText(e[kind.codeKey]),
+        name: trText(e[kind.nameKey]),
+        group: trText(e[kind.groupKey]),
+        left: kind.left(e),
         type: 'BOTH',
         status: 'ACTIVE',
       )..undo();
 
-  factory _Row.added(Map<String, dynamic> s, String start) => _Row(
-        key: 's${trId(s['stu_id'])}',
+  factory _Row.added(Map<String, dynamic> s, String start, EnrollmentKind kind) => _Row(
+        key: 's${trId(s[kind.idKey])}',
         saved: null,
-        studentId: trId(s['stu_id'])!,
-        admNo: trText(s['stuadmno']),
-        name: trText(s['stuname']),
-        cls: trText(s['stuclass']),
+        personId: trId(s[kind.idKey])!,
+        code: trText(s[kind.codeKey]),
+        name: trText(s[kind.nameKey]),
+        group: trText(s[kind.groupKey]),
+        left: false,
         type: 'BOTH',
         status: 'ACTIVE',
         start: start,
       );
 
-  /// "e9" for a saved enrollment, "s483" for a student added here.
+  /// "e9" for a saved enrollment, "s483" for a person added here.
   final String key;
 
-  /// The enrollment as listed; null for a student added here.
+  /// The enrollment as listed; null for a person added here.
   final Map<String, dynamic>? saved;
-  final int studentId;
-  final String admNo, name, cls;
+
+  /// The student's or staff member's id.
+  final int personId;
+
+  /// Admission number, name and class; or employee code, name and designation.
+  final String code, name, group;
+
+  /// The person has left (not active in the year any more).
+  final bool left;
   String type;
   int? pickup, drop;
   String? start, end;
@@ -356,9 +548,6 @@ class _Row {
   /// the type changes back, but it is not saved.
   int? get pickupNow => usesPickup ? pickup : null;
   int? get dropNow => usesDrop ? drop : null;
-
-  /// The student has left the school (not active in the year's students).
-  bool get left => saved != null && saved!['stu_status'] != null && trId(saved!['stu_status']) != 1;
 
   static String _or(dynamic v, String fallback) => trText(v).isEmpty ? fallback : trText(v);
 
@@ -385,10 +574,10 @@ class _Row {
     status = _or(s['status'], 'ACTIVE');
   }
 
-  /// The row as the server takes it.
-  Map<String, dynamic> toSave() => {
+  /// The row as the server takes it, the person under [idKey].
+  Map<String, dynamic> toSave(String idKey) => {
         if (saved != null) ...{'enrollment_id': trId(saved!['enrollment_id']), 'updated_at': saved!['updated_at']},
-        'student_id': studentId,
+        idKey: personId,
         'service_type': type,
         'pickup_stop_id': pickupNow,
         'drop_stop_id': dropNow,
@@ -399,8 +588,9 @@ class _Row {
 }
 
 /// One route's board, given the lists, so it can be shown without a server:
-/// its stops on the left, its students on the right. [onSave] gets the
-/// changed rows as the server takes them and throws when they are refused.
+/// its stops on the left, its students (or staff: [kind]) on the right.
+/// [onSave] gets the changed rows as the server takes them and throws when
+/// they are refused.
 class EnrollmentBoard extends StatefulWidget {
   final Map<String, dynamic> route;
 
@@ -408,11 +598,19 @@ class EnrollmentBoard extends StatefulWidget {
   final List<Map<String, dynamic>> stages;
   final List<Map<String, dynamic>> stops;
 
-  /// This route's enrollments, as tr_list 'enrollment' gives them.
+  /// This route's enrollments, as tr_list 'enrollment' (or 'staff_enrollment') gives them.
   final List<Map<String, dynamic>> enrollments;
 
-  /// The year's active students, in class order (tr_students).
-  final List<Map<String, dynamic>> students;
+  /// Students or staff.
+  final EnrollmentKind kind;
+
+  /// Who can be added, in order: the year's active students in class order
+  /// (tr_students), or the staff who may travel (tr_enrollment_staff).
+  final List<Map<String, dynamic>> people;
+
+  /// Students opted for the bus (Opted Students tab): Add Students offers
+  /// only these. Null: no limit.
+  final Set<int>? opted;
 
   /// The academic year's first and last day (yyyy-mm-dd).
   final String? yearFrom, yearTo;
@@ -428,7 +626,9 @@ class EnrollmentBoard extends StatefulWidget {
     required this.stages,
     required this.stops,
     required this.enrollments,
-    required this.students,
+    this.kind = EnrollmentKind.students,
+    required this.people,
+    this.opted,
     this.yearFrom,
     this.yearTo,
     required this.onSave,
@@ -468,8 +668,10 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
   /// The route's stops in route order.
   List<Map<String, dynamic>> _ordered = const [];
 
-  /// Student id -> place in the year's class order.
+  /// Person id -> place in the people's order (the year's class order).
   Map<int, int> _order = const {};
+
+  EnrollmentKind get _kind => widget.kind;
 
   @override
   void initState() {
@@ -508,14 +710,14 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     };
     _ordered = [..._stopById.values]..sort((a, b) => (trId(a['stop_seq']) ?? 0).compareTo(trId(b['stop_seq']) ?? 0));
     _order = {
-      for (var i = 0; i < widget.students.length; i++)
-        if (trId(widget.students[i]['stu_id']) != null) trId(widget.students[i]['stu_id'])!: i,
+      for (var i = 0; i < widget.people.length; i++)
+        if (trId(widget.people[i][_kind.idKey]) != null) trId(widget.people[i][_kind.idKey])!: i,
     };
   }
 
   List<_Row> _fresh() => [
         for (final e in widget.enrollments)
-          if (trId(e['enrollment_id']) != null && trId(e['student_id']) != null) _Row.saved(e),
+          if (trId(e['enrollment_id']) != null && trId(e[_kind.rowIdKey]) != null) _Row.saved(e, _kind),
       ];
 
   int get _routeId => trId(widget.route['route_id'])!;
@@ -523,7 +725,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
   bool get _routeOn => widget.route['is_active'] != false;
   String get _today => _iso(widget.today ?? DateTime.now());
 
-  /// Today, kept within the academic year: a new student's start date.
+  /// Today, kept within the academic year: a new row's start date.
   String get _defaultStart {
     var d = _today;
     final from = widget.yearFrom, to = widget.yearTo;
@@ -544,10 +746,11 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
 
   bool _ended(_Row r) => r.status == 'CANCELLED' || r.status == 'COMPLETED';
 
-  /// Students added here first, then by class (the year's order) and name.
+  /// People added here first, then in the people's order (students: the
+  /// year's class order) and by name.
   List<_Row> get _sorted => [..._rows]..sort((a, b) {
       if (a.isNew != b.isNew) return a.isNew ? -1 : 1;
-      final c = (_order[a.studentId] ?? 1 << 30).compareTo(_order[b.studentId] ?? 1 << 30);
+      final c = (_order[a.personId] ?? 1 << 30).compareTo(_order[b.personId] ?? 1 << 30);
       return c != 0 ? c : a.name.compareTo(b.name);
     });
 
@@ -559,7 +762,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
       for (final r in _sorted)
         if ((_showEnded || !_ended(r) || r.changed) &&
             (_atStop == null || r.pickupNow == _atStop || r.dropNow == _atStop) &&
-            (q.isEmpty || '${r.admNo} ${r.name} ${r.cls}'.toLowerCase().contains(q)))
+            (q.isEmpty || '${r.code} ${r.name} ${r.group}'.toLowerCase().contains(q)))
           r,
     ];
   }
@@ -616,25 +819,31 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         _ticked.clear();
       });
 
-  Future<void> _addStudents() async {
-    final here = {for (final r in _rows) r.studentId};
+  Future<void> _addPeople() async {
+    final here = {for (final r in _rows) r.personId};
     final picked = await showDialog<List<Map<String, dynamic>>>(
       context: context,
-      builder: (_) => _AddStudentsDialog(students: widget.students, here: here, routeId: _routeId, routeText: _routeText),
+      builder: (_) => _AddPeopleDialog(
+        kind: _kind,
+        people: [
+          for (final s in widget.people)
+            if (widget.opted == null || widget.opted!.contains(trId(s[_kind.idKey]))) s,
+        ],
+        here: here, routeId: _routeId, routeText: _routeText),
     );
     if (picked == null || picked.isEmpty || !mounted) return;
     final start = _defaultStart;
     var added = 0;
     _edit(() {
       for (final s in picked) {
-        final id = trId(s['stu_id']);
+        final id = trId(s[_kind.idKey]);
         if (id == null || here.contains(id)) continue;
-        _rows.add(_Row.added(s, start));
+        _rows.add(_Row.added(s, start, _kind));
         added++;
       }
       _atStop = null; // a stop filter would hide them
     });
-    trSnack(context, '$added student${added == 1 ? '' : 's'} added. Give them their stops, then save.', AppColors.success);
+    trSnack(context, '${_kind.count(added)} added. Give them their stops, then save.', AppColors.success);
   }
 
   /// A day within the academic year, starting at [current].
@@ -653,8 +862,8 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     final from = widget.yearFrom, to = widget.yearTo;
     final seen = <int>{};
     for (final r in rows) {
-      final who = '${r.admNo} ${r.name}'.trim();
-      if (!seen.add(r.studentId)) return '$who is listed twice. Keep one row for each student.';
+      final who = '${r.code} ${r.name}'.trim();
+      if (!seen.add(r.personId)) return '$who is listed twice. Keep one row for each ${_kind.one}.';
       if (r.usesPickup && r.pickup == null) return 'Choose the pickup stop of $who.';
       if (r.usesDrop && r.drop == null) return 'Choose the drop stop of $who.';
       final start = r.start, end = r.end;
@@ -677,11 +886,11 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     }
     setState(() => _saving = true);
     try {
-      await widget.onSave([for (final r in changed) r.toSave()]);
+      await widget.onSave([for (final r in changed) r.toSave(_kind.rowIdKey)]);
       if (!mounted) return;
       setState(() => _saving = false);
       _dirty();
-      trSnack(context, changed.length == 1 ? 'Saved 1 student.' : 'Saved ${changed.length} students.', AppColors.success);
+      trSnack(context, 'Saved ${_kind.count(changed.length)}.', AppColors.success);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -707,7 +916,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         ),
       );
 
-  /// A stop to drag onto the students; a click shows only its students.
+  /// A stop to drag onto the people; a click shows only its people.
   Widget _stopTile(Map<String, dynamic> p, int ups, int downs) {
     final id = trId(p['stop_id'])!;
     final off = p['is_active'] == false;
@@ -735,7 +944,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
                   style: AppUI.label.copyWith(color: off ? AppColors.ink3 : AppColors.ink),
                 ),
                 Tooltip(
-                  message: '$ups picked up here, $downs dropped here (active students)',
+                  message: '$ups picked up here, $downs dropped here (active ${_kind.many})',
                   child: Text('↑$ups  ↓$downs', style: AppUI.muted.copyWith(color: AppColors.ink2)),
                 ),
               ]),
@@ -755,7 +964,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
 
   /// The route's stops in route order, as many as the search leaves.
   Widget _stopsPanel() {
-    // how many active students get on and off at each stop, as the board stands
+    // how many active people get on and off at each stop, as the board stands
     final ups = <int, int>{}, downs = <int, int>{};
     for (final r in _rows) {
       if (r.status != 'ACTIVE') continue;
@@ -779,7 +988,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
             Text('STOPS', style: AppUI.tableHead),
             SizedBox(height: 2.h),
-            Text('Drag a stop onto a student. Click one to see only its students.', style: AppUI.muted),
+            Text('Drag a stop onto a ${_kind.one}. Click one to see only its ${_kind.many}.', style: AppUI.muted),
             SizedBox(height: 8.h),
             TrSearchField(
               key: const ValueKey('enr-stop-search'),
@@ -805,7 +1014,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     );
   }
 
-  // ── students (right) ───────────────────────────────────────────────────────
+  // ── people (right) ─────────────────────────────────────────────────────────
   static const double _wCheck = 40, _wStage = 70, _wAct = 40;
 
   // Sized to their text, so nothing is cut short: measured from the field
@@ -835,19 +1044,18 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     const arrow = 24.0; // a dropdown's arrow
     double widest(Iterable<String> texts, [TextStyle? s]) =>
         texts.fold(0.0, (m, t) => t.isEmpty ? m : (m > _textWidth(t, s ?? style) ? m : _textWidth(t, s ?? style)));
-    _wAdm = ((widest(shown.map((r) => r.admNo), AppUI.cell) > widest(['ADM NO'], AppUI.tableHead)
-                ? widest(shown.map((r) => r.admNo), AppUI.cell)
-                : widest(['ADM NO'], AppUI.tableHead)) +
+    _wAdm = ((widest(shown.map((r) => r.code), AppUI.cell) > widest([_kind.codeHead], AppUI.tableHead)
+                ? widest(shown.map((r) => r.code), AppUI.cell)
+                : widest([_kind.codeHead], AppUI.tableHead)) +
             8.w + 3)
         .clamp(72.0, 140.0)
         .ceilToDouble();
     final words = RegExp(r'\s+');
     _wName = (widest(shown.expand((r) => r.name.split(words)), AppUI.cell) + 8.w + 6).clamp(96.0, 180.0).ceilToDouble();
     final names = [for (final p in _ordered) trText(p['stop_name'])];
-    // a word is never split over two lines: its whole width, a little to spare
-    final word = widest(names.expand((n) => n.split(words))) + 6;
-    final half = widest(names) / 2;
-    final line = (word > half ? word : half).clamp(96.0, 176.0);
+    // one line, so the rows stay low: the longest stop name, up to a limit
+    // (a longer one ends in "..." and shows in full on hover and in the list)
+    final line = (widest(names) + 6).clamp(96.0, 200.0);
     _wStop = (line + chrome + arrow).ceilToDouble();
     _wTrip = (widest(_tripTypes.map((t) => t.$2)) + chrome + arrow).ceilToDouble();
     _wStatus = (widest(_statuses.map((t) => t.$2)) + chrome + arrow).ceilToDouble();
@@ -859,7 +1067,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
       SizedBox(width: width, child: Padding(padding: EdgeInsets.only(right: 8.w), child: Align(alignment: Alignment.centerLeft, child: child)));
 
   /// Where a stop dragged from the left can be dropped on a row: the
-  /// student's own cells take it as both stops, the Pickup and Drop columns
+  /// person's own cells take it as both stops, the Pickup and Drop columns
   /// as that one. It lights up while a stop is held over it.
   Widget _zone(_Row r, {required Key key, required bool pickup, required bool drop, required Widget child}) => DragTarget<int>(
         key: key,
@@ -875,15 +1083,15 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         ),
       );
 
-  Widget _studentCells(_Row r) => Row(children: [
+  Widget _personCells(_Row r) => Row(children: [
         SizedBox(
           width: _wAdm,
           child: Padding(
             padding: EdgeInsets.only(right: 8.w),
-            child: Text(r.admNo, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell),
+            child: Text(r.code, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell),
           ),
         ),
-        // the name (two lines when long) with the class under it
+        // the name (two lines when long) with the class (or designation) under it
         Expanded(
           child: Padding(
             padding: EdgeInsets.only(right: 8.w),
@@ -895,10 +1103,10 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
                 if (r.isNew) ...[SizedBox(width: 6.w), AppUI.chip('New', AppStatus.info)],
                 if (r.left) ...[
                   SizedBox(width: 6.w),
-                  Tooltip(message: 'Not an active student any more', child: AppUI.chip('Left', AppStatus.warning)),
+                  Tooltip(message: _kind.leftTip, child: AppUI.chip('Left', AppStatus.warning)),
                 ],
               ]),
-              if (r.cls.isNotEmpty) Text(r.cls, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
+              if (r.group.isNotEmpty) Text(r.group, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted),
             ]),
           ),
         ),
@@ -923,7 +1131,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
   Widget _stopPick(_Row r, {required bool pickup}) {
     if (!(pickup ? r.usesPickup : r.usesDrop)) {
       return Tooltip(
-        message: pickup ? 'A drop-only student has no pickup stop.' : 'A pickup-only student has no drop stop.',
+        message: pickup ? 'A drop-only ${_kind.one} has no pickup stop.' : 'A pickup-only ${_kind.one} has no drop stop.',
         child: Padding(padding: EdgeInsets.only(left: 12.w), child: Text('–', style: AppUI.muted)),
       );
     }
@@ -934,29 +1142,25 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     ];
     final known = options.any((p) => trId(p['stop_id']) == value);
     String label(Map<String, dynamic> p) => '${trText(p['stop_name'])}${p['is_active'] == false ? ' (switched off)' : ''}';
-    // one line high like the other fields, two when the name needs it
-    Widget shown(Widget child) => ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 24),
-          child: Align(alignment: Alignment.centerLeft, child: child),
-        );
+    // one line high like the other fields; the full name on hover
+    Widget shown(Widget child) => Align(alignment: Alignment.centerLeft, child: child);
     return AppDropdownField<int?>(
       key: ValueKey('enr-${pickup ? 'pick' : 'drop'}-${r.key}-$value'),
       initialValue: known ? value : null,
       isExpanded: true,
-      // not dense, so a long stop name can take a second line in the box
-      isDense: false,
+      isDense: true,
       menuMaxHeight: 380,
       dropdownColor: AppColors.card,
       borderRadius: BorderRadius.circular(AppUI.controlRadius),
       style: AppUI.fieldText(context),
       decoration: AppUI.field(context, '', dense: true, filled: known),
       hint: shown(Text(pickup ? 'Pickup stop' : 'Drop stop', maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.muted)),
-      // only the chosen stop is laid out in the box, so the row is as tall as
-      // its own stop name needs (the box sizes to the tallest entry it holds)
+      // only the chosen stop is laid out in the box (the box sizes to the
+      // tallest entry it holds)
       selectedItemBuilder: (_) => [
         for (final p in options)
           trId(p['stop_id']) == value
-              ? shown(Tooltip(message: label(p), child: Text(label(p), maxLines: 2, overflow: TextOverflow.ellipsis)))
+              ? shown(Tooltip(message: label(p), child: Text(label(p), maxLines: 1, overflow: TextOverflow.ellipsis)))
               : const SizedBox.shrink(),
       ],
       items: [
@@ -1031,7 +1235,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
   Widget _rowAction(_Row r) {
     if (!r.isNew && !r.changed) return const SizedBox.shrink();
     return IconButton(
-      tooltip: r.isNew ? 'Take this student off the list (not saved yet)' : 'Undo the changes in this row',
+      tooltip: r.isNew ? 'Take this ${_kind.one} off the list (not saved yet)' : 'Undo the changes in this row',
       visualDensity: VisualDensity.compact,
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
@@ -1046,8 +1250,8 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     final ticked = _ticked.contains(r.key);
     return Container(
       key: ValueKey('enr-row-${r.key}'),
-      constraints: BoxConstraints(minHeight: 48.h),
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 4.h),
+      constraints: BoxConstraints(minHeight: 40.h),
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 2.h),
       decoration: BoxDecoration(color: ticked ? AppColors.primarySoft : (r.changed ? AppColors.accent.withValues(alpha: 0.045) : (i.isEven ? Colors.white : AppColors.surface)), border: const Border(bottom: BorderSide(color: AppColors.divider))),
       child: Row(children: [
         SizedBox(
@@ -1065,8 +1269,8 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
                     }),
           ),
         ),
-        // the student's own cells take a dropped stop as both stops
-        Expanded(child: _zone(r, key: ValueKey('enr-who-${r.key}'), pickup: true, drop: true, child: _studentCells(r))),
+        // the person's own cells take a dropped stop as both stops
+        Expanded(child: _zone(r, key: ValueKey('enr-who-${r.key}'), pickup: true, drop: true, child: _personCells(r))),
         _cell(_wTrip, _pick(ValueKey('enr-trip-${r.key}-${r.type}'), r.type, _tripTypes, (v) => _edit(() => r.type = v))),
         _cell(_wStage, _stageCell(r)),
         _cell(_wStop, _zone(r, key: ValueKey('enr-pickzone-${r.key}'), pickup: true, drop: false, child: _stopPick(r, pickup: true))),
@@ -1111,8 +1315,8 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         ),
         Expanded(
           child: Row(children: [
-            h('ADM NO', _wAdm),
-            Expanded(child: Padding(padding: EdgeInsets.only(right: 8.w), child: Text('NAME · CLASS', style: AppUI.tableHead))),
+            h(_kind.codeHead, _wAdm),
+            Expanded(child: Padding(padding: EdgeInsets.only(right: 8.w), child: Text('NAME · ${_kind.groupHead}', style: AppUI.tableHead))),
           ]),
         ),
         h('TRIP', _wTrip),
@@ -1170,7 +1374,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         );
       });
 
-  /// Set the ticked students together.
+  /// Set the ticked rows together.
   Widget _bar() {
     final ticked = [for (final r in _rows) if (_ticked.contains(r.key)) r];
     final stops = [
@@ -1206,7 +1410,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
           onPressed: _saving
               ? null
               : () async {
-                  final d = await _pickDay(end ? widget.yearTo : null, '$label: ${ticked.length} students');
+                  final d = await _pickDay(end ? widget.yearTo : null, '$label: ${_kind.count(ticked.length)}');
                   if (d == null || !mounted) return;
                   _edit(() {
                     for (final r in ticked) {
@@ -1251,10 +1455,16 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
       runSpacing: 8.h,
       children: [
         Wrap(spacing: 10.w, runSpacing: 8.h, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SizedBox(width: 240.w, child: TrSearchField(hint: 'Adm no, name or class', onChanged: (v) => _filter(() => _query = v))),
+          SizedBox(
+            width: 240.w,
+            child: TrSearchField(
+              hint: '${_kind.codeHint}, name or ${_kind.groupHead.toLowerCase()}',
+              onChanged: (v) => _filter(() => _query = v),
+            ),
+          ),
           FilterChip(
             label: const Text('Show Ended'),
-            tooltip: 'Show cancelled and completed students too',
+            tooltip: 'Show cancelled and completed ${_kind.many} too',
             selected: _showEnded,
             onSelected: (v) => _filter(() => _showEnded = v),
           ),
@@ -1262,12 +1472,12 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
         ]),
         Wrap(spacing: 10.w, runSpacing: 8.h, children: [
           Tooltip(
-            message: _routeOn ? 'Pick students of the year to add to this route' : 'This route is switched off',
+            message: _routeOn ? 'Pick ${_kind.many} of the year to add to this route' : 'This route is switched off',
             child: OutlinedButton.icon(
-              onPressed: _saving || !_routeOn ? null : _addStudents,
+              onPressed: _saving || !_routeOn ? null : _addPeople,
               style: AppUI.secondary(context),
               icon: AppIcon('user-add', size: AppBtn.iconSize(context), color: AppColors.primaryText),
-              label: const Text('Add Students'),
+              label: Text('Add ${_kind.manyTitle}'),
             ),
           ),
           OutlinedButton.icon(
@@ -1291,7 +1501,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
     final active = _rows.where((r) => r.status == 'ACTIVE').length;
     final noStop = _rows.where((r) => r.status == 'ACTIVE' && ((r.usesPickup && r.pickup == null) || (r.usesDrop && r.drop == null))).length;
     final parts = [
-      '$active active student${active == 1 ? '' : 's'}',
+      '$active active ${active == 1 ? _kind.one : _kind.many}',
       if (noStop > 0) '$noStop without a stop',
     ];
     return Text.rich(
@@ -1303,7 +1513,7 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
             style: AppUI.muted.copyWith(color: AppColors.goldDark, fontWeight: FontWeight.w700),
           ),
         TextSpan(
-          text: '   ·   Drag a stop onto a student for both stops, or onto Pickup or Drop for one; ticked students all take it.',
+          text: '   ·   Drag a stop onto a ${_kind.one} for both stops, or onto Pickup or Drop for one; ticked ${_kind.many} all take it.',
           style: AppUI.muted,
         ),
       ]),
@@ -1335,9 +1545,9 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
               clipBehavior: Clip.antiAlias,
               child: shown.isEmpty
                   ? AppUI.empty(
-                      title: _rows.isEmpty ? 'No students on this route yet' : 'No student matches',
+                      title: _rows.isEmpty ? 'No ${_kind.many} on this route yet' : 'No ${_kind.one} matches',
                       why: _rows.isEmpty
-                          ? 'Use Add Students, then drag each student\'s stop onto them.'
+                          ? 'Use Add ${_kind.manyTitle}, then drag each ${_kind.one}\'s stop onto them.'
                           : 'Try another search or stop, or Show Ended.',
                       icon: 'people',
                     )
@@ -1350,24 +1560,28 @@ class _EnrollmentBoardState extends State<EnrollmentBoard> {
   }
 }
 
-// ── add students ─────────────────────────────────────────────────────────────
-/// The year's students to add to the route: tick any number, by class or by
-/// search. A student already on this route, or active on another one, is
-/// shown but cannot be ticked. Pops with the ticked students.
-class _AddStudentsDialog extends StatefulWidget {
-  final List<Map<String, dynamic>> students;
+// ── add students / staff ─────────────────────────────────────────────────────
+/// The people to add to the route (the year's students, or the staff who may
+/// travel): tick any number, by class (designation) or by search. One already
+/// on this route, or active on another one, is shown but cannot be ticked.
+/// Pops with the ticked people.
+class _AddPeopleDialog extends StatefulWidget {
+  final EnrollmentKind kind;
+  final List<Map<String, dynamic>> people;
 
-  /// Students the board already has on this route.
+  /// The people the board already has on this route.
   final Set<int> here;
   final int routeId;
   final String routeText;
-  const _AddStudentsDialog({required this.students, required this.here, required this.routeId, required this.routeText});
+  const _AddPeopleDialog({required this.kind, required this.people, required this.here, required this.routeId, required this.routeText});
 
   @override
-  State<_AddStudentsDialog> createState() => _AddStudentsDialogState();
+  State<_AddPeopleDialog> createState() => _AddPeopleDialogState();
 }
 
-class _AddStudentsDialogState extends State<_AddStudentsDialog> {
+class _AddPeopleDialogState extends State<_AddPeopleDialog> {
+  EnrollmentKind get _kind => widget.kind;
+
   String _query = '';
   String? _class;
   final Set<int> _picked = {};
@@ -1410,7 +1624,7 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
     final shown = _shown;
     if (_cursor < 0 || _cursor >= shown.length) return;
     final s = shown[_cursor];
-    final id = trId(s['stu_id']);
+    final id = trId(s[_kind.idKey]);
     if (id == null || _why(s) != null) return;
     _tick(id, !_picked.contains(id));
   }
@@ -1436,15 +1650,15 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
     return KeyEventResult.ignored;
   }
 
-  /// The classes, in the year's order.
+  /// The classes (or designations), in the people's order.
   late final List<String> _classes = {
-    for (final s in widget.students)
-      if (trText(s['stuclass']).isNotEmpty) trText(s['stuclass']),
+    for (final s in widget.people)
+      if (trText(s[_kind.groupKey]).isNotEmpty) trText(s[_kind.groupKey]),
   }.toList();
 
-  /// Why a student cannot be ticked, or null.
+  /// Why a person cannot be ticked, or null.
   String? _why(Map<String, dynamic> s) {
-    if (widget.here.contains(trId(s['stu_id']))) return 'On this route';
+    if (widget.here.contains(trId(s[_kind.idKey]))) return 'On this route';
     final rid = trId(s['route_id']);
     if (rid != null && rid != widget.routeId) return 'On ${trText(s['route_code'])}';
     return null;
@@ -1453,8 +1667,10 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
   List<Map<String, dynamic>> get _shown {
     final q = _query.trim().toLowerCase();
     return [
-      for (final s in widget.students)
-        if ((_class == null || trText(s['stuclass']) == _class) && (q.isEmpty || '${s['stuadmno']} ${s['stuname']}'.toLowerCase().contains(q))) s,
+      for (final s in widget.people)
+        if ((_class == null || trText(s[_kind.groupKey]) == _class) &&
+            (q.isEmpty || '${s[_kind.codeKey]} ${s[_kind.nameKey]}'.toLowerCase().contains(q)))
+          s,
     ];
   }
 
@@ -1471,7 +1687,7 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
     final shown = _shown;
     final free = [
       for (final s in shown)
-        if (_why(s) == null && trId(s['stu_id']) != null) trId(s['stu_id'])!,
+        if (_why(s) == null && trId(s[_kind.idKey]) != null) trId(s[_kind.idKey])!,
     ];
     final all = free.isNotEmpty && free.every(_picked.contains);
     final some = free.any(_picked.contains);
@@ -1487,7 +1703,7 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
             padding: EdgeInsets.fromLTRB(AppUI.cardPad, AppUI.cardPad, AppUI.cardPad, 12.h),
             child: AppUI.cardHeader(
               icon: 'user-add',
-              title: 'Add students',
+              title: 'Add ${_kind.many}',
               subtitle: 'To route ${widget.routeText}. Tick any number; give them their stops on the board.',
             ),
           ),
@@ -1496,7 +1712,7 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
             child: Row(children: [
               Expanded(
                 child: TrSearchField(
-                  hint: 'Adm no or name',
+                  hint: '${_kind.codeHint} or name',
                   onChanged: (v) => setState(() {
                     _query = v;
                     _cursor = -1;
@@ -1516,7 +1732,7 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
                   style: AppUI.fieldText(context),
                   decoration: AppUI.field(context, '', filled: _class != null),
                   items: [
-                    const DropdownMenuItem<String?>(value: null, child: Text('All classes')),
+                    DropdownMenuItem<String?>(value: null, child: Text(_kind.allGroups)),
                     for (final c in _classes) DropdownMenuItem<String?>(value: c, child: Text(c, maxLines: 1, overflow: TextOverflow.ellipsis)),
                   ],
                   onChanged: (v) => setState(() {
@@ -1551,20 +1767,26 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
                   ),
                 ),
               ),
-              SizedBox(width: 110, child: Text('ADM NO', style: AppUI.tableHead)),
+              SizedBox(width: 110, child: Text(_kind.codeHead, style: AppUI.tableHead)),
               Expanded(child: Text('NAME', style: AppUI.tableHead)),
-              SizedBox(width: 120, child: Text('CLASS', style: AppUI.tableHead)),
+              SizedBox(width: 120, child: Text(_kind.groupHead, style: AppUI.tableHead)),
               SizedBox(width: 130, child: Text('TRANSPORT', style: AppUI.tableHead)),
             ]),
           ),
           Expanded(
             child: shown.isEmpty
-                ? AppUI.empty(title: 'No student matches', why: 'Try another class or search.', icon: 'people')
+                ? (widget.people.isEmpty
+                    ? AppUI.empty(title: _kind.noneTitle, why: _kind.noneWhy, icon: 'bus')
+                    : AppUI.empty(
+                        title: 'No ${_kind.one} matches',
+                        why: 'Try another ${_kind.groupHead.toLowerCase()} or search.',
+                        icon: 'people',
+                      ))
                 : ListView.builder(
                     itemCount: shown.length,
                     itemBuilder: (_, i) {
                       final s = shown[i];
-                      final id = trId(s['stu_id'])!;
+                      final id = trId(s[_kind.idKey])!;
                       final why = _why(s);
                       final on = why == null && _picked.contains(id);
                       final here = i == _cursor; // the keyboard's row
@@ -1584,12 +1806,12 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
                           padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 1.h),
                           child: Row(children: [
                             SizedBox(width: 44, child: Checkbox(value: on, onChanged: why != null ? null : (v) => tap(v == true))),
-                            SizedBox(width: 110, child: Text(trText(s['stuadmno']), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
+                            SizedBox(width: 110, child: Text(trText(s[_kind.codeKey]), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
                             Expanded(
-                              child: Text(trText(s['stuname']),
+                              child: Text(trText(s[_kind.nameKey]),
                                   maxLines: 1, overflow: TextOverflow.ellipsis, style: why == null ? AppUI.cell : AppUI.muted),
                             ),
-                            SizedBox(width: 120, child: Text(trText(s['stuclass']), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
+                            SizedBox(width: 120, child: Text(trText(s[_kind.groupKey]), maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.cell)),
                             SizedBox(
                               width: 130,
                               child: why == null ? const SizedBox.shrink() : Align(alignment: Alignment.centerLeft, child: AppUI.chip(why, AppStatus.neutral)),
@@ -1608,11 +1830,11 @@ class _AddStudentsDialogState extends State<_AddStudentsDialog> {
                 onPressed: n == 0
                     ? null
                     : () => Navigator.pop(context, [
-                          for (final s in widget.students)
-                            if (_picked.contains(trId(s['stu_id']))) s,
+                          for (final s in widget.people)
+                            if (_picked.contains(trId(s[_kind.idKey]))) s,
                         ]),
                 style: AppUI.primary(context),
-                child: Text(n == 0 ? 'Add Students' : 'Add $n Student${n == 1 ? '' : 's'}'),
+                child: Text(n == 0 ? 'Add ${_kind.manyTitle}' : 'Add $n ${n == 1 ? _kind.oneTitle : _kind.manyTitle}'),
               ),
             ],
           ),

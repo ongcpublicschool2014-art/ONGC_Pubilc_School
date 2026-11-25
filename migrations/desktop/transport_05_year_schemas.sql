@@ -131,6 +131,15 @@ BEGIN
     PERFORM setval(pg_get_serial_sequence(format('%I.%I', tgt, r.relname), r.attname), v_last, v_called);
   END LOOP;
 
+  -- The staff enrollments (transport_23) are keyed to the school app's staff
+  -- of the year (staffmast): the school app makes that table for a year when
+  -- its staff screens are first used, so make it now if it has not yet.
+  IF to_regclass(format('%I.tr_staff_enrollment', src)) IS NOT NULL
+     AND to_regprocedure('public.school_staff_year(text)') IS NOT NULL THEN
+    v_app := COALESCE(v_app, transport_core._app_year_schema(tgt));
+    PERFORM public.school_staff_year(v_app);
+  END IF;
+
   -- 4. Foreign keys: to the masters in public as they are, inside the year
   --    to the new year's tables, and into the school app's year (the stage
   --    fees' semesters) to the school app's schema of the new year.
@@ -199,14 +208,14 @@ END $$;
 CREATE OR REPLACE FUNCTION transport_core.fn_generate_trips(p_inst_id bigint, p_date date)
 RETURNS integer LANGUAGE plpgsql
 SET search_path TO pg_catalog, public AS $$
-DECLARE v_count integer := 0; r record; v_trip bigint; v_label text;
+DECLARE v_count integer := 0; r record; v_trip bigint; v_label text; v_sch text;
 BEGIN
   SELECT iy.yrlabel INTO v_label FROM public.institutionyear iy
    WHERE iy.ins_id = p_inst_id AND iy.activestatus = 1
      AND p_date BETWEEN COALESCE(iy.iyrstadate, '-infinity'::date) AND COALESCE(iy.iyrenddate, 'infinity'::date)
    ORDER BY iy.yrlabel DESC LIMIT 1;
-  PERFORM set_config('search_path',
-    format('pg_catalog, %I, public', transport_core._check_year_schema(transport_core.year_schema(v_label))), true);
+  v_sch := transport_core._check_year_schema(transport_core.year_schema(v_label));
+  PERFORM set_config('search_path', format('pg_catalog, %I, public', v_sch), true);
 
   FOR r IN
     SELECT s.* FROM tr_trip_schedule s
@@ -236,36 +245,125 @@ BEGIN
                         WHERE l.staff_id = d.staff_id AND l.status = 'APPROVED'
                           AND p_date BETWEEN l.from_date AND l.to_date);
 
-    -- expected students for this trip (respecting one-way service and day exceptions)
-    INSERT INTO tr_trip_student(trip_id, enrollment_id, student_id, stop_id, status)
-    SELECT v_trip, e.enrollment_id, e.student_id,
-           CASE WHEN r.direction = 'PICKUP' THEN e.pickup_stop_id ELSE e.drop_stop_id END,
-           CASE WHEN x.exception_id IS NULL THEN 'EXPECTED'
-                WHEN x.reason = 'PARENT_PICKUP' THEN 'PARENT_PICKUP' ELSE 'ABSENT' END
-      FROM tr_student_enrollment e
-      LEFT JOIN tr_student_trip_exception x
-             ON x.enrollment_id = e.enrollment_id AND x.exception_date = p_date
-            AND x.direction IN (r.direction, 'BOTH')
-     WHERE e.route_id = r.route_id AND e.status = 'ACTIVE'
-       AND p_date >= e.start_date AND (e.end_date IS NULL OR p_date <= e.end_date)
-       AND e.service_type IN ('BOTH', r.direction)
-       AND COALESCE(CASE WHEN r.direction = 'PICKUP' THEN e.pickup_schedule_id
-                         ELSE e.drop_schedule_id END, r.schedule_id) = r.schedule_id;
-
-    UPDATE tr_trip_stop ts
-       SET expected_students = c.cnt
-      FROM (SELECT stop_id, count(*) cnt FROM tr_trip_student
-             WHERE trip_id = v_trip AND status = 'EXPECTED' GROUP BY stop_id) c
-     WHERE ts.trip_id = v_trip AND ts.stop_id = c.stop_id;
-
-    UPDATE tr_trip
-       SET planned_students = (SELECT count(*) FROM tr_trip_student
-                                WHERE trip_id = v_trip AND status = 'EXPECTED')
-     WHERE trip_id = v_trip;
+    -- the students and staff it expects
+    PERFORM transport_core.fn_sync_trip_riders(v_sch, v_trip);
 
     v_count := v_count + 1;
   END LOOP;
   RETURN v_count;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- The riders a day's trip expects, from the enrollments (students, and staff
+-- where the year has them: transport_23/24) and the Vehicle Allotment: those
+-- allotted to the trip's vehicle (its schedule) that way, and those allotted
+-- to none only when the route has no other schedule running that way on the
+-- day (one vehicle: nothing to choose). With two or more vehicles, a rider
+-- allotted to none rides none until allotted. One-way service and the dates
+-- of the enrollment count; a day exception makes a student ABSENT or
+-- PARENT_PICKUP.
+-- Run when a trip is made (fn_generate_trips), and again for a Scheduled trip
+-- of today or later when an enrollment or an allotment of its route changes
+-- (transport_core._route_trips_sync): riders who belong are added, those who
+-- no longer belong are taken off, and the stop and day exception brought up
+-- to date -- except a rider someone marked (mark_method set), who stays as
+-- marked, and a rider added to the trip in its Riders window (is_extra,
+-- transport_29), who stays on it. Returns how many riders were added, taken
+-- off or changed.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION transport_core.fn_sync_trip_riders(p_year_schema text, p_trip_id bigint)
+RETURNS integer LANGUAGE plpgsql
+SET search_path TO pg_catalog, public AS $$
+DECLARE r record; v_only boolean; v_n integer := 0; v_rc integer;
+BEGIN
+  PERFORM set_config('search_path',
+    format('pg_catalog, %I, public', transport_core._check_year_schema(p_year_schema)), true);
+  SELECT t.trip_id, t.trip_date, t.direction, t.route_id, t.schedule_id INTO r FROM tr_trip t WHERE t.trip_id = p_trip_id;
+  IF NOT FOUND THEN RETURN 0; END IF;
+  -- the route's only vehicle that way on the day: it takes those allotted to none
+  v_only := NOT EXISTS (SELECT 1 FROM tr_trip_schedule s
+                         WHERE s.route_id = r.route_id AND s.direction = r.direction AND s.schedule_id <> r.schedule_id
+                           AND s.is_active AND r.trip_date >= s.effective_from
+                           AND (s.effective_to IS NULL OR r.trip_date <= s.effective_to)
+                           AND EXTRACT(ISODOW FROM r.trip_date)::smallint = ANY (s.run_days));
+
+  WITH want AS (
+    SELECT e.enrollment_id, e.student_id,
+           CASE WHEN r.direction = 'PICKUP' THEN e.pickup_stop_id ELSE e.drop_stop_id END AS stop_id,
+           CASE WHEN x.exception_id IS NULL THEN 'EXPECTED'
+                WHEN x.reason = 'PARENT_PICKUP' THEN 'PARENT_PICKUP' ELSE 'ABSENT' END AS status
+      FROM tr_student_enrollment e
+      LEFT JOIN tr_student_trip_exception x
+             ON x.enrollment_id = e.enrollment_id AND x.exception_date = r.trip_date
+            AND x.direction IN (r.direction, 'BOTH')
+     WHERE e.route_id = r.route_id AND e.status = 'ACTIVE'
+       AND r.trip_date >= e.start_date AND (e.end_date IS NULL OR r.trip_date <= e.end_date)
+       AND e.service_type IN ('BOTH', r.direction)
+       AND COALESCE(CASE WHEN r.direction = 'PICKUP' THEN e.pickup_schedule_id ELSE e.drop_schedule_id END,
+                    CASE WHEN v_only THEN r.schedule_id END) = r.schedule_id
+  ), gone AS (
+    DELETE FROM tr_trip_student ts
+     WHERE ts.trip_id = r.trip_id AND ts.mark_method IS NULL AND NOT ts.is_extra
+       AND NOT EXISTS (SELECT 1 FROM want w WHERE w.enrollment_id = ts.enrollment_id)
+    RETURNING 1
+  ), moved AS (
+    UPDATE tr_trip_student ts SET stop_id = w.stop_id, status = w.status
+      FROM want w
+     WHERE ts.trip_id = r.trip_id AND ts.enrollment_id = w.enrollment_id AND ts.mark_method IS NULL AND NOT ts.is_extra
+       AND (ts.stop_id IS DISTINCT FROM w.stop_id OR ts.status IS DISTINCT FROM w.status)
+    RETURNING 1
+  ), added AS (
+    INSERT INTO tr_trip_student (trip_id, enrollment_id, student_id, stop_id, status)
+    SELECT r.trip_id, w.enrollment_id, w.student_id, w.stop_id, w.status FROM want w
+     WHERE NOT EXISTS (SELECT 1 FROM tr_trip_student ts WHERE ts.trip_id = r.trip_id AND ts.enrollment_id = w.enrollment_id)
+    RETURNING 1
+  )
+  SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM moved) + (SELECT count(*) FROM added) INTO v_rc;
+  v_n := v_n + v_rc;
+
+  IF to_regclass('tr_trip_staff_rider') IS NOT NULL AND to_regclass('tr_staff_enrollment') IS NOT NULL THEN
+    WITH want AS (
+      SELECT e.enrollment_id, e.staf_id,
+             CASE WHEN r.direction = 'PICKUP' THEN e.pickup_stop_id ELSE e.drop_stop_id END AS stop_id
+        FROM tr_staff_enrollment e
+       WHERE e.route_id = r.route_id AND e.status = 'ACTIVE'
+         AND r.trip_date >= e.start_date AND (e.end_date IS NULL OR r.trip_date <= e.end_date)
+         AND e.service_type IN ('BOTH', r.direction)
+         AND COALESCE(CASE WHEN r.direction = 'PICKUP' THEN e.pickup_schedule_id ELSE e.drop_schedule_id END,
+                      CASE WHEN v_only THEN r.schedule_id END) = r.schedule_id
+    ), gone AS (
+      DELETE FROM tr_trip_staff_rider ts
+       WHERE ts.trip_id = r.trip_id AND ts.mark_method IS NULL AND NOT ts.is_extra
+         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.enrollment_id = ts.enrollment_id)
+      RETURNING 1
+    ), moved AS (
+      UPDATE tr_trip_staff_rider ts SET stop_id = w.stop_id
+        FROM want w
+       WHERE ts.trip_id = r.trip_id AND ts.enrollment_id = w.enrollment_id AND ts.mark_method IS NULL AND NOT ts.is_extra
+         AND ts.stop_id IS DISTINCT FROM w.stop_id
+      RETURNING 1
+    ), added AS (
+      INSERT INTO tr_trip_staff_rider (trip_id, enrollment_id, staf_id, stop_id)
+      SELECT r.trip_id, w.enrollment_id, w.staf_id, w.stop_id FROM want w
+       WHERE NOT EXISTS (SELECT 1 FROM tr_trip_staff_rider ts WHERE ts.trip_id = r.trip_id AND ts.enrollment_id = w.enrollment_id)
+      RETURNING 1
+    )
+    SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM moved) + (SELECT count(*) FROM added) INTO v_rc;
+    v_n := v_n + v_rc;
+  END IF;
+
+  -- the students expected at each stop, and on the trip (changed only when they differ)
+  UPDATE tr_trip_stop ts
+     SET expected_students = c.cnt
+    FROM (SELECT s.stop_id, NULLIF((SELECT count(*) FROM tr_trip_student x
+                                     WHERE x.trip_id = s.trip_id AND x.stop_id = s.stop_id AND x.status = 'EXPECTED'), 0)::smallint AS cnt
+            FROM tr_trip_stop s WHERE s.trip_id = r.trip_id) c
+   WHERE ts.trip_id = r.trip_id AND ts.stop_id = c.stop_id AND ts.expected_students IS DISTINCT FROM c.cnt;
+  UPDATE tr_trip t
+     SET planned_students = c.cnt
+    FROM (SELECT count(*)::smallint AS cnt FROM tr_trip_student WHERE trip_id = r.trip_id AND status = 'EXPECTED') c
+   WHERE t.trip_id = r.trip_id AND t.planned_students IS DISTINCT FROM c.cnt;
+  RETURN v_n;
 END $$;
 
 -- ---------------------------------------------------------------------
@@ -325,6 +423,107 @@ BEGIN
   )
   SELECT count(*) INTO v_rows FROM ins;
   RETURN v_rows;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- GPS positions from the trackers (2026-11-20). One position:
+--   {"imei", "lat", "lon", "at" (device time; now when missing),
+--    "speed_kmph", "heading", "accuracy_m", "altitude_m", "ignition",
+--    "battery_pct", "satellites", "raw"}
+-- The device is found by IMEI (public.tr_gps_device, active); the vehicle
+-- it is fitted to on that day by the GPS Mapping history
+-- (tr_vehicle_gps_device), else tr_vehicle.gps_device_id; the year schema
+-- by the school year covering that day. The position is kept in
+-- tr_gps_ping, becomes the vehicle's tr_vehicle_live when it is newer than
+-- the one there, and moves today's trip in progress (last_*).
+-- Returns {"ok": true, "vehicle_id", "live"} or {"ok": false, "reason"}:
+-- one bad position never stops the others (public.tr_gps_ingest).
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION transport_core.gps_ingest(p jsonb)
+RETURNS jsonb LANGUAGE plpgsql
+SET search_path TO 'pg_catalog', 'public' AS $$
+DECLARE
+  v_imei text := upper(btrim(COALESCE(p->>'imei', '')));
+  v_lat numeric; v_lon numeric; v_at timestamptz; v_day date;
+  d record; v_veh bigint; v_lbl text; v_ysch text; v_trip bigint; v_live int := 0;
+  v_speed numeric; v_head int; v_batt int; v_sat int; v_acc numeric; v_alt numeric; v_ign boolean;
+BEGIN
+  IF v_imei = '' THEN RETURN jsonb_build_object('ok', false, 'reason', 'no IMEI'); END IF;
+  BEGIN
+    v_lat := (p->>'lat')::numeric; v_lon := (p->>'lon')::numeric;
+    v_at := COALESCE(NULLIF(p->>'at', '')::timestamptz, now());
+    v_speed := NULLIF(p->>'speed_kmph', '')::numeric;
+    v_head := round(NULLIF(p->>'heading', '')::numeric)::int;
+    v_batt := round(NULLIF(p->>'battery_pct', '')::numeric)::int;
+    v_sat := round(NULLIF(p->>'satellites', '')::numeric)::int;
+    v_acc := NULLIF(p->>'accuracy_m', '')::numeric;
+    v_alt := NULLIF(p->>'altitude_m', '')::numeric;
+    v_ign := NULLIF(p->>'ignition', '')::boolean;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'unreadable value: ' || SQLERRM);
+  END;
+  IF v_lat IS NULL OR v_lon IS NULL OR v_lat NOT BETWEEN -90 AND 90 OR v_lon NOT BETWEEN -180 AND 180
+     OR (v_lat = 0 AND v_lon = 0) THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'no usable position');
+  END IF;
+  IF v_at > now() + interval '10 minutes' THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'device clock is ahead');
+  END IF;
+  IF v_at < now() - interval '7 days' THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'older than 7 days');
+  END IF;
+  v_head := CASE WHEN v_head IS NULL THEN NULL ELSE ((v_head % 360) + 360) % 360 END;
+  v_batt := CASE WHEN v_batt BETWEEN 0 AND 100 THEN v_batt END;
+  v_sat := CASE WHEN v_sat BETWEEN 0 AND 99 THEN v_sat END;
+  v_speed := CASE WHEN v_speed BETWEEN 0 AND 250 THEN round(v_speed, 1) END;
+  v_day := (v_at AT TIME ZONE 'Asia/Kolkata')::date;
+
+  SELECT g.device_id, g.inst_id INTO d FROM public.tr_gps_device g
+   WHERE upper(g.imei) = v_imei AND g.is_active;
+  IF d.device_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'unknown or switched-off device');
+  END IF;
+  SELECT m.vehicle_id INTO v_veh FROM public.tr_vehicle_gps_device m
+    JOIN public.tr_vehicle v ON v.vehicle_id = m.vehicle_id AND v.inst_id = d.inst_id
+   WHERE m.device_id = d.device_id AND m.installed_on <= v_day AND (m.removed_on IS NULL OR m.removed_on >= v_day)
+   ORDER BY m.installed_on DESC, m.vgd_id DESC LIMIT 1;
+  IF v_veh IS NULL THEN
+    SELECT v.vehicle_id INTO v_veh FROM public.tr_vehicle v
+     WHERE v.gps_device_id = d.device_id AND v.inst_id = d.inst_id ORDER BY v.vehicle_id LIMIT 1;
+  END IF;
+  IF v_veh IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'device is not on a vehicle (Vehicles > GPS Mapping)');
+  END IF;
+  SELECT iy.yrlabel INTO v_lbl FROM public.institutionyear iy
+   WHERE iy.ins_id = d.inst_id AND iy.activestatus = 1
+     AND v_day BETWEEN COALESCE(iy.iyrstadate, '-infinity'::date) AND COALESCE(iy.iyrenddate, 'infinity'::date)
+   ORDER BY iy.yrlabel DESC LIMIT 1;
+  v_ysch := transport_core.year_schema(v_lbl);
+  IF v_ysch IS NULL OR to_regnamespace(v_ysch) IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'no transport year for ' || v_day);
+  END IF;
+
+  EXECUTE format('SELECT trip_id FROM %I.tr_trip WHERE vehicle_id = $1 AND trip_date = $2 AND status = ''IN_PROGRESS''
+                   ORDER BY planned_start_at DESC LIMIT 1', v_ysch) INTO v_trip USING v_veh, v_day;
+  EXECUTE format('INSERT INTO %I.tr_gps_ping (inst_id, device_id, vehicle_id, trip_id, recorded_at, latitude, longitude, speed_kmph,
+                    heading_deg, accuracy_m, altitude_m, ignition_on, battery_pct, satellites, raw_payload)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)', v_ysch)
+    USING d.inst_id, d.device_id, v_veh, v_trip, v_at, v_lat, v_lon, v_speed, v_head::smallint, v_acc, v_alt, v_ign,
+          v_batt::smallint, v_sat::smallint, p->'raw';
+  EXECUTE format('INSERT INTO %1$I.tr_vehicle_live AS l (vehicle_id, inst_id, trip_id, latitude, longitude, speed_kmph, heading_deg, ignition_on, recorded_at, updated_at)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                  ON CONFLICT (vehicle_id) DO UPDATE SET trip_id = EXCLUDED.trip_id, latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude, speed_kmph = EXCLUDED.speed_kmph, heading_deg = EXCLUDED.heading_deg,
+                    ignition_on = EXCLUDED.ignition_on, recorded_at = EXCLUDED.recorded_at, updated_at = now()
+                  WHERE l.recorded_at < EXCLUDED.recorded_at', v_ysch)
+    USING v_veh, d.inst_id, v_trip, v_lat, v_lon, v_speed, v_head::smallint, v_ign, v_at;
+  GET DIAGNOSTICS v_live = ROW_COUNT;
+  IF v_trip IS NOT NULL THEN
+    EXECUTE format('UPDATE %I.tr_trip SET last_latitude = $2, last_longitude = $3, last_ping_at = $4
+                     WHERE trip_id = $1 AND (last_ping_at IS NULL OR last_ping_at < $4)', v_ysch)
+      USING v_trip, v_lat, v_lon, v_at;
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'imei', v_imei, 'vehicle_id', v_veh, 'trip_id', v_trip, 'live', v_live > 0);
 END $$;
 
 -- Nothing here is for the app: only the owner (SQL editor, jobs) may run it.

@@ -23,6 +23,8 @@ const Set<String> kAlwaysOnMenus = kAlwaysAllowedForAdmin;
 const Map<String, (String, String, String)> kModuleOfSection = {
   'ADMISSION': ('ADM', 'Admission', 'A'),
   'STUDENTS': ('STU', 'Student Details', 'A'),
+  'STAFF': ('STF', 'Staff Details', 'A'),
+  'ATTENDANCE': ('ATT', 'Attendance', 'A'),
   'TC': ('TC', 'Transfer Certificate', 'A'),
   'FEES': ('FEE', 'Fees', 'C'),
   'TRANSPORT': ('TRN', 'Transport', 'C'),

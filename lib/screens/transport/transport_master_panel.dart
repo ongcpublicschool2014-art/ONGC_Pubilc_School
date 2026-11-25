@@ -18,6 +18,7 @@ import '../../widgets/app_dropdown_field.dart';
 import '../../widgets/app_icon.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/empty_state.dart';
+import 'stop_map_picker.dart';
 
 /// Shared parts of the transport master screens: a field-driven form
 /// ([TrFormBody], [showTrFormDialog]) whose edit dialog also deletes, a
@@ -162,6 +163,27 @@ class _DmyDelegate extends LocalizationsDelegate<MaterialLocalizations> {
   bool shouldReload(_DmyDelegate old) => false;
 }
 
+// ── where records come from ──────────────────────────────────────────────────
+/// How a [TrPanel] and its edit dialog list, save and delete records: the
+/// transport functions by default ([TrSource.transport]); another module
+/// passes its own, e.g. Staff Details.
+class TrSource {
+  final Future<List<Map<String, dynamic>>> Function(Map<String, dynamic> filter) list;
+
+  /// Inserts when the row has no key, updates otherwise. Returns the row's id.
+  final Future<int?> Function(Map<String, dynamic> row) save;
+
+  /// Returns what happened: DELETED, INACTIVE or RELIEVED.
+  final Future<String> Function(int id) remove;
+  const TrSource({required this.list, required this.save, required this.remove});
+
+  factory TrSource.transport(String entity) => TrSource(
+        list: (filter) => TransportService.list(entity, filter: filter),
+        save: (row) => TransportService.save(entity, row),
+        remove: (id) => TransportService.remove(entity, id),
+      );
+}
+
 // ── add / edit result, and delete ────────────────────────────────────────────
 /// What an add / edit dialog did: saved the record [id], or, when [deleted]
 /// is set, deleted it instead ([deleted] is what the server did: DELETED,
@@ -275,7 +297,18 @@ Widget trAttachmentCell(BuildContext context, dynamic url) {
 /// A [TrKind.time] field is a time of day, kept as "07:05". A [TrKind.days]
 /// field picks weekdays, kept as ISO numbers [1 (Monday) .. 7 (Sunday)].
 /// [TrKind.display] is read-only: it shows [TrField.displayFor] and is never saved.
-enum TrKind { text, multiline, upper, integer, decimal, mobile, date, time, days, toggle, choice, photo, file, display }
+/// The "Add New ..." item of a choice with [TrField.onAdd] (never a value).
+class _TrAddNew {
+  const _TrAddNew();
+}
+
+const _kTrAddNew = _TrAddNew();
+
+/// [password]: typed hidden, never shown back (the form starts it empty).
+/// [digits]: digits only, kept as text (a phone number's leading 0 stays).
+/// [suggest]: typed text that lists [TrField.suggestions] as it is typed (as
+/// Admission Entry's City / Religion / Nationality), without limiting to them.
+enum TrKind { text, multiline, upper, integer, decimal, mobile, date, time, days, toggle, choice, photo, file, display, map, password, digits, suggest }
 
 /// Where [TrKind.photo] and [TrKind.file] uploads go: the app's public image
 /// bucket, under [TrField.folder]. The server accepts only links into its
@@ -312,12 +345,31 @@ class TrField {
   /// Shown only when this returns true. A hidden field is saved as empty.
   final bool Function(Map<String, dynamic> values)? visibleWhen;
 
+  /// For [TrKind.suggest]: the values offered (already used ones, say).
+  final List<String> suggestions;
+
+  /// For a typed field: checked on save when it is filled; returns the
+  /// message to show, or null when the value is fine.
+  final String? Function(String text)? check;
+
+  /// For [TrKind.choice]: a last item ([addLabel], e.g. "Add New Designation")
+  /// that calls this. The value it returns is chosen (null: cancelled); by
+  /// then the screen has put it among the options.
+  final Future<Object?> Function()? onAdd;
+  final String? addLabel;
+
   /// For [TrKind.photo]: the storage folder, e.g. 'transport/staff'.
   final String folder;
 
   /// For [TrKind.display]: the text to show, worked out from what the form
   /// holds (e.g. the fuel of the chosen vehicle). Empty shows [hint].
   final String Function(Map<String, dynamic> values)? displayFor;
+
+  /// [TrKind.map]: the other points to show, and the two decimal fields of
+  /// the same form the map fills (never saved itself).
+  final List<TrMapPoint> mapPoints;
+  final String latKey;
+  final String lonKey;
 
   const TrField(
     this.key,
@@ -331,8 +383,15 @@ class TrField {
     this.options = const [],
     this.optionsFor,
     this.visibleWhen,
+    this.onAdd,
+    this.addLabel,
+    this.suggestions = const [],
+    this.check,
     this.folder = 'transport',
     this.displayFor,
+    this.mapPoints = const [],
+    this.latKey = 'latitude',
+    this.lonKey = 'longitude',
   });
 }
 
@@ -357,8 +416,20 @@ class TrFormBodyState extends State<TrFormBody> {
   /// The photo field being uploaded, if any. Saving waits for it.
   String? _uploading;
 
+  /// Bumped after an "Add New ..." item is picked, so the dropdown shows the
+  /// field's value again instead of that item.
+  int _addTick = 0;
+
+  Future<void> _addOption(TrField f) async {
+    final v = await f.onAdd!();
+    if (!mounted) return;
+    _addTick++;
+    _set(f.key, v ?? _values[f.key]);
+  }
+
   static bool _isText(TrKind k) =>
-      k == TrKind.text || k == TrKind.multiline || k == TrKind.upper || k == TrKind.integer || k == TrKind.decimal || k == TrKind.mobile;
+      k == TrKind.text || k == TrKind.multiline || k == TrKind.upper || k == TrKind.integer || k == TrKind.decimal || k == TrKind.mobile ||
+      k == TrKind.password || k == TrKind.digits || k == TrKind.suggest;
 
   @override
   void initState() {
@@ -367,7 +438,7 @@ class TrFormBodyState extends State<TrFormBody> {
       final v = widget.initial[f.key];
       if (_isText(f.kind)) {
         final numeric = f.kind == TrKind.integer || f.kind == TrKind.decimal;
-        _text[f.key] = TextEditingController(text: numeric ? trNumberText(v) : trText(v));
+        _text[f.key] = TextEditingController(text: f.kind == TrKind.password ? '' : (numeric ? trNumberText(v) : trText(v)));
       } else if (f.kind == TrKind.date) {
         final s = trText(v);
         _values[f.key] = s.length >= 10 ? s.substring(0, 10) : null;
@@ -384,10 +455,16 @@ class TrFormBodyState extends State<TrFormBody> {
     _dropStale();
   }
 
+  /// The suggestion fields' focus (RawAutocomplete needs one that lasts).
+  final Map<String, FocusNode> _focus = {};
+
   @override
   void dispose() {
     for (final c in _text.values) {
       c.dispose();
+    }
+    for (final f in _focus.values) {
+      f.dispose();
     }
     super.dispose();
   }
@@ -426,7 +503,7 @@ class TrFormBodyState extends State<TrFormBody> {
     final row = <String, dynamic>{};
     final current = _current;
     for (final f in widget.fields) {
-      if (f.kind == TrKind.display) continue;  // shown only, never saved
+      if (f.kind == TrKind.display || f.kind == TrKind.map) continue;  // shown only, never saved
       if (!_visible(f)) {
         row[f.key] = null;
         continue;
@@ -447,6 +524,8 @@ class TrFormBodyState extends State<TrFormBody> {
         if (f.kind == TrKind.mobile && !RegExp(r'^\+?\d{10,14}$').hasMatch(t)) {
           return _missing('${f.label}: enter a valid 10-digit number.');
         }
+        final problem = f.check?.call(t);
+        if (problem != null) return _missing(problem);
         row[f.key] = t;
       } else {
         final v = current[f.key];
@@ -658,6 +737,61 @@ class TrFormBodyState extends State<TrFormBody> {
     ]);
   }
 
+  /// A typed field listing [TrField.suggestions]: all of them when it is
+  /// empty, those containing what is typed otherwise.
+  Widget _suggest(TrField f) {
+    final c = _text[f.key]!;
+    final hint = f.hint ?? '';
+    return LayoutBuilder(
+      builder: (context, box) => RawAutocomplete<String>(
+        textEditingController: c,
+        focusNode: _focus.putIfAbsent(f.key, () => FocusNode()),
+        optionsBuilder: (v) {
+          final q = v.text.trim().toLowerCase();
+          if (q.isEmpty) return f.suggestions;
+          return f.suggestions.where((o) => o.toLowerCase().contains(q) && o.toLowerCase() != q);
+        },
+        onSelected: (_) {
+          setState(() {});
+          widget.onChanged?.call(_current);
+        },
+        fieldViewBuilder: (context, ctrl, focus, _) => TextField(
+          controller: ctrl,
+          focusNode: focus,
+          enabled: widget.enabled,
+          inputFormatters: [if (f.maxLength != null) LengthLimitingTextInputFormatter(f.maxLength)],
+          textCapitalization: TextCapitalization.words,
+          style: AppUI.fieldText(context),
+          decoration: AppUI.field(context, '', filled: ctrl.text.trim().isNotEmpty).copyWith(hintText: hint.isEmpty ? null : hint),
+          onChanged: (_) {
+            setState(() {});
+            widget.onChanged?.call(_current);
+          },
+        ),
+        optionsViewBuilder: (context, onSelected, options) => Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppUI.controlRadius),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 240, maxWidth: box.maxWidth),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (_, i) {
+                  final o = options.elementAt(i);
+                  return ListTile(dense: true, title: Text(o, style: AppUI.fieldText(context)), onTap: () => onSelected(o));
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _input(TrField f) {
     final hint = f.hint ?? '';
     switch (f.kind) {
@@ -667,6 +801,13 @@ class TrFormBodyState extends State<TrFormBody> {
         return _file(f);
       case TrKind.days:
         return _days(f);
+      case TrKind.suggest:
+        return _suggest(f);
+      case TrKind.map:
+        final lat = _text[f.latKey], lon = _text[f.lonKey];
+        if (lat == null || lon == null) return const SizedBox.shrink();
+        return StopMapPicker(lat: lat, lon: lon, others: f.mapPoints, enabled: widget.enabled,
+            onChanged: () => widget.onChanged?.call(_current));
       case TrKind.display:
         final shown = f.displayFor?.call(_current) ?? '';
         return InputDecorator(
@@ -693,7 +834,7 @@ class TrFormBodyState extends State<TrFormBody> {
         final options = _options(f);
         final known = options.any((o) => o.$1 == value);
         return AppDropdownField<Object?>(
-          key: ValueKey('tr-${f.key}-$value'),
+          key: ValueKey(_addTick == 0 ? 'tr-${f.key}-$value' : 'tr-${f.key}-$value-$_addTick'),
           initialValue: known ? value : null,
           isExpanded: true,
           dropdownColor: AppColors.card,
@@ -706,8 +847,28 @@ class TrFormBodyState extends State<TrFormBody> {
           items: [
             if (!f.required) DropdownMenuItem<Object?>(value: null, child: Text('None', style: AppUI.muted)),
             for (final o in options) DropdownMenuItem<Object?>(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis)),
+            if (f.onAdd != null)
+              DropdownMenuItem<Object?>(
+                value: _kTrAddNew,
+                child: Row(children: [
+                  const AppIcon('add-circle', size: 16, color: AppColors.primary),
+                  SizedBox(width: 8.w),
+                  Flexible(
+                    child: Text(f.addLabel ?? 'Add New',
+                        overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600)),
+                  ),
+                ]),
+              ),
           ],
-          onChanged: widget.enabled ? (v) => _set(f.key, v) : null,
+          onChanged: widget.enabled
+              ? (v) {
+                  if (identical(v, _kTrAddNew)) {
+                    _addOption(f);
+                  } else {
+                    _set(f.key, v);
+                  }
+                }
+              : null,
         );
       case TrKind.date:
         final iso = _values[f.key] as String?;
@@ -757,15 +918,23 @@ class TrFormBodyState extends State<TrFormBody> {
         );
       default:
         final c = _text[f.key]!;
+        final secret = f.kind == TrKind.password;
         return TextField(
           controller: c,
           enabled: widget.enabled,
+          obscureText: secret,
+          autocorrect: !secret,
+          enableSuggestions: !secret,
           minLines: f.kind == TrKind.multiline ? 2 : 1,
           maxLines: f.kind == TrKind.multiline ? 3 : 1,
-          textCapitalization: f.kind == TrKind.upper ? TextCapitalization.characters : TextCapitalization.sentences,
-          keyboardType: f.kind == TrKind.integer || f.kind == TrKind.decimal || f.kind == TrKind.mobile ? TextInputType.number : null,
+          textCapitalization: f.kind == TrKind.upper
+              ? TextCapitalization.characters
+              : (secret ? TextCapitalization.none : TextCapitalization.sentences),
+          keyboardType: f.kind == TrKind.integer || f.kind == TrKind.decimal || f.kind == TrKind.mobile || f.kind == TrKind.digits
+              ? TextInputType.number
+              : null,
           inputFormatters: [
-            if (f.kind == TrKind.integer) FilteringTextInputFormatter.digitsOnly,
+            if (f.kind == TrKind.integer || f.kind == TrKind.digits) FilteringTextInputFormatter.digitsOnly,
             if (f.kind == TrKind.decimal) FilteringTextInputFormatter.allow(RegExp(r'[-0-9.]')),
             if (f.kind == TrKind.mobile) FilteringTextInputFormatter.allow(RegExp(r'[+0-9]')),
             if (f.maxLength != null) LengthLimitingTextInputFormatter(f.maxLength),
@@ -871,22 +1040,24 @@ Future<TrEdit?> showTrFormDialog(
   Map<String, dynamic> initial = const {},
   Map<String, dynamic> fixed = const {},
   TrDelete? delete,
+  TrSource? source,
 }) {
   return showDialog<TrEdit>(
     context: context,
     barrierDismissible: false,
-    builder: (_) =>
-        _TrFormDialog(entity: entity, pk: pk, title: title, icon: icon, fields: fields, initial: initial, fixed: fixed, delete: delete),
+    builder: (_) => _TrFormDialog(
+        source: source ?? TrSource.transport(entity), pk: pk, title: title, icon: icon, fields: fields, initial: initial, fixed: fixed, delete: delete),
   );
 }
 
 class _TrFormDialog extends StatefulWidget {
-  final String entity, pk, title, icon;
+  final TrSource source;
+  final String pk, title, icon;
   final List<TrField> fields;
   final Map<String, dynamic> initial, fixed;
   final TrDelete? delete;
   const _TrFormDialog({
-    required this.entity,
+    required this.source,
     required this.pk,
     required this.title,
     required this.icon,
@@ -912,7 +1083,7 @@ class _TrFormDialogState extends State<_TrFormDialog> {
     final id = _id;
     setState(() => _saving = true);
     try {
-      final saved = await TransportService.save(widget.entity, {...row, ...widget.fixed, if (id != null) widget.pk: id}) ?? id;
+      final saved = await widget.source.save({...row, ...widget.fixed, if (id != null) widget.pk: id}) ?? id;
       if (mounted) Navigator.pop(context, saved == null ? null : TrEdit(saved));
     } catch (e) {
       if (!mounted) return;
@@ -925,7 +1096,7 @@ class _TrFormDialogState extends State<_TrFormDialog> {
     if (!await trAskDelete(context, widget.delete!) || !mounted) return;
     setState(() => _deleting = true);
     try {
-      final what = await TransportService.remove(widget.entity, id);
+      final what = await widget.source.remove(id);
       if (mounted) Navigator.pop(context, TrEdit(id, deleted: what));
     } catch (e) {
       if (!mounted) return;
@@ -1036,6 +1207,9 @@ class TrPanel extends StatefulWidget {
   /// or null when the user cancelled.
   final Future<TrEdit?> Function(Map<String, dynamic>? row, List<Map<String, dynamic>> rows)? editor;
 
+  /// Where the records come from; the transport functions for [entity] when null.
+  final TrSource? source;
+
   const TrPanel({
     super.key,
     required this.entity,
@@ -1056,6 +1230,7 @@ class TrPanel extends StatefulWidget {
     this.addBlockedReason,
     this.onChanged,
     this.editor,
+    this.source,
   });
 
   @override
@@ -1076,7 +1251,7 @@ class _TrPanelState extends State<TrPanel> {
 
   Future<void> _load() async {
     try {
-      final rows = await TransportService.list(widget.entity, filter: widget.filter);
+      final rows = await (widget.source ?? TrSource.transport(widget.entity)).list(widget.filter);
       if (!mounted) return;
       setState(() {
         _rows = rows;
@@ -1107,6 +1282,7 @@ class _TrPanelState extends State<TrPanel> {
         fields: widget.fields(_rows),
         initial: row ?? widget.newValues?.call(_rows) ?? const {},
         fixed: widget.fixed,
+        source: widget.source,
         delete: TrDelete('Delete this ${widget.noun}?', widget.deleteNote.isEmpty ? 'This cannot be undone.' : widget.deleteNote),
       );
     }

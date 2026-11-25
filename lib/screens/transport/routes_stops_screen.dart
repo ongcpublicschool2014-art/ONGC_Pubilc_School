@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../services/transport_service.dart';
-import '../../utils/app_text.dart';
+import 'stop_map_picker.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/app_icon.dart';
@@ -71,7 +71,19 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
     TrField('is_active', 'Active', kind: TrKind.toggle),
   ];
 
-  List<TrField> _stopFields(int routeId) => [
+  /// The route's other stops (pickup order) for the stop form's map.
+  List<TrMapPoint> _mapPoints(int routeId, {int? except}) {
+    final stops = [for (final s in _stopsOfRoute(routeId)) if (trId(s['stop_id']) != except) s]
+      ..sort((a, b) => (trId(a['stop_seq']) ?? 0).compareTo(trId(b['stop_seq']) ?? 0));
+    return [
+      for (final s in stops)
+        if (trUsablePosition(double.tryParse(trNumberText(s['latitude'])), double.tryParse(trNumberText(s['longitude']))))
+          TrMapPoint(double.parse(trNumberText(s['latitude'])), double.parse(trNumberText(s['longitude'])),
+              '${trText(s['stop_seq'])} ${trText(s['stop_name'])}'),
+    ];
+  }
+
+  List<TrField> _stopFields(int routeId, {int? except}) => [
         const TrField('stop_seq', 'Stop Order', kind: TrKind.integer, required: true, hint: 'Order on the pickup run'),
         TrField('stage_id', 'Stage', kind: TrKind.choice, required: true, options: [
           for (final s in _stagesOf(routeId)) (trId(s['stage_id']), 'Stage ${trText(s['stage_no'])} - ${trText(s['stage_name'])}'),
@@ -80,6 +92,7 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
         const TrField('stop_code', 'Stop Code', kind: TrKind.upper, maxLength: 20),
         const TrField('latitude', 'Latitude', kind: TrKind.decimal, required: true, hint: 'e.g. 13.0827'),
         const TrField('longitude', 'Longitude', kind: TrKind.decimal, required: true, hint: 'e.g. 80.2707'),
+        TrField('stop_map', 'Position on the Map', kind: TrKind.map, full: true, mapPoints: _mapPoints(routeId, except: except)),
         const TrField('geofence_radius_m', 'Arrival Radius (metres)', kind: TrKind.integer, hint: 'Blank uses the Transport Setup value'),
         const TrField('distance_from_school_km', 'Distance From School (km)', kind: TrKind.decimal),
         const TrField('landmark', 'Landmark', maxLength: 200, full: true),
@@ -139,22 +152,6 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
       for (final e in rows)
         if (stopIds.contains(trId(e['pickup_stop_id'])) || stopIds.contains(trId(e['drop_stop_id']))) trId(e['student_id']),
     }.length;
-  }
-
-  Future<void> _deleteStop(Map<String, dynamic> p) async {
-    final id = trId(p['stop_id']), routeId = trId(p['route_id']);
-    if (id == null) return;
-    final ask = TrDelete('Delete stop ${trText(p['stop_name'])}?', 'The stop is switched off. A stop used by a student or schedule cannot be deleted.');
-    if (!await trAskDelete(context, ask) || !mounted) return;
-    try {
-      await TransportService.remove('stop', id);
-      if (!mounted) return;
-      trSnack(context, 'Stop switched off.', AppColors.success);
-      if (routeId != null) _open.add(routeId);
-      await _load();
-    } catch (e) {
-      if (mounted) trSnack(context, AppText.couldNot('delete', friendlyError(e)), AppColors.error);
-    }
   }
 
   List<Map<String, dynamic>> _stagesOf(int routeId) => [
@@ -274,7 +271,7 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
       pk: 'stop_id',
       title: 'Edit stop',
       icon: 'location',
-      fields: _stopFields(routeId),
+      fields: _stopFields(routeId, except: trId(p['stop_id'])),
       initial: p,
       fixed: {'route_id': routeId},
       done: 'Stop saved.',
@@ -643,17 +640,7 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
               label: const Text('Edit'),
             ),
           ),
-          if (!inactive) ...[
-            SizedBox(width: 10.w),
-            Center(
-              child: OutlinedButton.icon(
-                onPressed: () => _deleteStop(p),
-                style: OutlinedButton.styleFrom(foregroundColor: AppColors.error, side: const BorderSide(color: AppColors.error)),
-                icon: AppIcon('trash', size: AppBtn.iconSize(context), color: AppColors.error),
-                label: const Text(AppText.delete),
-              ),
-            ),
-          ],
+          // Delete is in the stop's edit window
         ]),
       ),
     );

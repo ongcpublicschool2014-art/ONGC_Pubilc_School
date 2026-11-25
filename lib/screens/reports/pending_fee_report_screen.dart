@@ -20,6 +20,7 @@ import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
 import '../../widgets/app_dropdown_field.dart';
+import '../../widgets/app_multi_pick.dart';
 import '../../utils/save_path.dart';
 
 /// PENDING FEE REPORT AS ON <date> -- the old product's Fee Pending Report,
@@ -527,75 +528,28 @@ class _PendingFeeReportScreenState extends State<PendingFeeReportScreen> {
 
   // ── filters ──────────────────────────────────────────────────────────────
   /// A field-looking button that opens a tick list.
-  Widget _pickerField(String hint, String label, bool filled, String icon, VoidCallback onTap) => InkWell(
-        borderRadius: BorderRadius.circular(AppUI.controlRadius),
-        onTap: _running ? null : onTap,
-        child: InputDecorator(
-          decoration: AppUI.field(context, hint, filled: filled, leadingIcon: icon, suffix: Icon(Icons.arrow_drop_down, color: AppColors.ink3, size: 22.sp)),
-          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: filled)),
+  Widget _pickerField(String hint, String label, bool filled, String icon, VoidCallback onTap) => Builder(
+        builder: (field) => InkWell(
+          borderRadius: BorderRadius.circular(AppUI.controlRadius),
+          onTap: _running
+              ? null
+              : () {
+                  _anchor = field;
+                  onTap();
+                },
+          child: InputDecorator(
+            decoration: AppUI.field(context, hint, filled: filled, leadingIcon: icon, suffix: Icon(Icons.arrow_drop_down, color: AppColors.ink3, size: 22.sp)),
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: filled)),
+          ),
         ),
       );
 
+  /// The filter field just tapped: the pick panel opens under it.
+  BuildContext? _anchor;
+
   /// Tick many: [groups] of (heading, items); a heading ticks its whole group.
-  Future<Set<T>?> _pickMany<T>(String title, List<(String, List<(T, String)>)> groups, Set<T> current) {
-    final draft = Set<T>.from(current);
-    final all = [for (final g in groups) for (final i in g.$2) i.$1];
-    return showDialog<Set<T>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Row(children: [
-            Expanded(child: Text(title, style: AppUI.cardTitle)),
-            TextButton(onPressed: () => setLocal(() => draft.addAll(all)), child: const Text('Select All')),
-            TextButton(onPressed: () => setLocal(draft.clear), child: const Text(AppText.clear)),
-          ]),
-          content: SizedBox(
-            width: 420.w,
-            height: 420.h,
-            child: all.isEmpty
-                ? AppUI.empty(title: 'Nothing to choose from', why: 'There is nothing to choose for this filter yet.')
-                : ListView(children: [
-                    for (final g in groups) ...[
-                      if (g.$1.isNotEmpty)
-                        CheckboxListTile(
-                          tristate: true,
-                          value: g.$2.every((i) => draft.contains(i.$1)) ? true : (g.$2.any((i) => draft.contains(i.$1)) ? null : false),
-                          onChanged: (_) => setLocal(() {
-                            final on = g.$2.every((i) => draft.contains(i.$1));
-                            for (final i in g.$2) {
-                              on ? draft.remove(i.$1) : draft.add(i.$1);
-                            }
-                          }),
-                          dense: true,
-                          activeColor: AppColors.primary,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          title: Text(g.$1, style: AppUI.label),
-                        ),
-                      for (final i in g.$2)
-                        CheckboxListTile(
-                          value: draft.contains(i.$1),
-                          onChanged: (v) => setLocal(() => v == true ? draft.add(i.$1) : draft.remove(i.$1)),
-                          dense: true,
-                          activeColor: AppColors.primary,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          contentPadding: EdgeInsets.only(left: g.$1.isEmpty ? 16 : 40, right: 16),
-                          title: Text(i.$2, style: AppUI.body),
-                        ),
-                    ],
-                  ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text(AppText.cancel)),
-            ElevatedButton(
-              style: AppUI.primary(ctx),
-              onPressed: () => Navigator.of(ctx).pop(draft),
-              child: Text('Apply${draft.isEmpty ? '' : ' (${draft.length})'}'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Future<Set<T>?> _pickMany<T>(String title, List<(String, List<(T, String)>)> groups, Set<T> current) =>
+      showAppMultiPick<T>(context, anchor: _anchor, title: title, groups: groups, selected: current);
 
   Future<void> _pickSections() async {
     final groups = [

@@ -25,6 +25,7 @@ import '../../utils/fee_kind.dart';
 import '../../utils/class_sort.dart';
 import '../../utils/school_terms.dart';
 import '../../widgets/app_dropdown_field.dart';
+import '../../widgets/app_multi_pick.dart';
 import '../../utils/save_path.dart';
 
 const _termOrder = [
@@ -1917,166 +1918,13 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     required Set<String> current,
     required void Function(Set<String>) apply,
   }) async {
-    final renderBox = anchor.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox == null) return;
-    final triggerPos = renderBox.localToGlobal(Offset.zero);
-    final triggerSize = renderBox.size;
-    final screen = MediaQuery.of(context).size;
-
-    const popupWidth = 280.0;
-    const popupMaxHeight = 360.0;
-    // Anchor: left-aligned to trigger, just below it. Clamp to screen.
-    final left = triggerPos.dx
-        .clamp(8.0, (screen.width - popupWidth - 8).clamp(8.0, screen.width));
-    final top = (triggerPos.dy + triggerSize.height + 4)
-        .clamp(8.0, (screen.height - 100).clamp(8.0, screen.height));
-
-    final tempSelected = Set<String>.from(current);
-    // Outside the StatefulBuilder: one created inside it would be rebuilt on
-    // every keystroke and lose the caret.
-    final searchCtrl = TextEditingController();
-    final result = await showDialog<Set<String>>(
-      context: context,
-      barrierColor: Colors.transparent,
-      builder: (ctx) => Stack(
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.pop(ctx),
-            ),
-          ),
-          Positioned(
-            left: left,
-            top: top,
-            width: popupWidth,
-            child: StatefulBuilder(builder: (ctx, setLocalState) {
-              final q = searchCtrl.text.trim().toUpperCase();
-              final visible = q.isEmpty
-                  ? options
-                  : options.where((f) => f.toUpperCase().contains(q)).toList();
-              return Material(
-                elevation: 6,
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.white,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: popupMaxHeight),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text('Select Fee Types', style: AppUI.label),
-                            ),
-                            // Both act on what is VISIBLE. With no search that
-                            // is the whole list, so the old behaviour is
-                            // unchanged; with one, "Select All" means "all the
-                            // ones I just searched for", which is the only
-                            // reading that makes sense beside a filtered list.
-                            InkWell(
-                              onTap: () =>
-                                  setLocalState(() => tempSelected.addAll(visible)),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Select All',
-                                    style: AppUI.label.copyWith(color: AppColors.primary)),
-                              ),
-                            ),
-                            InkWell(
-                              onTap: () => setLocalState(
-                                  () => tempSelected.removeAll(visible)),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Clear',
-                                    style: AppUI.label.copyWith(color: AppColors.primary)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                        child: TextField(
-                          controller: searchCtrl,
-                          autofocus: true,
-                          style: AppUI.fieldText(ctx),
-                          onChanged: (_) => setLocalState(() {}),
-                          decoration: AppUI.field(
-                            ctx,
-                            'Search fee type',
-                            dense: true,
-                            leadingIcon: 'search-normal',
-                            suffix: q.isEmpty
-                                ? null
-                                : InkWell(
-                                    onTap: () => setLocalState(searchCtrl.clear),
-                                    child: const Icon(Icons.close, size: 15),
-                                  ),
-                          ).copyWith(
-                            suffixIconConstraints:
-                                const BoxConstraints(minWidth: 28, minHeight: 28),
-                          ),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      if (visible.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 18),
-                          child: Text('No fee type matches',
-                              textAlign: TextAlign.center,
-                              style: AppUI.muted),
-                        ),
-                      Flexible(
-                        child: ListView(
-                          shrinkWrap: true,
-                          padding: EdgeInsets.zero,
-                          children: visible
-                              .map((ft) => CheckboxListTile(
-                                    dense: true,
-                                    visualDensity: VisualDensity.compact,
-                                    controlAffinity: ListTileControlAffinity.leading,
-                                    value: tempSelected.contains(ft),
-                                    title: Text(ft, style: AppUI.body),
-                                    onChanged: (v) => setLocalState(() {
-                                      if (v == true) {
-                                        tempSelected.add(ft);
-                                      } else {
-                                        tempSelected.remove(ft);
-                                      }
-                                    }),
-                                  ))
-                              .toList(),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              child: const Text('Cancel'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () => Navigator.pop(ctx, tempSelected),
-                              child: const Text('Apply'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
+    final result = await showAppMultiPick<String>(
+      context,
+      anchor: anchor.currentContext,
+      title: 'Select Fee Types',
+      searchHint: 'Search fee type',
+      groups: [('', [for (final o in options) (o, o)])],
+      selected: current,
     );
     if (result != null) apply(result);
   }
@@ -2158,115 +2006,12 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     /// as words without anything downstream having to know.
     String Function(String)? labelOf,
   }) async {
-    final renderBox = anchorKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox == null) return;
-    final triggerPos = renderBox.localToGlobal(Offset.zero);
-    final triggerSize = renderBox.size;
-    final screen = MediaQuery.of(context).size;
-
-    const popupWidth = 280.0;
-    const popupMaxHeight = 360.0;
-    final left = triggerPos.dx.clamp(8.0, (screen.width - popupWidth - 8).clamp(8.0, screen.width));
-    final top = (triggerPos.dy + triggerSize.height + 4).clamp(8.0, (screen.height - 100).clamp(8.0, screen.height));
-
-    final tempSelected = Set<String>.from(current);
-    final result = await showDialog<Set<String>>(
-      context: context,
-      barrierColor: Colors.transparent,
-      builder: (ctx) => Stack(
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.pop(ctx),
-            ),
-          ),
-          Positioned(
-            left: left,
-            top: top,
-            width: popupWidth,
-            child: StatefulBuilder(builder: (ctx, setLocalState) {
-              return Material(
-                elevation: 6,
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.white,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: popupMaxHeight),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(title, style: AppUI.label),
-                            ),
-                            InkWell(
-                              onTap: () => setLocalState(() => tempSelected
-                                ..clear()
-                                ..addAll(options)),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Select All', style: AppUI.label.copyWith(color: AppColors.primary)),
-                              ),
-                            ),
-                            InkWell(
-                              onTap: () => setLocalState(tempSelected.clear),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                child: Text('Clear', style: AppUI.label.copyWith(color: AppColors.primary)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Flexible(
-                        child: options.isEmpty
-                            ? Padding(padding: const EdgeInsets.all(16), child: Text('No options', style: AppUI.muted))
-                            : ListView(
-                                shrinkWrap: true,
-                                padding: EdgeInsets.zero,
-                                children: options
-                                    .map((o) => CheckboxListTile(
-                                          dense: true,
-                                          visualDensity: VisualDensity.compact,
-                                          controlAffinity: ListTileControlAffinity.leading,
-                                          value: tempSelected.contains(o),
-                                          title: Text(labelOf?.call(o) ?? o,
-                                              style: AppUI.body),
-                                          onChanged: (v) => setLocalState(() {
-                                            if (v == true) {
-                                              tempSelected.add(o);
-                                            } else {
-                                              tempSelected.remove(o);
-                                            }
-                                          }),
-                                        ))
-                                    .toList(),
-                              ),
-                      ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                            ElevatedButton(onPressed: () => Navigator.pop(ctx, tempSelected), child: const Text('Apply')),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
+    final result = await showAppMultiPick<String>(
+      context,
+      anchor: anchorKey.currentContext,
+      title: title,
+      groups: [('', [for (final o in options) (o, labelOf?.call(o) ?? o)])],
+      selected: current,
     );
     if (result != null) onApply(result);
   }
@@ -4460,9 +4205,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     return x;
   }
 
-  /// The payment mode as the old ledger appended it to "... Collection":
-  /// Cash, Cheque, UPI ... For a cheque the number and date follow, as the
-  /// old " Chq.NO : <no> Date : <date>".
+  /// The payment mode after "... Collection", in brackets: " (Cash)",
+  /// " (UPI)" ..., and for a cheque or DD its number and date:
+  /// " (Cheque No. 556677, 29-10-2026)". Empty when the mode is not known.
   String _payModeText(dynamic mode, [dynamic chqNo, dynamic chqDate]) {
     final m = (mode?.toString() ?? '').trim();
     final up = m.toUpperCase();
@@ -4474,10 +4219,11 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
           .join(' '),
     };
+    if (name.isEmpty) return '';
     final no = (chqNo?.toString() ?? '').trim();
-    if (no.isEmpty || !(up.contains('CHEQUE') || up.contains('CHQ') || up == 'DD')) return name;
+    if (no.isEmpty || !(up.contains('CHEQUE') || up.contains('CHQ') || up == 'DD')) return ' ($name)';
     final d = chqDate?.toString() ?? '';
-    return '$name Chq.NO : $no${d.length >= 10 ? ' Date : ${_fmtDay(d)}' : ''}';
+    return ' ($name No. $no${d.length >= 10 ? ', ${_fmtDay(d)}' : ''})';
   }
 
   /// Advances taken from this student. Like a misc collection they settle no
@@ -4928,7 +4674,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   ///   Debit   Arr Demand / Reg Demand        one per fee type and term, gross
   ///                                          fee, no date or document
   ///           Arr Fee Refund / Reg Fee Refund  money handed back is owed again
-  ///   Credit  Arr Collection<mode> / Reg Collection<mode>  one per receipt
+  ///   Credit  Arr Collection (mode) / Reg Collection (mode)  one per receipt
   ///                                          and term, fee type blank, the
   ///                                          fee part only (a fine was never
   ///                                          debited, so it is not credited)
@@ -5475,7 +5221,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             _ => null,
           },
       ],
-      columnWidths: const [110, 130, 170, 280, 330, 130, 130],
+      // Reference gets the room: Fee Type is blank on every collection line
+      columnWidths: const [110, 130, 150, 210, 420, 130, 130],
       headers: const ['DATE', 'DOC NO.', 'TERM', 'FEE TYPE', 'REFERENCE', 'DEBIT (RS.)', 'CREDIT (RS.)'],
       rows: [
         for (final l in lines)
@@ -5632,8 +5379,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             0: pw.FlexColumnWidth(1.25),
             1: pw.FlexColumnWidth(1.4),
             2: pw.FlexColumnWidth(1.4),
-            3: pw.FlexColumnWidth(2.6),
-            4: pw.FlexColumnWidth(2.6),
+            3: pw.FlexColumnWidth(2.0),
+            4: pw.FlexColumnWidth(3.2),
             5: pw.FlexColumnWidth(1.2),
             6: pw.FlexColumnWidth(1.2),
           },
