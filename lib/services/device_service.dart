@@ -25,7 +25,8 @@ class DeviceService {
   static Future<String> getDeviceId() async {
     if (_cachedDeviceId != null) return _cachedDeviceId!;
 
-    if (!Platform.isWindows) {
+    // kIsWeb first: Platform.* throws "Unsupported operation" in a browser.
+    if (kIsWeb || !Platform.isWindows) {
       final stored = await _storage.read(key: _kDeviceId);
       _cachedDeviceId = stored ?? 'dev-${DateTime.now().millisecondsSinceEpoch}';
       await _storage.write(key: _kDeviceId, value: _cachedDeviceId);
@@ -60,6 +61,7 @@ class DeviceService {
   }
 
   static Future<String> getMachineName() async {
+    if (kIsWeb) return 'Web browser';
     try {
       return Platform.localHostname;
     } catch (_) {

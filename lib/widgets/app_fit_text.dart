@@ -134,9 +134,15 @@ class RenderAppFitText extends RenderBox {
     return size;
   }
 
+  // Height from the last layout. The baseline is asked for by an ANCESTOR
+  // during its own layout (e.g. the InputDecorator of a dropdown), and debug
+  // builds assert that only the direct parent may read `size` then — so the
+  // baseline works from this copy instead.
+  double _laidOutHeight = 0;
+
   @override
   double? computeDistanceToActualBaseline(TextBaseline baseline) {
-    final top = (size.height - _painter.height) / 2;
+    final top = (_laidOutHeight - _painter.height) / 2;
     return top + _painter.computeDistanceToActualBaseline(baseline);
   }
 
@@ -157,6 +163,7 @@ class RenderAppFitText extends RenderBox {
       ..textScaler = _textScaler
       ..layout(maxWidth: constraints.hasBoundedWidth ? constraints.maxWidth : double.infinity);
     size = constraints.constrain(Size(_painter.width, lineH));
+    _laidOutHeight = size.height;
   }
 
   @override

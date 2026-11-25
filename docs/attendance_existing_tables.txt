@@ -1,0 +1,113 @@
+ATTENDANCE MODULE - TABLES THAT ALREADY EXIST IN THE DATABASE (BY CONCEPT)
+==========================================================================
+Compared: attendance_schema.sql (att_* tables) against the live database
+esgguehqlymultdyccae (schemas public and ongc20262027), 23-11-2026.
+Nothing was created or changed in Supabase.
+
+Watch the names: in this database
+  - "division"  = the board/stream (CBSE), NOT KG / Primary / Secondary
+  - "course"    = the standard (PKG, LKG, UKG, I, II ...)
+  - "class"     = standard + section ("LKG A", "I B")
+  - "semester"  = the term (TERM 1, TERM II)
+  - tr_student_enrollment (transport20262027) is the TRANSPORT enrollment,
+    not the class enrollment.
+
+
+A. ALREADY IN THE DATABASE (same concept)
+-----------------------------------------
+
+1. att_academic_stream  (CBSE / State Board / Matric)
+   -> public.division (div_id, divname, ins_id, activestatus)
+      Holds "CBSE". Also stored on each student: ongc20262027.students.division,
+      and on each standard: public.course.div_id.
+
+2. att_academic_year  (2026-27, start and end date)
+   -> public.institutionyear (iyr_id, ins_id, yrlabel, iyrstadate, iyrenddate,
+      iyrschema, activestatus)
+   -> ongc20262027.year (yr_id, yrlabel, yrstadate, yrenddate)
+      Note: one year per institution (not per stream), and each year has its
+      own schema (ongc20262027). Current year 2026-2027 = 01-06-2026 to 31-05-2027.
+
+3. att_term  (Term I / II, Semester I / II)
+   -> ongc20262027.semester (sem_id, semname, semshort, semtype, semstart,
+      semend, ordid)
+      Holds TERM 1 (01-06-2026 to 30-11-2026) and TERM II (01-12-2026 to
+      28-02-2027). Already used by Transport Stage Fees.
+
+4. att_class  (standards LKG, UKG, I .. XII)
+   -> public.course (cour_id, courname, ordid, div_id, classtype, feelevel)
+
+5. att_class_section  (X-A for a year, with class teacher)
+   -> public.class (cla_id, claname, cour_id, ordid, classtype, succeedingclass)
+      The section is part of the name ("LKG A"). Not in the existing table:
+      class teacher, room number, per-year rows.
+
+6. att_staff  (employees)
+   -> public.schstaff (staf_id, ins_id, stafname, mobileno, emailid, password ...)
+      the staff master
+   -> ongc20262027.staffmast (staf_id, emp_code, stafname, mobile_no, emailid,
+      designation, is_active) the staff of the year, with employee code
+   -> public.institutionusers (use_id, usename, usemail, ur_id, des_id ...)
+      the app logins (the "auth user" of att_staff.auth_user_id)
+   (public.tr_staff is the transport crew, drivers / attenders - separate.)
+
+7. att_staff_role  (who may do what)
+   -> public.custuserroles (ur_id, urname): roles - Admin, Accountant
+   -> public.staffdesignation (des_id, desname): Principal, Office Assistant,
+      Teacher, Physical Director
+   -> public.rolemenuaccess (ins_id, ur_id, menulabel): menu permissions per role
+      Not in the existing tables: DIVISION_INCHARGE / CLASS_TEACHER with a
+      division or class attached.
+
+8. att_student_enrollment  (student in a section, roll no, from/to, status)
+   -> ongc20262027.students (stu_id, stuadmno, cla_id, stuclass, cour_id,
+      division, activestatus, terminateddate, terminatedreason ...)
+      one row per student per year schema, with the class (section) on it
+   -> public.rollno_change (stu_id, oldrollno, newrollno, cla_id, effectdate)
+      roll number changes
+   -> ongc20262027.interim_promotion (stu_id, stuclass, transferred_class,
+      promotiondate) class / section change during the year
+   -> ongc20262027.tc_entry, ongc20262027.tc_certificate
+      the TC_ISSUED status (transfer certificate)
+
+9. att_notification  (message to a parent)
+   -> ongc20262027.notification (noti_id, stu_id, notititle, notibody,
+      notitype, isread) in-app notifications to students / parents
+   -> ongc20262027.notice (notice board, used by the notifications)
+      Partly the same: no channel (SMS / WhatsApp), recipient, send status,
+      retry or dedupe key.
+
+10. att_settings  (per-school settings)
+    -> public.institution_settings (ins_id, setting_key, setting_value)
+       key / value rows, not fixed columns.
+
+Dependencies named in the schema:
+    institution (inst_id) -> public.institution (ins_id, INTEGER, not BIGINT)
+    students (student_id) -> ongc20262027.students (stu_id, BIGINT;
+                             admission no = stuadmno). Students are per-year
+                             schema, so a foreign key from a public table
+                             cannot point at them.
+
+
+B. NOT IN THE DATABASE (new concept)
+------------------------------------
+att_school_division         KG / Primary / Secondary / HSC grouping
+att_calendar_day            working days, holidays, half days
+att_session_teacher         first-hour teacher (FN / AN) timetable
+att_session_substitute      substitute teacher for a date
+att_status_code             P / A / L / OD / LT codes
+att_leave_application       student long leave
+                            (transport20262027.tr_staff_leave is transport
+                            crew leave - different)
+att_leave_approval          leave approval steps
+att_leave_document          leave certificates / documents
+att_outpass                 out-pass slips
+att_attendance_sheet        attendance header per class, date, session
+att_attendance_entry        attendance per student
+att_notification_template   SMS / WhatsApp message templates
+                            (public.receipt_format and public.tc_format are
+                            print layouts - different)
+att_audit_log               change history (auth.audit_log_entries belongs to
+                            Supabase sign-in - different)
+Views att_v_student_session, att_mv_student_term_summary,
+att_v_student_year_summary - not in the database.

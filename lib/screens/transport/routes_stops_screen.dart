@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../services/transport_service.dart';
-import '../../utils/app_text.dart';
 import 'stop_map_picker.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/friendly_error.dart';
@@ -153,22 +152,6 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
       for (final e in rows)
         if (stopIds.contains(trId(e['pickup_stop_id'])) || stopIds.contains(trId(e['drop_stop_id']))) trId(e['student_id']),
     }.length;
-  }
-
-  Future<void> _deleteStop(Map<String, dynamic> p) async {
-    final id = trId(p['stop_id']), routeId = trId(p['route_id']);
-    if (id == null) return;
-    final ask = TrDelete('Delete stop ${trText(p['stop_name'])}?', 'The stop is switched off. A stop used by a student or schedule cannot be deleted.');
-    if (!await trAskDelete(context, ask) || !mounted) return;
-    try {
-      await TransportService.remove('stop', id);
-      if (!mounted) return;
-      trSnack(context, 'Stop switched off.', AppColors.success);
-      if (routeId != null) _open.add(routeId);
-      await _load();
-    } catch (e) {
-      if (mounted) trSnack(context, AppText.couldNot('delete', friendlyError(e)), AppColors.error);
-    }
   }
 
   List<Map<String, dynamic>> _stagesOf(int routeId) => [
@@ -657,17 +640,7 @@ class _RoutesStopsScreenState extends State<RoutesStopsScreen> {
               label: const Text('Edit'),
             ),
           ),
-          if (!inactive) ...[
-            SizedBox(width: 10.w),
-            Center(
-              child: OutlinedButton.icon(
-                onPressed: () => _deleteStop(p),
-                style: OutlinedButton.styleFrom(foregroundColor: AppColors.error, side: const BorderSide(color: AppColors.error)),
-                icon: AppIcon('trash', size: AppBtn.iconSize(context), color: AppColors.error),
-                label: const Text(AppText.delete),
-              ),
-            ),
-          ],
+          // Delete is in the stop's edit window
         ]),
       ),
     );

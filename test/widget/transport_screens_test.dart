@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:school_admin/screens/admin/staff_screen.dart';
+import 'package:school_admin/screens/transport/daily_trips_screen.dart';
 import 'package:school_admin/screens/transport/duty_roster_screen.dart';
 import 'package:school_admin/screens/transport/gps_mapping_panel.dart';
 import 'package:school_admin/screens/transport/routes_stops_screen.dart';
@@ -32,6 +33,7 @@ void main() {
     'Transport Staff': () => const TransportStaffScreen(),
     'Trip Schedules': () => const TripSchedulesScreen(),
     'Duty Roster': () => const DutyRosterScreen(),
+    'Daily Trips': () => const DailyTripsScreen(),
     'Student Enrollment': () => const StudentEnrollmentScreen(),
     'Vehicle Allotment': () => const VehicleAllotmentScreen(),
     'Stage Fees': () => const StageFeesScreen(),
@@ -412,7 +414,7 @@ void main() {
                 stages: stages,
                 stops: stops,
                 enrollments: rows ?? enrollments,
-                students: students,
+                people: students,
                 yearFrom: '2026-06-01',
                 yearTo: '2027-05-31',
                 today: DateTime(2026, 11, 13),
