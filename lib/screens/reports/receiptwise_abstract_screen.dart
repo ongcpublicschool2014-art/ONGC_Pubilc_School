@@ -18,6 +18,7 @@ import '../../utils/school_terms.dart';
 import '../../widgets/app_ui.dart';
 import '../../widgets/app_vertical_scrollbar.dart';
 import '../../widgets/classic_h_scrollbar.dart';
+import '../../widgets/app_multi_pick.dart';
 import '../../utils/save_path.dart';
 
 /// RECEIPT WISE ABSTRACT -- the old product's "Receiptwise Abstract": every
@@ -463,9 +464,12 @@ class _ReceiptwiseAbstractScreenState extends State<ReceiptwiseAbstractScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           AppUI.fieldLabel(label),
-          InkWell(
+          Builder(builder: (field) => InkWell(
             borderRadius: BorderRadius.circular(AppUI.controlRadius),
-            onTap: onTap,
+            onTap: () {
+              _anchor = field;
+              onTap();
+            },
             child: InputDecorator(
               decoration: AppUI.field(
                 context,
@@ -476,52 +480,17 @@ class _ReceiptwiseAbstractScreenState extends State<ReceiptwiseAbstractScreen> {
               ),
               child: Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: filled)),
             ),
-          ),
+          )),
         ],
       );
 
   /// Tick many of [items] (key, label); null = cancelled. Apply needs at least
   /// one tick.
-  Future<Set<String>?> _pickMany(String title, List<(String, String)> items, Set<String> current) {
-    final draft = Set<String>.from(current);
-    return showDialog<Set<String>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          scrollable: true,
-          title: Row(children: [
-            Expanded(child: Text(title, style: AppUI.cardTitle)),
-            TextButton(onPressed: () => setLocal(() => draft.addAll(items.map((i) => i.$1))), child: const Text('Select All')),
-            TextButton(onPressed: () => setLocal(draft.clear), child: const Text('Unselect All')),
-          ]),
-          content: SizedBox(
-            width: 380.w,
-            child: items.isEmpty
-                ? Text('There is nothing to choose in this date range.', style: AppUI.muted)
-                : Column(mainAxisSize: MainAxisSize.min, children: [
-                    for (final i in items)
-                      CheckboxListTile(
-                        value: draft.contains(i.$1),
-                        onChanged: (v) => setLocal(() => v == true ? draft.add(i.$1) : draft.remove(i.$1)),
-                        dense: true,
-                        activeColor: AppColors.primary,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: Text(i.$2, style: AppUI.body),
-                      ),
-                  ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text(AppText.cancel)),
-            ElevatedButton(
-              style: AppUI.primary(ctx),
-              onPressed: draft.isEmpty ? null : () => Navigator.of(ctx).pop(draft),
-              child: const Text('Apply'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Future<Set<String>?> _pickMany(String title, List<(String, String)> items, Set<String> current) =>
+      showAppMultiPick<String>(context, anchor: _anchor, title: title, groups: [('', items)], selected: current, requireOne: true);
+
+  /// The filter field just tapped: the pick panel opens under it.
+  BuildContext? _anchor;
 
   Widget _filters() {
     final prefixes = _prefixList;

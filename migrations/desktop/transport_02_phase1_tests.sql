@@ -1634,7 +1634,59 @@ BEGIN
     n := n + 3;
   END;
 
-  -- 25. Daily Trips (transport_24-26): a day's trips are made from the
+  -- 25. GPS positions from the trackers (tr_gps_ingest): the device's vehicle
+  --     gets the position; an older position does not replace a newer one;
+  --     an unknown device, a device on no vehicle, a 0 / 0 position and a
+  --     clock ahead are skipped and named; one call takes a list or one
+  --     position; a switched-off device is refused; not open to the app
+  DECLARE dvx bigint; dvy bigint; vx bigint; r jsonb;
+  BEGIN
+    dvx := public.tr_save(tk_a, 'gps_device', '{"device_type":"HARDWARE","imei":"zt-gps-25","sim_no":"9"}');
+    dvy := public.tr_save(tk_a, 'gps_device', '{"device_type":"HARDWARE","imei":"zt-gps-26"}');
+    vx := public.tr_save(tk_a, 'vehicle', jsonb_build_object('fuel_type', 'DIESEL', 'vehicle_code', 'zt-gps-v', 'registration_no', 'zt01zz0025',
+                                                             'vehicle_type', 'BUS', 'seating_capacity', 30, 'ownership_type', 'OWNED'));
+    PERFORM public.tr_save(tk_a, 'vehicle_gps', jsonb_build_object('changes', jsonb_build_array(
+              jsonb_build_object('vehicle_id', vx, 'device_id', dvx, 'date', CURRENT_DATE))));
+    r := public.tr_gps_ingest(jsonb_build_array(
+           jsonb_build_object('imei', 'zt-gps-25', 'lat', 13.04, 'lon', 80.25, 'at', (now() - interval '1 minute')::text, 'speed_kmph', 31.26,
+                              'heading', -90, 'battery_pct', 87, 'satellites', 9, 'raw', jsonb_build_object('src', 'test')),
+           jsonb_build_object('imei', 'zt-gps-25', 'lat', 13.03, 'lon', 80.24, 'at', (now() - interval '5 minutes')::text),
+           jsonb_build_object('imei', 'ZT-GPS-404', 'lat', 13, 'lon', 80),
+           jsonb_build_object('imei', 'zt-gps-26', 'lat', 13, 'lon', 80),
+           jsonb_build_object('imei', 'zt-gps-25', 'lat', 0, 'lon', 0),
+           jsonb_build_object('imei', 'zt-gps-25', 'lat', 13, 'lon', 80, 'at', (now() + interval '1 hour')::text)));
+    IF (r->>'received')::int <> 6 OR (r->>'stored')::int <> 2 OR (r->>'live')::int <> 1 OR jsonb_array_length(r->'skipped') <> 4 THEN
+      bad := bad || ('gps ingest counts: ' || r::text);
+    END IF;
+    IF (SELECT string_agg(x->>'reason', ' | ' ORDER BY o) FROM jsonb_array_elements(r->'skipped') WITH ORDINALITY a(x, o))
+       NOT LIKE 'unknown or switched-off device | device is not on a vehicle% | no usable position | device clock is ahead' THEN
+      bad := bad || ('gps ingest reasons: ' || (r->'skipped')::text);
+    END IF;
+    IF (SELECT format('%s,%s,%s,%s', latitude, longitude, speed_kmph, heading_deg) FROM transport20262027.tr_vehicle_live WHERE vehicle_id = vx)
+       IS DISTINCT FROM '13.040000,80.250000,31.3,270' THEN
+      bad := bad || ('gps ingest: the vehicle''s live position: '
+                     || COALESCE((SELECT row_to_json(l)::text FROM transport20262027.tr_vehicle_live l WHERE l.vehicle_id = vx), 'none'));
+    END IF;
+    IF (SELECT count(*) FROM transport20262027.tr_gps_ping WHERE device_id = dvx) <> 2
+       OR (SELECT battery_pct || '/' || satellites || '/' || (raw_payload->>'src') FROM transport20262027.tr_gps_ping
+            WHERE device_id = dvx ORDER BY recorded_at DESC LIMIT 1) IS DISTINCT FROM '87/9/test' THEN
+      bad := bad || ('gps ingest: the pings were not kept with their details')::text;
+    END IF;
+    n := n + 4;
+    IF has_function_privilege('anon', 'public.tr_gps_ingest(jsonb)', 'EXECUTE')
+       OR has_function_privilege('authenticated', 'public.tr_gps_ingest(jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('service_role', 'public.tr_gps_ingest(jsonb)', 'EXECUTE') THEN
+      bad := bad || ('tr_gps_ingest is open to the app, or closed to the server')::text;
+    END IF;
+    r := public.tr_gps_ingest(jsonb_build_object('imei', 'zt-gps-25', 'lat', 13.05, 'lon', 80.26));
+    IF (r->>'live')::int IS DISTINCT FROM 1 THEN bad := bad || ('gps ingest: a single position was not taken: ' || r::text); END IF;
+    UPDATE public.tr_gps_device SET is_active = false WHERE device_id = dvx;
+    r := public.tr_gps_ingest(jsonb_build_object('imei', 'zt-gps-25', 'lat', 13.06, 'lon', 80.27));
+    IF (r->>'stored')::int IS DISTINCT FROM 0 THEN bad := bad || ('gps ingest: a switched-off device still sends: ' || r::text); END IF;
+    n := n + 3;
+  END;
+
+  -- 26. Daily Trips (transport_24-26): a day's trips are made from the
   --     schedules with their students, staff riders and crew; a trip's
   --     vehicle and crew change for that day only. Its own route, two
   --     pickup trips at the same time, a 1-seat car, a van and a bus.
@@ -1645,13 +1697,13 @@ BEGIN
     qr text := $q$SELECT public.tr_trip_replace(%L,%L)$q$;
   BEGIN
     IF NOT transport_core._staff_ready(app_sch, 'transport20262027') OR to_regclass('transport20262027.tr_trip_staff_rider') IS NULL THEN
-      RAISE EXCEPTION 'TESTS_FAILED: section 25 needs staff transport (transport_23, transport_24)';
+      RAISE EXCEPTION 'TESTS_FAILED: section 26 needs staff transport (transport_23, transport_24)';
     END IF;
     -- a school day (Monday to Saturday) after today, in the session year
     SELECT g::date INTO d FROM generate_series(transport_core._today() + 1, transport_core._today() + 8, interval '1 day') g
      WHERE extract(isodow FROM g) BETWEEN 1 AND 6 ORDER BY g LIMIT 1;
     IF NOT EXISTS (SELECT 1 FROM public.institutionyear WHERE iyr_id = iyr_now AND d BETWEEN iyrstadate AND iyrenddate) THEN
-      RAISE EXCEPTION 'TESTS_FAILED: section 25 needs % in the session year', d;
+      RAISE EXCEPTION 'TESTS_FAILED: section 26 needs % in the session year', d;
     END IF;
     rs := public.tr_save(tk_a, 'route', '{"route_code":"zt-dt","route_name":"Daily Line"}');
     gs := public.tr_save(tk_a, 'stage', jsonb_build_object('route_id', rs, 'stage_no', 1, 'stage_name', 'Near'));
@@ -1679,7 +1731,7 @@ BEGIN
                       AND NOT EXISTS (SELECT 1 FROM transport20262027.tr_student_enrollment e WHERE e.student_id = s.stu_id AND e.status = ''ACTIVE'')
                      ORDER BY s.stu_id LIMIT 1', app_sch) INTO st;
     EXECUTE format('SELECT m.staf_id FROM %I.staffmast m JOIN public.schstaff s ON s.staf_id = m.staf_id WHERE s.ins_id = 1 ORDER BY m.staf_id LIMIT 1', app_sch) INTO fa;
-    IF st IS NULL OR fa IS NULL THEN RAISE EXCEPTION 'TESTS_FAILED: section 25 needs a student with no transport and a staff member in %', app_sch; END IF;
+    IF st IS NULL OR fa IS NULL THEN RAISE EXCEPTION 'TESTS_FAILED: section 26 needs a student with no transport and a staff member in %', app_sch; END IF;
     EXECUTE format('UPDATE %I.staffmast SET is_active = true, transportreq = ''BUS'' WHERE staf_id = $1', app_sch) USING fa;
     UPDATE transport20262027.tr_staff_enrollment SET status = 'CANCELLED' WHERE staf_id = fa AND status = 'ACTIVE';
     PERFORM public.tr_save(tk_a, 'enrollment', jsonb_build_object('route_id', rs, 'rows', jsonb_build_array(

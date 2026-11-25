@@ -373,6 +373,8 @@ class _MenuAccessTabState extends State<_MenuAccessTab> {
   Color _sectionTint(String section) => switch (section) {
         'ADMISSION' => AppColors.accent,
         'STUDENTS' => AppColors.success,
+        'STAFF' => AppColors.success,
+        'ATTENDANCE' => AppColors.success,
         'TC' => AppColors.demand,
         'FEES' => AppColors.warning,
         'REPORTS' => AppColors.demand,

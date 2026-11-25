@@ -67,6 +67,11 @@ class AppNavItem {
   final String? sideTitle;
   final String section;
 
+  /// Display only: items of a section sharing a group sit under a small
+  /// collapsible heading in the sidebar (Reports > Collection > Daily
+  /// Collection). The label stays the permission key; see [kNavGroupIcons].
+  final String? group;
+
   /// Default visibility, used only until an Admin configures Roles & Access.
   /// Once a role has explicit menu permissions, these flags are bypassed.
   final bool adminOnly;
@@ -80,6 +85,7 @@ class AppNavItem {
     this.title,
     this.sideTitle,
     this.section = 'MAIN',
+    this.group,
     this.adminOnly = false,
     this.accountantOnly = false,
     this.hideForAccountant = false,
@@ -106,6 +112,8 @@ class AppNavItem {
 const Map<String, List<String>> kSectionMeta = {
   'ADMISSION': ['profile-add', 'Admission'],
   'STUDENTS': ['people', 'Students'],
+  'STAFF': ['profile-2user', 'Staff'],
+  'ATTENDANCE': ['calendar-tick', 'Attendance'],
   'FEES': ['wallet-money', 'Fees'],
   'TRANSPORT': ['bus', 'Transport'],
   'TC': ['document-text', 'Transfer Certificate'],
@@ -113,6 +121,15 @@ const Map<String, List<String>> kSectionMeta = {
   'BANKING': ['bank', 'Banking'],
   'SETUP': ['setting-2', 'Setup'],
   'GENERAL': ['notification', 'General'],
+};
+
+/// Icon of each sidebar group ([AppNavItem.group]).
+const Map<String, String> kNavGroupIcons = {
+  'Collection': 'wallet-money',
+  'Student-wise': 'people',
+  'Pending & DCB': 'clock',
+  'Advance': 'empty-wallet',
+  'Admission & TC': 'document-text',
 };
 
 /// Every menu item in the app, in sidebar order.
@@ -133,6 +150,21 @@ const List<AppNavItem> kAppNavItems = [
 
   // STUDENTS
   AppNavItem('people', 'Students', title: 'Student Details', section: 'STUDENTS', adminOnly: true),
+
+  // STAFF (school only) -- its own section below Student Details, out of Setup
+  // (user, 2026-11-23). The staff, their experience, and the year's employee
+  // code and designation (school_staff_master.sql). 'Staff' is the permission
+  // key the server checks (_staff_ctx) -- never rename it.
+  AppNavItem('profile-2user', 'Staff', title: 'Staff Details', section: 'STAFF', adminOnly: true),
+
+  // ATTENDANCE (school only, 2026-11-24) -- C:/pg_backups/attendance:
+  // school_attendance.sql (tables) and school_attendance_api.sql (att_*
+  // functions). The labels are the menu names the server checks (_att_ctx)
+  // -- never rename them.
+  AppNavItem('calendar-tick', 'Attendance Entry', section: 'ATTENDANCE', adminOnly: true),
+  AppNavItem('calendar-remove', 'Leave & Out-pass', section: 'ATTENDANCE', adminOnly: true),
+  AppNavItem('chart-1', 'Attendance Report', section: 'ATTENDANCE', adminOnly: true),
+  AppNavItem('setting-2', 'Attendance Setup', section: 'ATTENDANCE', adminOnly: true),
 
   // FEES — ordered to follow the money lifecycle:
   // raise demand → approve → concede → collect → refund → statement.
@@ -201,27 +233,35 @@ const List<AppNavItem> kAppNavItems = [
   // REPORTS — each report is its own submenu (opens the Reports screen at that
   // tab with the in-screen tab bar hidden). NOTE: no 'Collection Summary' entry
   // — the Dashboard menu opens that screen (fee_collection_screen.dart).
-  AppNavItem('calendar-1', 'Daily Collection', section: 'REPORTS'),
-  AppNavItem('book-1', 'Student Ledger', section: 'REPORTS'),
-  AppNavItem('clock', 'Pending Payment', section: 'REPORTS'),
-  AppNavItem('receipt-item', 'Pending Details', section: 'REPORTS'),
-  AppNavItem('chart-2', 'Consolidated Status', section: 'REPORTS'),
-  // School: the old product's Consolidated Summary Statement (per student).
-  AppNavItem('document-text', 'Consolidated Summary', section: 'REPORTS'),
+  // Grouped in the sidebar (user, 2026-11-23: "in reports under grouped by
+  // submenu"): [AppNavItem.group] is display only -- each report keeps its
+  // own label, the Roles & Access / Module Control key.
+  // Collection
+  AppNavItem('calendar-1', 'Daily Collection', section: 'REPORTS', group: 'Collection'),
   // School: the old product's report formats (receipt-wise, division
   // summary, fee matrix, pending fee, advance reconciliation).
-  AppNavItem('receipt-item', 'Receiptwise Report', section: 'REPORTS'),
-  AppNavItem('receipt-text', 'Receiptwise Abstract', section: 'REPORTS'),
-  AppNavItem('calendar-2', 'Datewise Abstract', section: 'REPORTS'),
-  AppNavItem('category-2', 'Division Summary', section: 'REPORTS'),
-  AppNavItem('grid-1', 'Fee Matrix', section: 'REPORTS'),
-  AppNavItem('clock', 'Pending Fee Report', section: 'REPORTS'),
-  AppNavItem('wallet-check', 'Advance Reconciliation Report', sideTitle: 'Advance Reconciliation', section: 'REPORTS'),
-  AppNavItem('grid-1', 'DCB Register', section: 'REPORTS'),
-  AppNavItem('chart-21', 'DCB Statement', section: 'REPORTS'),
-  AppNavItem('wallet-money', 'Advance Register', section: 'REPORTS'),
-  AppNavItem('book-1', 'Admission Register', section: 'REPORTS'),
-  AppNavItem('document-text', 'TC Report', section: 'REPORTS'),
+  AppNavItem('receipt-item', 'Receiptwise Report', section: 'REPORTS', group: 'Collection'),
+  AppNavItem('receipt-text', 'Receiptwise Abstract', section: 'REPORTS', group: 'Collection'),
+  AppNavItem('calendar-2', 'Datewise Abstract', section: 'REPORTS', group: 'Collection'),
+  AppNavItem('category-2', 'Division Summary', section: 'REPORTS', group: 'Collection'),
+  // Student-wise
+  AppNavItem('book-1', 'Student Ledger', section: 'REPORTS', group: 'Student-wise'),
+  AppNavItem('chart-2', 'Consolidated Status', section: 'REPORTS', group: 'Student-wise'),
+  // School: the old product's Consolidated Summary Statement (per student).
+  AppNavItem('document-text', 'Consolidated Summary', section: 'REPORTS', group: 'Student-wise'),
+  // Pending & DCB
+  AppNavItem('clock', 'Pending Payment', section: 'REPORTS', group: 'Pending & DCB'),
+  AppNavItem('receipt-item', 'Pending Details', section: 'REPORTS', group: 'Pending & DCB'),
+  AppNavItem('clock', 'Pending Fee Report', section: 'REPORTS', group: 'Pending & DCB'),
+  AppNavItem('grid-1', 'Fee Matrix', section: 'REPORTS', group: 'Pending & DCB'),
+  AppNavItem('grid-1', 'DCB Register', section: 'REPORTS', group: 'Pending & DCB'),
+  AppNavItem('chart-21', 'DCB Statement', section: 'REPORTS', group: 'Pending & DCB'),
+  // Advance
+  AppNavItem('wallet-check', 'Advance Reconciliation Report', sideTitle: 'Advance Reconciliation', section: 'REPORTS', group: 'Advance'),
+  AppNavItem('wallet-money', 'Advance Register', section: 'REPORTS', group: 'Advance'),
+  // Admission & TC
+  AppNavItem('book-1', 'Admission Register', section: 'REPORTS', group: 'Admission & TC'),
+  AppNavItem('document-text', 'TC Report', section: 'REPORTS', group: 'Admission & TC'),
 
   // BANKING — money that has left the counter.
   AppNavItem('receipt-2', 'Transactions', section: 'BANKING'),
@@ -232,11 +272,12 @@ const List<AppNavItem> kAppNavItems = [
   // The master screens carry their tabs as sub-items: picking one opens
   // that tab directly, and the in-screen tab bar is hidden. Sub-items are NOT
   // separate permission keys — the parent's Roles & Access entry still governs.
-  // Division sits under Master Data (user, 2026-11-10) but is still a tab of
-  // AdmissionMasterScreen.
+  // Division and Medium sit under Master Data (user, 2026-11-10 / 2026-11-24)
+  // but are tabs of AdmissionMasterScreen.
   AppNavItem('document-upload', 'Master Data', section: 'SETUP', adminOnly: true,
       subItems: [
         AppNavSubItem('diagram', 'Division'),
+        AppNavSubItem('language-square', 'Medium'),
         AppNavSubItem('teacher', 'Course'),
         AppNavSubItem('book-1', 'Class'),
       ]),

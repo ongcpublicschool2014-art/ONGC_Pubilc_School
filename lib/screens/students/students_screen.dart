@@ -28,6 +28,7 @@ import '../../utils/mobile_rules.dart';
 import '../../utils/school_terms.dart';
 import '../../utils/student_import_rules.dart';
 import '../../widgets/app_dropdown_field.dart';
+import '../../utils/medium_options.dart';
 import '../../utils/save_path.dart';
 
 class StudentsScreen extends StatefulWidget {
@@ -58,6 +59,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
   final _countryController = TextEditingController();
   final _pinController = TextEditingController();
   String? _selectedBloodGroup;
+  /// Setup -> Master Data -> Medium; the student's Medium is picked from it.
+  List<String> _mediums = [];
+  String? _selectedMedium;
   String? _selectedClass;
   List<String> _classes = [];
   // true once the first load finished (so an empty list shows a message,
@@ -75,7 +79,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
   final _aadharController = TextEditingController();
   final _emisController = TextEditingController();
   final _umisController = TextEditingController();
-  final _mediumController = TextEditingController();
   final _communityController = TextEditingController();
   final _casteController = TextEditingController();
   final _religionController = TextEditingController();
@@ -291,7 +294,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _batchController.dispose();
     _admittedYearController.dispose();
     _aadharController.dispose();
-    _mediumController.dispose();
     _communityController.dispose();
     _casteController.dispose();
     _religionController.dispose();
@@ -352,6 +354,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       // class + course masters with ordid for the sidebar ordering.
       SupabaseService.fromSchema('class').select('claname, ordid').eq('ins_id', insId).eq('activestatus', 1),
       SupabaseService.fromSchema('course').select('courname, ordid').eq('ins_id', insId).eq('activestatus', 1),
+      loadMediums(insId),
     ]);
     } catch (_) {
       if (mounted) setState(() => _classesLoaded = true);
@@ -407,6 +410,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
       _concessions = concessions;
       _admissionTypes = admissionTypes;
       _quotas = quotas;
+      _mediums = results[9] as List<String>;
+      _selectedMedium = matchMedium(_mediums, _selectedMedium);
       _classes = allClasses;
       _classesLoaded = true;
       _classCounts = classCounts;
@@ -479,7 +484,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _batchController.clear();
     _admittedYearController.clear();
     _aadharController.clear();
-    _mediumController.clear();
+    _selectedMedium = null;
     _communityController.clear();
     _casteController.clear();
     _religionController.clear();
@@ -516,7 +521,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _pinController.text = clean(s.stupin);
     _batchController.text = clean(s.batch);
     _admittedYearController.text = clean(s.admittyear);
-    _mediumController.text = clean(s.medium);
+    _selectedMedium = matchMedium(_mediums, s.medium);
     _aadharController.text = clean(s.aadharno);
     _emisController.text = clean(s.emisno);
     _umisController.text = clean(s.umisno);
@@ -586,7 +591,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     _batchController.clear();
     _admittedYearController.clear();
     _aadharController.clear();
-    _mediumController.clear();
+    _selectedMedium = defaultMedium(_mediums);
     _communityController.clear();
     _casteController.clear();
     _religionController.clear();
@@ -690,7 +695,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         if (!isSchool) 'quoname': _selectedQuoName,
         if (!isSchool) 'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
         'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
-        'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
+        'medium': _selectedMedium,
         'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
         'emisno': _emisController.text.trim().isNotEmpty ? _emisController.text.trim() : null,
         if (!isSchool) 'umisno': _umisController.text.trim().isNotEmpty ? _umisController.text.trim() : null,
@@ -821,7 +826,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         if (!isSchool) 'quoname': _selectedQuoName,
         if (!isSchool) 'batch': _batchController.text.trim().isNotEmpty ? _batchController.text.trim() : null,
         'admittyear': _admittedYearController.text.trim().isNotEmpty ? _admittedYearController.text.trim() : null,
-        'medium': _mediumController.text.trim().isNotEmpty ? _mediumController.text.trim() : null,
+        'medium': _selectedMedium,
         'aadharno': _aadharController.text.trim().isNotEmpty ? _aadharController.text.trim() : null,
         'emisno': _emisController.text.trim().isNotEmpty ? _emisController.text.trim() : null,
         if (!isSchool) 'umisno': _umisController.text.trim().isNotEmpty ? _umisController.text.trim() : null,
@@ -2487,7 +2492,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
         SizedBox(height: 14.h),
 
         _row4(
-          _fieldFull(label: 'Medium', child: TextFormField(controller: _mediumController, decoration: _dec('e.g. English / Tamil', filled: _mediumController.text.trim().isNotEmpty), style: _inputStyle.copyWith(color: _mediumController.text.trim().isNotEmpty ? AppColors.accent : null, fontWeight: FontWeight.w600), onChanged: (_) => setState(() {}))),
+          _fieldFull(label: 'Medium', child: Builder(builder: (_) {
+            final items = mediumItems(_mediums, _selectedMedium);
+            return AppDropdownField<String>(
+              initialValue: items.contains(_selectedMedium) ? _selectedMedium : null,
+              isExpanded: true,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              elevation: 6,
+              decoration: _dec('Select medium', filled: _selectedMedium != null),
+              icon: Icon(Icons.arrow_drop_down, color: AppColors.textSecondary),
+              style: _inputStyle,
+              items: items.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+              selectedItemBuilder: (context) => items.map((m) => Align(alignment: Alignment.centerLeft, child: Text(m, overflow: TextOverflow.ellipsis, style: AppUI.fieldText(context, filled: true)))).toList(),
+              onChanged: (v) => setState(() => _selectedMedium = v),
+            );
+          })),
           const SizedBox(),
           const SizedBox(),
           const SizedBox(),

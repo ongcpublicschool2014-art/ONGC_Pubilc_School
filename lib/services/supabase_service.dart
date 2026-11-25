@@ -3316,6 +3316,31 @@ class SupabaseService {
     }
   }
 
+  /// Each demand line's paid / pending / fine for one section, counted the
+  /// way the section summary counts them (get_fee_demand_line_figures): the
+  /// fee part paid less an online payment still being reconciled, the balance
+  /// plus that payment, and the fines collected on its receipts. Keyed by
+  /// dem_id; empty when the database does not have the function yet.
+  static Future<Map<int, Map<String, double>>> getFeeDemandLineFigures(int insId, String className) async {
+    try {
+      final rows = await client.rpc('get_fee_demand_line_figures', params: {'p_ins_id': insId, 'p_stuclass': className});
+      final out = <int, Map<String, double>>{};
+      for (final r in (rows as List? ?? const [])) {
+        final id = (r['dem_id'] as num?)?.toInt();
+        if (id == null) continue;
+        out[id] = {
+          'paid': (r['paid'] as num?)?.toDouble() ?? 0,
+          'pending': (r['pending'] as num?)?.toDouble() ?? 0,
+          'fine': (r['fine'] as num?)?.toDouble() ?? 0,
+        };
+      }
+      return out;
+    } catch (e) {
+      debugPrint('RPC get_fee_demand_line_figures failed: $e');
+      return {};
+    }
+  }
+
   /// Fetch pending fee demands for the institution via DB function.
   /// Only returns rows for students with activestatus = 1.
   ///

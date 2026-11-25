@@ -40,6 +40,11 @@ import '../transport/transport_setup_screen.dart';
 import '../transport/routes_stops_screen.dart';
 import '../transport/vehicles_screen.dart';
 import '../transport/transport_staff_screen.dart';
+import '../admin/staff_screen.dart';
+import '../attendance/attendance_entry_screen.dart';
+import '../attendance/attendance_report_screen.dart';
+import '../attendance/attendance_setup_screen.dart';
+import '../attendance/leave_outpass_screen.dart';
 import '../transport/trip_schedules_screen.dart';
 import '../transport/duty_roster_screen.dart';
 import '../transport/daily_trips_screen.dart';
@@ -99,6 +104,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // Which sidebar sections are expanded (accordion). Empty = all collapsed,
   // so the menu opens showing just Dashboard + the group headers.
   final Set<String> _expandedSections = {};
+
+  /// Sidebar groups inside a section (AppNavItem.group), keyed 'SECTION/Group':
+  /// opened by the user, or closed by the user while holding the open page
+  /// (that group starts open).
+  final Set<String> _openGroups = {};
+  final Set<String> _closedGroups = {};
 
   // Section header icon + display label for the collapsible menu groups.
   // MAIN MENU has no header — its items (Dashboard) render standalone at top.
@@ -831,8 +842,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       // as indented, smaller sub-tiles so they read as children.
                       _buildSectionHeader(context, orderedSections[s]),
                       if (_expandedSections.contains(orderedSections[s]))
-                        for (final idx in groupedIndices[orderedSections[s]]!)
-                          _buildNavTile(context, idx, collapsed, inSection: true),
+                        ..._sectionTiles(context, orderedSections[s], groupedIndices[orderedSections[s]]!),
                     ],
                   ],
                   SizedBox(height: 16.h),
@@ -1005,6 +1015,106 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// An open section's items. Those sharing an [AppNavItem.group] sit under
+  /// a small collapsible heading (Reports > Collection > Daily Collection), at
+  /// the place of the group's first item; a group of one is just its item.
+  List<Widget> _sectionTiles(BuildContext context, String section, List<int> idxs) {
+    final out = <Widget>[];
+    final done = <String>{};
+    for (final i in idxs) {
+      final g = _navItems[i].group;
+      if (g == null) {
+        out.add(_buildNavTile(context, i, false, inSection: true));
+        continue;
+      }
+      if (!done.add(g)) continue;
+      final members = [for (final j in idxs) if (_navItems[j].group == g) j];
+      if (members.length == 1) {
+        out.add(_buildNavTile(context, members.first, false, inSection: true));
+        continue;
+      }
+      final key = '$section/$g';
+      final holdsPage = members.contains(_selectedNavIndex);
+      final open = holdsPage ? !_closedGroups.contains(key) : _openGroups.contains(key);
+      out.add(_buildGroupHeader(key, g, members.length, open: open, holdsPage: holdsPage));
+      if (open) {
+        out.add(Padding(
+          padding: EdgeInsets.only(left: 14.w),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            for (final j in members) _buildNavTile(context, j, false, inSection: true),
+          ]),
+        ));
+      }
+    }
+    return out;
+  }
+
+  /// The heading of a group inside a section: its icon, name, how many items
+  /// it holds and a caret. Tinted while closed over the open page.
+  Widget _buildGroupHeader(String key, String title, int count, {required bool open, required bool holdsPage}) {
+    final fg = holdsPage && !open ? AppColors.menuSubActive : AppColors.menuText;
+    return Padding(
+      padding: EdgeInsets.only(bottom: 3.h, left: 2.w),
+      child: IntrinsicHeight(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _navRail(false),
+          SizedBox(width: 2.w),
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: ValueKey('nav-group-$key'),
+                canRequestFocus: false,
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => setState(() {
+                  if (open) {
+                    _openGroups.remove(key);
+                    _closedGroups.add(key);
+                  } else {
+                    _closedGroups.remove(key);
+                    _openGroups.add(key);
+                  }
+                }),
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 7.w, vertical: 6.h),
+                  decoration: BoxDecoration(
+                    color: holdsPage && !open ? AppColors.menuSubActiveBg : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(children: [
+                    SizedBox(
+                      width: 25.w,
+                      height: 25.w,
+                      child: Center(
+                        child: AppIcon(kNavGroupIcons[title] ?? 'folder-2', style: AppIconStyle.linear, color: fg,
+                            size: (MediaQuery.of(context).size.width <= 1366 ? 18.sp : 20.sp) - 3),
+                      ),
+                    ),
+                    SizedBox(width: 8.w),
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(title, maxLines: 1, style: TextStyle(fontSize: 12.5.sp, fontWeight: FontWeight.w800, color: fg)),
+                      ),
+                    ),
+                    Text('$count', style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700, color: AppColors.menuMuted)),
+                    SizedBox(width: 2.w),
+                    AnimatedRotation(
+                      turns: open ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: Icon(Icons.keyboard_arrow_down, size: 18.sp, color: fg.withValues(alpha: 0.9)),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ]),
       ),
     );
   }
@@ -1637,7 +1747,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Screens that manage their own scroll and need full bounded height
   bool _isFullHeightScreen() {
     final label = _navItems[_selectedNavIndex].label;
-    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Demand Import' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Daily Collection' || label == 'Pending Payment' || label == 'Pending Details' || label == 'Consolidated Status' || label == 'Consolidated Summary' || label == 'Receiptwise Report' || label == 'Receiptwise Abstract' || label == 'Datewise Abstract' || label == 'DCB Statement' || label == 'Division Summary' || label == 'Fee Matrix' || label == 'Pending Fee Report' || label == 'Advance Reconciliation Report' || label == 'TC Certificate' || label == 'TC Approval' || label == 'TC Print' || label == 'TC Format' || label == 'DCB Register' || label == 'Advance Register' || label == 'Admission Register' || label == 'TC Report' || label == 'Transport Setup' || label == 'Routes & Stops' || label == 'Vehicles' || label == 'Transport Staff' || label == 'Trip Schedules' || label == 'Duty Roster' || label == 'Daily Trips' || label == 'Student Enrollment' || label == 'Vehicle Allotment' || label == 'Stage Fees' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Allot Section' || label == 'Course Transfer' || label == 'Transfer Certificate' || label == 'New Roll Number' || label == 'EMIS / UMIS' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Concession Approval' || label == 'Fee Refund' || label == 'Fee Cancel Receipt' || label == 'Misc Collection' || label == 'Advance Collection' || label == 'Advance Fee Collection' || label == 'Advance Adjustment' || label == 'Year End Process' || label == 'Payment Gateways' || label == 'Fee Collection Import' || label == 'Roles & Access' || label == kSequenceMenu;
+    return label == 'Dashboard' || label == 'Students' || label == 'Fee Demand' || label == 'Fee Demand Import' || label == 'Fee Collection' || label == 'Student Ledger' || label == 'Fee Demand Approval' || label == 'Transactions' || label == 'Users' || label == 'Notices' || label == 'Notifications' || label == 'Master Data' || label == 'Bank Reconciliation' || label == 'Bank Accounts' || label == 'Reports' || label == 'Daily Collection' || label == 'Pending Payment' || label == 'Pending Details' || label == 'Consolidated Status' || label == 'Consolidated Summary' || label == 'Receiptwise Report' || label == 'Receiptwise Abstract' || label == 'Datewise Abstract' || label == 'DCB Statement' || label == 'Division Summary' || label == 'Fee Matrix' || label == 'Pending Fee Report' || label == 'Advance Reconciliation Report' || label == 'TC Certificate' || label == 'TC Approval' || label == 'TC Print' || label == 'TC Format' || label == 'DCB Register' || label == 'Advance Register' || label == 'Admission Register' || label == 'TC Report' || label == 'Transport Setup' || label == 'Routes & Stops' || label == 'Vehicles' || label == 'Transport Staff' || label == 'Staff' || label == 'Attendance Entry' || label == 'Leave & Out-pass' || label == 'Attendance Report' || label == 'Attendance Setup' || label == 'Trip Schedules' || label == 'Duty Roster' || label == 'Student Enrollment' || label == 'Vehicle Allotment' || label == 'Stage Fees' || label == 'Admission' || label == 'Fast Admission' || label == 'Class Allocation' || label == 'Allot Section' || label == 'Course Transfer' || label == 'Transfer Certificate' || label == 'New Roll Number' || label == 'EMIS / UMIS' || label == 'Admission Master' || label == 'Fee Master' || label == 'Fee Concession' || label == 'Concession Approval' || label == 'Fee Refund' || label == 'Fee Cancel Receipt' || label == 'Misc Collection' || label == 'Advance Collection' || label == 'Advance Fee Collection' || label == 'Advance Adjustment' || label == 'Year End Process' || label == 'Payment Gateways' || label == 'Fee Collection Import' || label == 'Roles & Access' || label == 'Daily Trips' || label == kSequenceMenu;
   }
 
   /// Which tab a sidebar sub-item opens, resolved by LABEL.
@@ -1735,6 +1845,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (selectedMenu == 'Routes & Stops') return const RoutesStopsScreen();
     if (selectedMenu == 'Vehicles') return const VehiclesScreen();
     if (selectedMenu == 'Transport Staff') return const TransportStaffScreen();
+    if (selectedMenu == 'Staff') return const StaffScreen();
+    if (selectedMenu == 'Attendance Entry') return const AttendanceEntryScreen();
+    if (selectedMenu == 'Leave & Out-pass') return const LeaveOutpassScreen();
+    if (selectedMenu == 'Attendance Report') return const AttendanceReportScreen();
+    if (selectedMenu == 'Attendance Setup') return const AttendanceSetupScreen();
     if (selectedMenu == 'Trip Schedules') return const TripSchedulesScreen();
     if (selectedMenu == 'Duty Roster') return const DutyRosterScreen();
     if (selectedMenu == 'Daily Trips') return const DailyTripsScreen();
@@ -1804,8 +1919,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return const EmisUmisScreen();
     }
     if (selectedMenu == 'Master Data') {
-      // Division is listed under Master Data but is an Admission Master tab.
-      final ai = _subLabel == 'Division' ? AdmissionMasterScreen.tabLabels.indexOf('Division') : -1;
+      // Division and Medium are listed under Master Data but are Admission
+      // Master tabs.
+      final ai = (_subLabel == 'Division' || _subLabel == 'Medium')
+          ? AdmissionMasterScreen.tabLabels.indexOf(_subLabel)
+          : -1;
       if (ai >= 0) {
         return AdmissionMasterScreen(
             key: ValueKey('admmaster-$ai'), initialTab: ai, showTabBar: false);

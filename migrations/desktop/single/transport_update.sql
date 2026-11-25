@@ -11,7 +11,7 @@
 --  Run it in the Supabase SQL editor, or:
 --    psql "<connection string>" -v ON_ERROR_STOP=1 -f transport_update.sql
 --
---  Made by transport_db.ps1 -Action script on 2026-11-24 17:01 from:
+--  Made by transport_db.ps1 -Action script on 2026-11-25 10:24 from:
 --    transport_04_move_masters_to_public.sql
 --    transport_05_year_schemas.sql
 --    transport_02_phase1_api.sql
@@ -553,6 +553,106 @@ BEGIN
   )
   SELECT count(*) INTO v_rows FROM ins;
   RETURN v_rows;
+END $$;
+-- ---------------------------------------------------------------------
+-- GPS positions from the trackers (2026-11-20). One position:
+--   {"imei", "lat", "lon", "at" (device time; now when missing),
+--    "speed_kmph", "heading", "accuracy_m", "altitude_m", "ignition",
+--    "battery_pct", "satellites", "raw"}
+-- The device is found by IMEI (public.tr_gps_device, active); the vehicle
+-- it is fitted to on that day by the GPS Mapping history
+-- (tr_vehicle_gps_device), else tr_vehicle.gps_device_id; the year schema
+-- by the school year covering that day. The position is kept in
+-- tr_gps_ping, becomes the vehicle's tr_vehicle_live when it is newer than
+-- the one there, and moves today's trip in progress (last_*).
+-- Returns {"ok": true, "vehicle_id", "live"} or {"ok": false, "reason"}:
+-- one bad position never stops the others (public.tr_gps_ingest).
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION transport_core.gps_ingest(p jsonb)
+RETURNS jsonb LANGUAGE plpgsql
+SET search_path TO 'pg_catalog', 'public' AS $$
+DECLARE
+  v_imei text := upper(btrim(COALESCE(p->>'imei', '')));
+  v_lat numeric; v_lon numeric; v_at timestamptz; v_day date;
+  d record; v_veh bigint; v_lbl text; v_ysch text; v_trip bigint; v_live int := 0;
+  v_speed numeric; v_head int; v_batt int; v_sat int; v_acc numeric; v_alt numeric; v_ign boolean;
+BEGIN
+  IF v_imei = '' THEN RETURN jsonb_build_object('ok', false, 'reason', 'no IMEI'); END IF;
+  BEGIN
+    v_lat := (p->>'lat')::numeric; v_lon := (p->>'lon')::numeric;
+    v_at := COALESCE(NULLIF(p->>'at', '')::timestamptz, now());
+    v_speed := NULLIF(p->>'speed_kmph', '')::numeric;
+    v_head := round(NULLIF(p->>'heading', '')::numeric)::int;
+    v_batt := round(NULLIF(p->>'battery_pct', '')::numeric)::int;
+    v_sat := round(NULLIF(p->>'satellites', '')::numeric)::int;
+    v_acc := NULLIF(p->>'accuracy_m', '')::numeric;
+    v_alt := NULLIF(p->>'altitude_m', '')::numeric;
+    v_ign := NULLIF(p->>'ignition', '')::boolean;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'unreadable value: ' || SQLERRM);
+  END;
+  IF v_lat IS NULL OR v_lon IS NULL OR v_lat NOT BETWEEN -90 AND 90 OR v_lon NOT BETWEEN -180 AND 180
+     OR (v_lat = 0 AND v_lon = 0) THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'no usable position');
+  END IF;
+  IF v_at > now() + interval '10 minutes' THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'device clock is ahead');
+  END IF;
+  IF v_at < now() - interval '7 days' THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'older than 7 days');
+  END IF;
+  v_head := CASE WHEN v_head IS NULL THEN NULL ELSE ((v_head % 360) + 360) % 360 END;
+  v_batt := CASE WHEN v_batt BETWEEN 0 AND 100 THEN v_batt END;
+  v_sat := CASE WHEN v_sat BETWEEN 0 AND 99 THEN v_sat END;
+  v_speed := CASE WHEN v_speed BETWEEN 0 AND 250 THEN round(v_speed, 1) END;
+  v_day := (v_at AT TIME ZONE 'Asia/Kolkata')::date;
+
+  SELECT g.device_id, g.inst_id INTO d FROM public.tr_gps_device g
+   WHERE upper(g.imei) = v_imei AND g.is_active;
+  IF d.device_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'unknown or switched-off device');
+  END IF;
+  SELECT m.vehicle_id INTO v_veh FROM public.tr_vehicle_gps_device m
+    JOIN public.tr_vehicle v ON v.vehicle_id = m.vehicle_id AND v.inst_id = d.inst_id
+   WHERE m.device_id = d.device_id AND m.installed_on <= v_day AND (m.removed_on IS NULL OR m.removed_on >= v_day)
+   ORDER BY m.installed_on DESC, m.vgd_id DESC LIMIT 1;
+  IF v_veh IS NULL THEN
+    SELECT v.vehicle_id INTO v_veh FROM public.tr_vehicle v
+     WHERE v.gps_device_id = d.device_id AND v.inst_id = d.inst_id ORDER BY v.vehicle_id LIMIT 1;
+  END IF;
+  IF v_veh IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'device is not on a vehicle (Vehicles > GPS Mapping)');
+  END IF;
+  SELECT iy.yrlabel INTO v_lbl FROM public.institutionyear iy
+   WHERE iy.ins_id = d.inst_id AND iy.activestatus = 1
+     AND v_day BETWEEN COALESCE(iy.iyrstadate, '-infinity'::date) AND COALESCE(iy.iyrenddate, 'infinity'::date)
+   ORDER BY iy.yrlabel DESC LIMIT 1;
+  v_ysch := transport_core.year_schema(v_lbl);
+  IF v_ysch IS NULL OR to_regnamespace(v_ysch) IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'imei', v_imei, 'reason', 'no transport year for ' || v_day);
+  END IF;
+
+  EXECUTE format('SELECT trip_id FROM %I.tr_trip WHERE vehicle_id = $1 AND trip_date = $2 AND status = ''IN_PROGRESS''
+                   ORDER BY planned_start_at DESC LIMIT 1', v_ysch) INTO v_trip USING v_veh, v_day;
+  EXECUTE format('INSERT INTO %I.tr_gps_ping (inst_id, device_id, vehicle_id, trip_id, recorded_at, latitude, longitude, speed_kmph,
+                    heading_deg, accuracy_m, altitude_m, ignition_on, battery_pct, satellites, raw_payload)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)', v_ysch)
+    USING d.inst_id, d.device_id, v_veh, v_trip, v_at, v_lat, v_lon, v_speed, v_head::smallint, v_acc, v_alt, v_ign,
+          v_batt::smallint, v_sat::smallint, p->'raw';
+  EXECUTE format('INSERT INTO %1$I.tr_vehicle_live AS l (vehicle_id, inst_id, trip_id, latitude, longitude, speed_kmph, heading_deg, ignition_on, recorded_at, updated_at)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                  ON CONFLICT (vehicle_id) DO UPDATE SET trip_id = EXCLUDED.trip_id, latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude, speed_kmph = EXCLUDED.speed_kmph, heading_deg = EXCLUDED.heading_deg,
+                    ignition_on = EXCLUDED.ignition_on, recorded_at = EXCLUDED.recorded_at, updated_at = now()
+                  WHERE l.recorded_at < EXCLUDED.recorded_at', v_ysch)
+    USING v_veh, d.inst_id, v_trip, v_lat, v_lon, v_speed, v_head::smallint, v_ign, v_at;
+  GET DIAGNOSTICS v_live = ROW_COUNT;
+  IF v_trip IS NOT NULL THEN
+    EXECUTE format('UPDATE %I.tr_trip SET last_latitude = $2, last_longitude = $3, last_ping_at = $4
+                     WHERE trip_id = $1 AND (last_ping_at IS NULL OR last_ping_at < $4)', v_ysch)
+      USING v_trip, v_lat, v_lon, v_at;
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'imei', v_imei, 'vehicle_id', v_veh, 'trip_id', v_trip, 'live', v_live > 0);
 END $$;
 -- Nothing here is for the app: only the owner (SQL editor, jobs) may run it.
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA transport_core FROM PUBLIC, anon, authenticated;
@@ -3306,6 +3406,30 @@ AS $$ SELECT transport_core.stage_fee_process(p_token, p_row) $$;
 CREATE OR REPLACE FUNCTION public.tr_parent_bus(p_token text, p_stu_id bigint)
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path TO 'pg_catalog', 'public'
 AS $$ SELECT transport_core.parent_bus(p_token, p_stu_id) $$;
+-- GPS positions from the receiving Edge Function (gps-ingest, service role
+-- only -- never the app): one position or an array of them (format at
+-- transport_core.gps_ingest). Returns {"received", "stored", "live",
+-- "skipped": [{"imei", "reason"}, ...]}.
+CREATE OR REPLACE FUNCTION public.tr_gps_ingest(p_positions jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'pg_catalog', 'public' AS $$
+DECLARE r jsonb; x jsonb; n int := 0; v_ok int := 0; v_live int := 0; v_skip jsonb := '[]'::jsonb;
+BEGIN
+  FOR x IN SELECT e FROM jsonb_array_elements(CASE jsonb_typeof(p_positions) WHEN 'array' THEN p_positions
+                                                 ELSE jsonb_build_array(p_positions) END) e LOOP
+    n := n + 1;
+    EXIT WHEN n > 500;  -- one call carries at most 500 positions
+    r := transport_core.gps_ingest(x);
+    IF (r->>'ok')::boolean THEN
+      v_ok := v_ok + 1;
+      IF (r->>'live')::boolean THEN v_live := v_live + 1; END IF;
+    ELSE
+      v_skip := v_skip || jsonb_build_object('imei', r->>'imei', 'reason', r->>'reason');
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('received', LEAST(n, 500), 'stored', v_ok, 'live', v_live, 'skipped', v_skip);
+END $$;
+REVOKE ALL ON FUNCTION public.tr_gps_ingest(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.tr_gps_ingest(jsonb) TO service_role;
 REVOKE ALL ON FUNCTION public.tr_list(text, text, jsonb), public.tr_save(text, text, jsonb), public.tr_delete(text, text, bigint),
                        public.tr_settings_get(text), public.tr_settings_save(text, jsonb), public.tr_lookups(text),
                        public.tr_students(text), public.tr_stage_fee_routes(text, jsonb), public.tr_stage_fee_process(text, jsonb),
@@ -3379,7 +3503,7 @@ DO $$
 DECLARE s text;
 BEGIN
   FOR s IN SELECT n.nspname FROM pg_namespace n
-            WHERE n.nspname ~ '^transport[0-9]{4}$'
+            WHERE n.nspname ~ '^transport[0-9]{8}$'
               AND to_regclass(format('%I.tr_gps_device', n.nspname)) IS NOT NULL LOOP
     EXECUTE format('ALTER TABLE %I.tr_gps_device ADD COLUMN IF NOT EXISTS created_by BIGINT NULL', s);
   END LOOP;
