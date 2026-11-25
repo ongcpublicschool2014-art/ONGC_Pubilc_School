@@ -202,7 +202,15 @@ class AttCard extends StatelessWidget {
             child: AppUI.cardHeader(icon: icon, title: title, subtitle: subtitle, trailing: trailing),
           ),
           const Divider(height: 1, color: AppColors.divider),
-          Expanded(child: Padding(padding: padding ?? EdgeInsets.zero, child: child)),
+          // its own (transparent) Material: list tiles and switches on the
+          // card paint their ink here, not under the card's colour (newer
+          // Flutter asserts on that)
+          Expanded(
+            child: Material(
+              type: MaterialType.transparency,
+              child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+            ),
+          ),
         ]),
       );
 }
